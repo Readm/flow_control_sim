@@ -35,22 +35,27 @@ func NewMaster(id int, requestRate float64) *Master {
 }
 
 // Tick may generate at most one request per cycle with probability RequestRate.
-func (m *Master) Tick(cycle int, cfg *Config, relayID int, ch *Channel, rng *rand.Rand, packetIDs *PacketIDAllocator) {
+func (m *Master) Tick(cycle int, cfg *Config, relayID int, ch *Channel, rng *rand.Rand, packetIDs *PacketIDAllocator, slaves []*Slave) {
 	if relayID < 0 {
 		return
 	}
 	if rng.Float64() >= m.RequestRate {
 		return
 	}
-	// choose destination slave by weights
-	dst := weightedChoose(rng, cfg.SlaveWeights)
+	// choose destination slave by weights (returns index)
+	slaveIndex := weightedChoose(rng, cfg.SlaveWeights)
+	if slaveIndex < 0 || slaveIndex >= len(slaves) {
+		return
+	}
+	// get actual slave ID from the slaves array
+	dstID := slaves[slaveIndex].ID
 
 	reqID := packetIDs.Allocate()
 	p := &Packet{
 		ID:          reqID,
 		Type:        "request",
 		SrcID:       m.ID,
-		DstID:       dst,
+		DstID:       dstID,
 		GeneratedAt: cycle,
 		SentAt:      cycle,
 		MasterID:    m.ID,

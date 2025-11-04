@@ -253,7 +253,7 @@ func (s *Simulator) Run() {
 			if relayID < 0 {
 				continue
 			}
-			m.Tick(cycle, s.cfg, relayID, s.Chan, s.rng, s.pktIDs)
+			m.Tick(cycle, s.cfg, relayID, s.Chan, s.rng, s.pktIDs, s.Slaves)
 		}
 
 		if s.Relay != nil {
