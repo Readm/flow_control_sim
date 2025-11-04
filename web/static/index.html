@@ -214,6 +214,155 @@
             margin-top: 4px;
         }
 
+        /* Modal styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            max-height: 90vh;
+            width: 90%;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f5f5f5;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 18px;
+            color: #333;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #666;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+        }
+
+        .modal-close:hover {
+            background: #e0e0e0;
+            color: #333;
+        }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .queue-section {
+            margin-bottom: 30px;
+        }
+
+        .queue-section h3 {
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #007bff;
+        }
+
+        .queue-section.empty {
+            color: #999;
+            font-style: italic;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .packet-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            font-size: 13px;
+        }
+
+        .packet-table th {
+            background: #f5f5f5;
+            padding: 10px;
+            text-align: left;
+            border-bottom: 2px solid #ddd;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .packet-table td {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .packet-table tr:hover {
+            background: #f9f9f9;
+        }
+
+        .packet-id {
+            font-weight: 600;
+            color: #007bff;
+        }
+
+        .packet-field-label {
+            font-weight: 500;
+            color: #666;
+            width: 150px;
+        }
+
+        .packet-field-value {
+            color: #333;
+        }
+
+        .packet-item {
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .packet-item-header {
+            background: #f5f5f5;
+            padding: 10px 15px;
+            font-weight: 600;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .packet-item-body {
+            padding: 15px;
+        }
+
         @media (max-width: 768px) {
             body {
                 flex-direction: column;
@@ -315,6 +464,19 @@
         <div id="cy"></div>
         <div id="loading" class="loading" style="display: none;">
             <div>Loading simulation data...</div>
+        </div>
+    </div>
+
+    <!-- Modal for displaying packet information -->
+    <div id="packetModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Node Packet Information</h2>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Content will be populated by JavaScript -->
+            </div>
         </div>
     </div>
 
@@ -597,6 +759,132 @@
                     }
                 }, evt);
             });
+
+            // Add click event for nodes to show packet information
+            cy.on('tap', 'node', function(evt) {
+                const node = evt.target;
+                const data = node.data();
+                showPacketModal(data);
+            });
+        }
+
+        // Format CHI protocol field values for display
+        function formatCHIField(field, value) {
+            if (value === undefined || value === null || value === '') {
+                return 'N/A';
+            }
+            
+            if (field === 'transactionType') {
+                const typeMap = {
+                    'ReadNoSnp': 'ReadNoSnp',
+                    'WriteNoSnp': 'WriteNoSnp',
+                    'ReadOnce': 'ReadOnce',
+                    'WriteUnique': 'WriteUnique'
+                };
+                return typeMap[value] || value;
+            }
+            
+            if (field === 'messageType') {
+                const typeMap = {
+                    'Req': 'Request',
+                    'Resp': 'Response',
+                    'Data': 'Data',
+                    'Comp': 'Completion'
+                };
+                return typeMap[value] || value;
+            }
+            
+            if (field === 'responseType') {
+                const typeMap = {
+                    'CompData': 'CompData (Completion with Data)',
+                    'CompAck': 'CompAck (Completion Acknowledgment)'
+                };
+                return typeMap[value] || value;
+            }
+            
+            if (field === 'address') {
+                return '0x' + value.toString(16).toUpperCase().padStart(16, '0');
+            }
+            
+            if (field === 'type') {
+                return value.charAt(0).toUpperCase() + value.slice(1);
+            }
+            
+            return value;
+        }
+
+        // Format packet information for display
+        function formatPacketInfo(packet) {
+            const fields = [
+                { label: 'Packet ID', key: 'id', format: (v) => v },
+                { label: 'Type', key: 'type', format: (v) => formatCHIField('type', v) },
+                { label: 'Source Node ID', key: 'srcID', format: (v) => v !== undefined ? v : 'N/A' },
+                { label: 'Destination Node ID', key: 'dstID', format: (v) => v !== undefined ? v : 'N/A' },
+                { label: 'Master ID', key: 'masterID', format: (v) => v !== undefined ? v : 'N/A' },
+                { label: 'Request ID', key: 'requestID', format: (v) => v !== undefined ? v : 'N/A' },
+                { label: 'Transaction Type', key: 'transactionType', format: (v) => formatCHIField('transactionType', v) },
+                { label: 'Message Type', key: 'messageType', format: (v) => formatCHIField('messageType', v) },
+                { label: 'Response Type', key: 'responseType', format: (v) => formatCHIField('responseType', v) },
+                { label: 'Address', key: 'address', format: (v) => v !== undefined ? formatCHIField('address', v) : 'N/A' },
+                { label: 'Data Size (bytes)', key: 'dataSize', format: (v) => v !== undefined ? v : 'N/A' },
+                { label: 'Generated At (cycle)', key: 'generatedAt', format: (v) => v !== undefined && v !== 0 ? v : 'N/A' },
+                { label: 'Sent At (cycle)', key: 'sentAt', format: (v) => v !== undefined && v !== 0 ? v : 'N/A' },
+                { label: 'Received At (cycle)', key: 'receivedAt', format: (v) => v !== undefined && v !== 0 ? v : 'N/A' },
+                { label: 'Completed At (cycle)', key: 'completedAt', format: (v) => v !== undefined && v !== 0 ? v : 'N/A' }
+            ];
+            
+            let html = '<table class="packet-table">';
+            fields.forEach(field => {
+                const value = packet[field.key];
+                if (value !== undefined && value !== null && value !== '') {
+                    html += `<tr><td class="packet-field-label">${field.label}:</td><td class="packet-field-value">${field.format(value)}</td></tr>`;
+                }
+            });
+            html += '</table>';
+            return html;
+        }
+
+        // Show packet modal with node information
+        function showPacketModal(nodeData) {
+            const modal = document.getElementById('packetModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalBody = document.getElementById('modalBody');
+            
+            modalTitle.textContent = `${nodeData.label || 'Node'} - Packet Information`;
+            
+            let html = '';
+            
+            if (!nodeData.queues || nodeData.queues.length === 0) {
+                html = '<div class="queue-section empty">No queues found for this node.</div>';
+            } else {
+                nodeData.queues.forEach(queue => {
+                    html += `<div class="queue-section">`;
+                    html += `<h3>${queue.name} (${queue.length}/${queue.capacity === -1 ? '∞' : queue.capacity})</h3>`;
+                    
+                    if (!queue.packets || queue.packets.length === 0) {
+                        html += '<div class="empty">This queue is empty.</div>';
+                    } else {
+                        queue.packets.forEach((packet, index) => {
+                            html += `<div class="packet-item">`;
+                            html += `<div class="packet-item-header">Packet #${index + 1} (ID: <span class="packet-id">${packet.id}</span>)</div>`;
+                            html += `<div class="packet-item-body">`;
+                            html += formatPacketInfo(packet);
+                            html += `</div></div>`;
+                        });
+                    }
+                    
+                    html += `</div>`;
+                });
+            }
+            
+            modalBody.innerHTML = html;
+            modal.classList.add('show');
+        }
+
+        // Close modal
+        function closePacketModal() {
+            const modal = document.getElementById('packetModal');
+            modal.classList.remove('show');
         }
 
         // Fetch frame data from API
@@ -955,6 +1243,14 @@
         // Initialize
         initCytoscape();
         startPolling();
+
+        // Modal close event listeners (initialize after DOM is ready)
+        document.getElementById('modalClose').addEventListener('click', closePacketModal);
+        document.getElementById('packetModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closePacketModal();
+            }
+        });
 
         // Reapply layout on window resize
         let resizeTimeout;

@@ -132,6 +132,27 @@ func cloneQueues(qs []QueueInfo) []QueueInfo {
 	return res
 }
 
+// cloneQueuesWithPackets clones queues and fills packet information for specific queues
+func cloneQueuesWithPackets(qs []QueueInfo, queueName string, packets []PacketInfo) []QueueInfo {
+	if len(qs) == 0 {
+		return nil
+	}
+	res := make([]QueueInfo, len(qs))
+	for i, q := range qs {
+		res[i] = QueueInfo{
+			Name:     q.Name,
+			Length:   q.Length,
+			Capacity: q.Capacity,
+			Packets:  nil,
+		}
+		if q.Name == queueName {
+			res[i].Packets = make([]PacketInfo, len(packets))
+			copy(res[i].Packets, packets)
+		}
+	}
+	return res
+}
+
 func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 	nodeCount := len(s.Masters) + len(s.Slaves)
 	if s.Relay != nil {
@@ -150,11 +171,12 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"nodeType":          "RN", // CHI Request Node
 			"chiProtocol":       true,
 		}
+		pendingPackets := m.GetPendingRequests()
 		nodes = append(nodes, NodeSnapshot{
 			ID:      m.ID,
 			Type:    m.Type,
 			Label:   s.nodeLabels[m.ID],
-			Queues:  cloneQueues(m.GetQueueInfo()),
+			Queues:  cloneQueuesWithPackets(m.GetQueueInfo(), "pending_requests", pendingPackets),
 			Payload: payload,
 		})
 	}
@@ -168,11 +190,12 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"nodeType":       "SN", // CHI Slave Node
 			"chiProtocol":    true,
 		}
+		queuePackets := sl.GetQueuePackets()
 		nodes = append(nodes, NodeSnapshot{
 			ID:      sl.ID,
 			Type:    sl.Type,
 			Label:   s.nodeLabels[sl.ID],
-			Queues:  cloneQueues(sl.GetQueueInfo()),
+			Queues:  cloneQueuesWithPackets(sl.GetQueueInfo(), "request_queue", queuePackets),
 			Payload: payload,
 		})
 	}
@@ -192,11 +215,12 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"nodeType":    "HN", // CHI Home Node
 			"chiProtocol": true,
 		}
+		queuePackets := s.Relay.GetQueuePackets()
 		nodes = append(nodes, NodeSnapshot{
 			ID:      s.Relay.ID,
 			Type:    s.Relay.Type,
 			Label:   s.nodeLabels[s.Relay.ID],
-			Queues:  cloneQueues(s.Relay.GetQueueInfo()),
+			Queues:  cloneQueuesWithPackets(s.Relay.GetQueueInfo(), "forward_queue", queuePackets),
 			Payload: payload,
 		})
 	}

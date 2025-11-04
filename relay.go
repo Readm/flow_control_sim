@@ -80,6 +80,34 @@ func (hn *HomeNode) Tick(cycle int, ch *Channel, cfg *Config) int {
 	return count
 }
 
+// GetQueuePackets returns packet information for the forward_queue
+func (hn *HomeNode) GetQueuePackets() []PacketInfo {
+	packets := make([]PacketInfo, 0, len(hn.queue))
+	for _, p := range hn.queue {
+		if p == nil {
+			continue
+		}
+		packets = append(packets, PacketInfo{
+			ID:              p.ID,
+			Type:            p.Type,
+			SrcID:           p.SrcID,
+			DstID:           p.DstID,
+			GeneratedAt:     p.GeneratedAt,
+			SentAt:          p.SentAt,
+			ReceivedAt:      p.ReceivedAt,
+			CompletedAt:     p.CompletedAt,
+			MasterID:        p.MasterID,
+			RequestID:       p.RequestID,
+			TransactionType: p.TransactionType,
+			MessageType:     p.MessageType,
+			ResponseType:    p.ResponseType,
+			Address:         p.Address,
+			DataSize:        p.DataSize,
+		})
+	}
+	return packets
+}
+
 // Legacy type alias for backward compatibility during transition
 type Relay = HomeNode
 

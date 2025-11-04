@@ -9,11 +9,31 @@ const (
 	NodeTypeSN NodeType = "SN" // Slave Node - provides data
 )
 
+// PacketInfo represents packet information for visualization
+type PacketInfo struct {
+	ID              int64             `json:"id"`
+	Type            string            `json:"type"`
+	SrcID           int               `json:"srcID"`
+	DstID           int               `json:"dstID"`
+	GeneratedAt     int               `json:"generatedAt"`
+	SentAt          int               `json:"sentAt"`
+	ReceivedAt      int               `json:"receivedAt"`
+	CompletedAt     int               `json:"completedAt"`
+	MasterID        int               `json:"masterID"`
+	RequestID       int64             `json:"requestID"`
+	TransactionType CHITransactionType `json:"transactionType"`
+	MessageType     CHIMessageType     `json:"messageType"`
+	ResponseType    CHIResponseType    `json:"responseType"`
+	Address         uint64            `json:"address"`
+	DataSize        int               `json:"dataSize"`
+}
+
 // QueueInfo represents queue information for visualization
 type QueueInfo struct {
-	Name     string `json:"name"`
-	Length   int    `json:"length"`
-	Capacity int    `json:"capacity"` // -1 means unlimited capacity
+	Name     string      `json:"name"`
+	Length   int         `json:"length"`
+	Capacity int         `json:"capacity"` // -1 means unlimited capacity
+	Packets  []PacketInfo `json:"packets,omitempty"`
 }
 
 // Position represents the position of a node in visualization

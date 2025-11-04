@@ -142,6 +142,27 @@ func (rn *RequestNode) SnapshotStats() *RequestNodeStats {
 	}
 }
 
+// GetPendingRequests returns packet information for pending requests
+// Since RequestNode doesn't store actual Packet objects, we return simplified info
+// based on generatedAtByReq map
+func (rn *RequestNode) GetPendingRequests() []PacketInfo {
+	packets := make([]PacketInfo, 0, len(rn.generatedAtByReq))
+	for reqID, genCycle := range rn.generatedAtByReq {
+		packets = append(packets, PacketInfo{
+			ID:              reqID,
+			RequestID:       reqID,
+			Type:            "request",
+			SrcID:           rn.ID,
+			MasterID:        rn.ID,
+			GeneratedAt:     genCycle,
+			TransactionType: CHITxnReadNoSnp,
+			MessageType:     CHIMsgReq,
+			// Other fields are not available since Packet is not stored
+		})
+	}
+	return packets
+}
+
 // Legacy type aliases for backward compatibility during transition
 type Master = RequestNode
 type MasterStats = RequestNodeStats

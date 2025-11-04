@@ -102,6 +102,34 @@ func (sn *SlaveNode) generateCHIResponse(req *Packet, cycle int, packetIDs *Pack
 
 func (sn *SlaveNode) QueueLength() int { return len(sn.queue) }
 
+// GetQueuePackets returns packet information for the request_queue
+func (sn *SlaveNode) GetQueuePackets() []PacketInfo {
+	packets := make([]PacketInfo, 0, len(sn.queue))
+	for _, p := range sn.queue {
+		if p == nil {
+			continue
+		}
+		packets = append(packets, PacketInfo{
+			ID:              p.ID,
+			Type:            p.Type,
+			SrcID:           p.SrcID,
+			DstID:           p.DstID,
+			GeneratedAt:     p.GeneratedAt,
+			SentAt:          p.SentAt,
+			ReceivedAt:      p.ReceivedAt,
+			CompletedAt:     p.CompletedAt,
+			MasterID:        p.MasterID,
+			RequestID:       p.RequestID,
+			TransactionType: p.TransactionType,
+			MessageType:     p.MessageType,
+			ResponseType:    p.ResponseType,
+			Address:         p.Address,
+			DataSize:        p.DataSize,
+		})
+	}
+	return packets
+}
+
 type SlaveNodeStats struct {
     TotalProcessed  int
     MaxQueueLength  int
