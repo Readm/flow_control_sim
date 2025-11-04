@@ -4,7 +4,7 @@
 
 ## 项目状态
 
-🚧 **开发中** - 本项目正在重新开发，采用 Go 语言后端和前端可视化技术栈。
+✅ **核心功能完成** - 项目已完成核心模拟功能，并实现了基于 Cytoscape.js 的 Web 可视化界面。
 
 详细的开发计划请参考 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)
 
@@ -20,36 +20,99 @@
 - **事件驱动模拟**: 基于 cycle 的离散事件模拟
 - **节点可视化**: 
   - 统一的 Node 基类架构，Master/Slave/Relay 继承自 Node
-  - 实时 GUI 可视化（使用 Fyne 框架）
-  - 显示节点 ID 和队列长度信息
+  - Web 可视化界面（使用 Cytoscape.js）
+  - 实时显示节点拓扑、队列长度、延迟信息
   - 每个 cycle 实时刷新显示
   - 支持 headless 模式（无可视化运行）
-- **可视化控制**: GUI 窗口提供暂停/继续/重置控制按钮
+- **可视化控制**: Web 界面提供暂停/继续/重置控制，支持参数调整
 
-## 技术栈
+## 系统架构
 
-### 后端
+### 架构概览
+
+系统采用前后端分离架构，通过 REST API 进行通信：
+
+```
+┌─────────────────┐         HTTP REST API        ┌──────────────────┐
+│                 │ ◄──────────────────────────► │                  │
+│  Web 前端       │    GET /api/frame            │  Go 后端服务     │
+│  (Cytoscape.js) │    POST /api/control         │  (模拟器 + HTTP) │
+│                 │                               │                  │
+│  - 拓扑可视化    │                               │  - 模拟器核心    │
+│  - 实时数据展示  │                               │  - Web 服务器    │
+│  - 控制面板     │                               │  - API 端点      │
+└─────────────────┘                               └──────────────────┘
+```
+
+### 数据流
+
+1. **模拟器运行** (`simulator.go`)
+   - 在每个 cycle 中执行模拟逻辑
+   - 调用 `visualizer.PublishFrame()` 发布帧数据
+   - 调用 `visualizer.NextCommand()` 检查控制命令
+
+2. **可视化器桥接** (`web_visualizer.go`)
+   - 实现 `Visualizer` 接口
+   - 将帧数据转发到 `WebServer`
+   - 从 `WebServer` 获取控制命令
+
+3. **Web 服务器** (`web_server.go`)
+   - 维护最新的帧数据和统计信息（线程安全）
+   - 处理 HTTP 请求：
+     - `GET /api/frame` - 返回最新帧数据
+     - `GET /api/stats` - 返回统计信息
+     - `POST /api/control` - 接收控制命令（pause/resume/reset）
+   - 通过 channel 队列传递控制命令
+
+4. **前端页面** (`web/static/index.html`)
+   - 每 500ms 轮询 `GET /api/frame` 获取最新数据
+   - 首次加载时创建拓扑图（Master 左，Relay 中，Slave 右）
+   - 后续更新只更新节点数据，不重新布局
+   - 通过 `POST /api/control` 发送控制命令
+
+### 控制流程
+
+```
+前端点击暂停/继续/重置
+    ↓
+POST /api/control
+    ↓
+WebServer.handleControl() 验证并放入命令队列
+    ↓
+WebVisualizer.NextCommand() 从队列取出
+    ↓
+Simulator.Run() 检查命令并执行
+    ↓
+暂停: 设置 isPaused = true，循环等待
+继续: 设置 isPaused = false，继续执行
+重置: 调用 reset() 重新初始化模拟器
+```
+
+### 技术栈
+
+#### 后端
 - **语言**: Go 1.21+
-- **GUI 框架**: Fyne（用于节点可视化）
-- **Web 框架**: Gin（计划）
-- **WebSocket**: Gorilla WebSocket（计划）
-- **API 文档**: Swagger/OpenAPI（计划）
+- **Web 框架**: net/http（标准库）
+- **并发模型**: Goroutine + Channel
+- **数据同步**: sync.RWMutex（保护共享状态）
 
-### 前端
-- **GUI 可视化**: Fyne（跨平台桌面 GUI）
-- **Web 前端**: React 18+ 或 Vue 3+（计划）
-- **Web 可视化**: Chart.js/Recharts + D3.js（计划）
-- **构建工具**: Vite（计划）
+#### 前端
+- **可视化库**: Cytoscape.js（通过 CDN 加载）
+- **技术**: 原生 JavaScript（无需构建工具）
+- **通信方式**: REST API 轮询（500ms 间隔）
+- **布局算法**: 自定义固定布局（Master 左、Relay 中、Slave 右）
 
-### 部署
-- **容器化**: Docker + Docker Compose
+#### 部署
+- **容器化**: Docker + Docker Compose（计划中）
 
 ## 项目结构
 
 ```
 flow_control_sim/
 ├── node.go           # Node 基类定义（统一节点架构）
-├── visualizer.go     # Fyne 可视化器实现
+├── visualization.go  # 可视化接口和数据模型
+├── web_visualizer.go # Web 可视化器实现
+├── web_server.go     # Web 服务器和 REST API
 ├── master.go         # Master 节点（嵌入 Node）
 ├── slave.go          # Slave 节点（嵌入 Node）
 ├── relay.go          # Relay 节点（嵌入 Node，支持队列缓冲）
@@ -57,6 +120,10 @@ flow_control_sim/
 ├── channel.go        # 通信信道
 ├── models.go         # 数据模型定义
 ├── stats.go          # 统计功能
+├── main.go           # 程序入口
+├── web/
+│   └── static/
+│       └── index.html # Cytoscape.js 前端页面
 ├── go.mod            # Go 模块定义
 └── README.md         # 项目说明
 
@@ -105,25 +172,19 @@ flow_control_sim/
 - [x] Slave 队列管理
 - [x] Master 待响应请求跟踪
 - [x] 延迟模拟
-- [ ] 节点可视化 GUI（开发中）
-- [ ] REST API 接口（计划）
-- [ ] WebSocket 实时通信（计划）
+- [x] REST API 接口
+- [x] Web 可视化界面
 
 ### 可视化功能
-- [ ] 节点可视化 GUI（Fyne）
-  - [ ] 统一的 Node 基类架构
-  - [ ] 网格布局显示 Master/Relay/Slave 节点
-  - [ ] 实时显示节点 ID 和队列长度
-  - [ ] 每个 cycle 实时刷新
-  - [ ] 窗口控制按钮（暂停/继续/重置）
-  - [ ] Headless 模式支持
-- [ ] Web 可视化界面（计划）
-  - [ ] 延迟对比图表
-  - [ ] 吞吐量统计图表
-  - [ ] 队列长度趋势图
-  - [ ] 延迟分布直方图
-  - [ ] Master-Slave-Relay 拓扑图（实时动画）
-  - [ ] 系统状态仪表板
+- [x] Web 可视化界面（Cytoscape.js）
+  - [x] 统一的 Node 基类架构
+  - [x] 拓扑图显示 Master/Relay/Slave 节点
+  - [x] 实时显示节点 ID、类型、队列长度
+  - [x] 每个 cycle 实时刷新（500ms 轮询）
+  - [x] 控制按钮（暂停/继续/重置）
+  - [x] 参数配置表单（重置时生效）
+  - [x] 统计信息面板（全局、Master、Slave 统计）
+  - [x] Headless 模式支持
 
 ### 配置功能
 - [ ] 动态配置 Master 数量
@@ -138,14 +199,9 @@ flow_control_sim/
 - Go 1.21+
 - Go 开发工具（GoLand/VS Code）
 
-### GUI 可视化（必需）
-- Fyne 框架（通过 `go get fyne.io/fyne/v2` 安装）
-- 支持图形界面的操作系统（Linux/Windows/macOS）
-
-### Web 前端（计划）
-- Node.js 18+
-- npm/yarn
-- 现代浏览器（Chrome/Firefox/Edge）
+### Web 可视化（可选）
+- 现代浏览器（Chrome/Firefox/Edge/Safari）
+- 无需额外安装，前端页面通过 CDN 加载 Cytoscape.js
 
 ## 快速开始
 
@@ -158,16 +214,26 @@ go mod download
 
 **运行模拟器（Headless 模式）**:
 ```bash
-go run *.go
+go run *.go -headless
 # 或使用测试
 go test -v
 ```
 
-**运行可视化模式**:
+**运行 Web 可视化模式**:
 ```bash
-# 可视化模式将在实现后提供
-go run *.go -visual
+# 启动模拟器（默认使用 Web 可视化）
+go run *.go
+
+# 模拟器启动后，Web 服务器会在 http://127.0.0.1:8080 启动
+# 在浏览器中打开 http://127.0.0.1:8080 即可查看可视化界面
 ```
+
+**Web 界面功能**:
+- 实时拓扑图：显示 Master、Slave、Relay 节点及其连接关系
+- 队列信息：鼠标悬停节点查看队列详情
+- 控制按钮：暂停、继续、重置模拟
+- 参数配置：在配置面板调整参数，重置后生效
+- 统计信息：实时显示全局、Master、Slave 统计信息
 
 ### Docker 部署（计划）
 ```bash
@@ -176,7 +242,179 @@ docker-compose up -d
 
 ## API 文档
 
-API 文档将在开发完成后提供。计划使用 Swagger/OpenAPI 格式。
+### REST API 端点
+
+所有 API 端点都返回 JSON 格式数据，错误时返回相应的 HTTP 状态码。
+
+#### GET /api/frame
+
+获取当前模拟帧数据，包含拓扑信息和统计信息。
+
+**请求**: `GET http://127.0.0.1:8080/api/frame`
+
+**响应** (200 OK):
+```json
+{
+  "cycle": 100,
+  "nodes": [
+    {
+      "id": 0,
+      "type": "master",
+      "label": "Master 0",
+      "queues": [
+        {"name": "pending", "length": 5, "capacity": -1}
+      ],
+      "payload": {
+        "totalRequests": 100,
+        "completedRequests": 95,
+        "avgDelay": 12.5,
+        "maxDelay": 25,
+        "minDelay": 5
+      }
+    },
+    {
+      "id": 3,
+      "type": "relay",
+      "label": "Relay 0",
+      "queues": [
+        {"name": "queue", "length": 2, "capacity": -1}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "slave",
+      "label": "Slave 0",
+      "queues": [
+        {"name": "request", "length": 3, "capacity": -1}
+      ],
+      "payload": {
+        "totalProcessed": 50,
+        "maxQueue": 10,
+        "avgQueue": 5.2
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": 0,
+      "target": 3,
+      "label": "request",
+      "latency": 2
+    },
+    {
+      "source": 3,
+      "target": 0,
+      "label": "response",
+      "latency": 2
+    }
+  ],
+  "inFlightCount": 10,
+  "stats": {
+    "Global": {
+      "TotalRequests": 300,
+      "Completed": 285,
+      "CompletionRate": 95.0,
+      "AvgEndToEndDelay": 12.3,
+      "MaxDelay": 25,
+      "MinDelay": 5
+    },
+    "PerMaster": [
+      {
+        "TotalRequests": 100,
+        "CompletedRequests": 95,
+        "AvgDelay": 12.5,
+        "MaxDelay": 25,
+        "MinDelay": 5
+      }
+    ],
+    "PerSlave": [
+      {
+        "TotalProcessed": 50,
+        "MaxQueueLength": 10,
+        "AvgQueueLength": 5.2
+      }
+    ]
+  }
+}
+```
+
+**错误响应**:
+- `404 Not Found`: 模拟尚未开始或没有可用数据
+
+**使用说明**:
+- 前端每 500ms 轮询此端点获取最新数据
+- 首次调用时创建拓扑图，后续调用只更新节点数据
+
+#### GET /api/stats
+
+获取当前统计信息（与 frame 中的 stats 字段相同）。
+
+**请求**: `GET http://127.0.0.1:8080/api/stats`
+
+**响应**: 与 `/api/frame` 中的 `stats` 字段相同
+
+**使用说明**:
+- 用于单独获取统计信息，无需完整帧数据
+
+#### POST /api/control
+
+发送控制指令（暂停、继续、重置）。
+
+**请求**: `POST http://127.0.0.1:8080/api/control`
+
+**请求头**:
+```
+Content-Type: application/json
+```
+
+**请求体**:
+```json
+{
+  "type": "pause" | "resume" | "reset",
+  "config": {
+    "NumMasters": 3,
+    "NumSlaves": 2,
+    "NumRelays": 1,
+    "TotalCycles": 1000,
+    "MasterRelayLatency": 2,
+    "RelayMasterLatency": 2,
+    "RelaySlaveLatency": 1,
+    "SlaveRelayLatency": 1,
+    "SlaveProcessRate": 2,
+    "RequestRate": 0.3,
+    "SlaveWeights": [1, 1]
+  }
+}
+```
+
+**字段说明**:
+- `type` (必需): 控制指令类型
+  - `"pause"`: 暂停模拟
+  - `"resume"`: 继续模拟
+  - `"reset"`: 重置模拟（可带新配置）
+- `config` (可选): 仅当 `type` 为 `"reset"` 时有效，用于更新模拟配置
+
+**响应**:
+- `202 Accepted`: 命令已接受
+- `400 Bad Request`: 请求格式错误或配置验证失败
+- `405 Method Not Allowed`: 请求方法不正确
+- `503 Service Unavailable`: 命令队列已满
+
+**配置验证规则**:
+- `NumMasters` 和 `NumSlaves` 必须为正整数
+- `TotalCycles` 必须为正整数
+- `RequestRate` 必须在 0 到 1 之间
+- `SlaveWeights` 数组长度必须等于 `NumSlaves`
+
+**使用说明**:
+- 命令通过 channel 队列传递，模拟器在每个 cycle 检查命令
+- 重置操作会重新初始化模拟器，使用新配置（如果提供）
+
+### 静态文件服务
+
+**GET /** - 返回 `web/static/index.html` 前端页面
+
+所有对 `/` 路径的请求都会返回前端页面，前端通过相对路径调用 API 端点。
 
 ## 贡献指南
 
@@ -196,4 +434,4 @@ API 文档将在开发完成后提供。计划使用 Swagger/OpenAPI 格式。
 
 ---
 
-**注意**: 本项目正在重新开发中，当前版本为规划阶段。实际功能将在开发完成后提供。
+**项目状态**: 核心功能已完成，Web 可视化界面已实现并可用。

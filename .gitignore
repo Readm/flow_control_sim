@@ -33,6 +33,7 @@ Thumbs.db
 /bin/
 /dist/
 /build/
+flow_control_sim
 
 # Logs
 *.log

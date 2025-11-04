@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Control Simulator - Visualization</title>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.27.0/dist/cytoscape.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .control-panel {
+            width: 350px;
+            background: #f5f5f5;
+            border-right: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .control-section {
+            padding: 15px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .control-section h3 {
+            margin-bottom: 10px;
+            color: #333;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .control-buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 8px 16px;
+            border: 1px solid #ccc;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            background: #f0f0f0;
+            border-color: #999;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button.primary {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+
+        button.primary:hover:not(:disabled) {
+            background: #0056b3;
+        }
+
+        button.danger {
+            background: #dc3545;
+            color: white;
+            border-color: #dc3545;
+        }
+
+        button.danger:hover:not(:disabled) {
+            background: #c82333;
+        }
+
+        .status-info {
+            font-size: 12px;
+            color: #666;
+            margin-top: 8px;
+        }
+
+        .status-info strong {
+            color: #333;
+        }
+
+        .config-form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .form-group label {
+            font-size: 12px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            padding: 6px 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .form-row .form-group {
+            flex: 1;
+        }
+
+        .stats-panel {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .stats-item {
+            padding: 8px;
+            background: white;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+
+        .stats-item h4 {
+            margin-bottom: 6px;
+            color: #333;
+            font-size: 13px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .stats-value {
+            color: #666;
+        }
+
+        .stats-value strong {
+            color: #333;
+        }
+
+        .visualization-area {
+            flex: 1;
+            position: relative;
+            background: #fff;
+        }
+
+        #cy {
+            width: 100%;
+            height: 100%;
+        }
+
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+
+        .error-message {
+            padding: 10px;
+            background: #fee;
+            border: 1px solid #fcc;
+            border-radius: 4px;
+            color: #c33;
+            font-size: 12px;
+            margin-top: 10px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .queue-info {
+            font-size: 11px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+
+            .control-panel {
+                width: 100%;
+                max-height: 40vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="control-panel">
+        <div class="control-section">
+            <h3>Simulation Control</h3>
+            <div class="control-buttons">
+                <button id="btnPause" class="primary">Pause</button>
+                <button id="btnResume" class="primary">Resume</button>
+                <button id="btnReset" class="danger">Reset</button>
+            </div>
+            <div class="status-info">
+                <div>Cycle: <strong id="currentCycle">-</strong></div>
+                <div>In-Flight: <strong id="inFlightCount">-</strong></div>
+                <div id="simStatus">Status: <strong>Waiting</strong></div>
+            </div>
+            <div id="errorMessage" class="error-message"></div>
+        </div>
+
+        <div class="control-section">
+            <h3>Configuration</h3>
+            <div class="config-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Num Masters</label>
+                        <input type="number" id="numMasters" min="1" value="3">
+                    </div>
+                    <div class="form-group">
+                        <label>Num Slaves</label>
+                        <input type="number" id="numSlaves" min="1" value="2">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Total Cycles</label>
+                        <input type="number" id="totalCycles" min="1" value="1000">
+                    </div>
+                    <div class="form-group">
+                        <label>Request Rate</label>
+                        <input type="number" id="requestRate" min="0" max="1" step="0.1" value="0.3">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Master→Relay Latency</label>
+                        <input type="number" id="masterRelayLatency" min="1" value="2">
+                    </div>
+                    <div class="form-group">
+                        <label>Relay→Master Latency</label>
+                        <input type="number" id="relayMasterLatency" min="1" value="2">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Relay→Slave Latency</label>
+                        <input type="number" id="relaySlaveLatency" min="1" value="1">
+                    </div>
+                    <div class="form-group">
+                        <label>Slave→Relay Latency</label>
+                        <input type="number" id="slaveRelayLatency" min="1" value="1">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Slave Process Rate</label>
+                    <input type="number" id="slaveProcessRate" min="1" value="2">
+                </div>
+                <div class="form-group">
+                    <label>Slave Weights (comma-separated)</label>
+                    <input type="text" id="slaveWeights" value="1,1" placeholder="1,1,1">
+                </div>
+            </div>
+            <div class="status-info" style="margin-top: 10px; font-size: 11px; color: #999;">
+                Configuration changes take effect after Reset.
+            </div>
+        </div>
+
+        <div class="control-section">
+            <h3>Statistics</h3>
+            <div class="stats-panel" id="statsPanel">
+                <div class="stats-item">
+                    <div style="text-align: center; color: #999;">No data available</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="visualization-area">
+        <div id="cy"></div>
+        <div id="loading" class="loading" style="display: none;">
+            <div>Loading simulation data...</div>
+        </div>
+    </div>
+
+    <script>
+        let cy;
+        let pollInterval;
+        let isPaused = false;
+        let currentFrame = null;
+        let topologyInitialized = false;
+
+        // Custom layout: Master on left, Slave on right, Relay in center
+        function applyCustomLayout() {
+            if (!cy || cy.elements().length === 0) {
+                return;
+            }
+            
+            const containerWidth = cy.width();
+            const containerHeight = cy.height();
+            
+            // Use default dimensions if container not ready
+            if (containerWidth === 0 || containerHeight === 0) {
+                return;
+            }
+            
+            const leftX = containerWidth * 0.2;      // Master nodes on left
+            const centerX = containerWidth * 0.5;   // Relay in center
+            const rightX = containerWidth * 0.8;     // Slave nodes on right
+            
+            const masters = cy.nodes('[type="master"]');
+            const slaves = cy.nodes('[type="slave"]');
+            const relays = cy.nodes('[type="relay"]');
+            
+            // Layout Master nodes on left, vertically distributed
+            if (masters.length > 0) {
+                const masterSpacing = Math.min(containerHeight / Math.max(masters.length + 1, 2), 150);
+                const totalHeight = (masters.length - 1) * masterSpacing;
+                const startY = (containerHeight - totalHeight) / 2;
+                masters.forEach((node, index) => {
+                    node.position({
+                        x: leftX,
+                        y: startY + index * masterSpacing
+                    });
+                });
+            }
+            
+            // Layout Relay node(s) in center
+            if (relays.length > 0) {
+                relays.forEach((node) => {
+                    node.position({
+                        x: centerX,
+                        y: containerHeight / 2
+                    });
+                });
+            }
+            
+            // Layout Slave nodes on right, vertically distributed
+            if (slaves.length > 0) {
+                const slaveSpacing = Math.min(containerHeight / Math.max(slaves.length + 1, 2), 150);
+                const totalHeight = (slaves.length - 1) * slaveSpacing;
+                const startY = (containerHeight - totalHeight) / 2;
+                slaves.forEach((node, index) => {
+                    node.position({
+                        x: rightX,
+                        y: startY + index * slaveSpacing
+                    });
+                });
+            }
+        }
+
+        // Initialize Cytoscape
+        function initCytoscape() {
+            cy = cytoscape({
+                container: document.getElementById('cy'),
+                elements: [],
+                style: [
+                    {
+                        selector: 'node',
+                        style: {
+                            'label': 'data(label)',
+                            'width': '60px',
+                            'height': '60px',
+                            'shape': 'round-rectangle',
+                            'background-color': '#e8e8e8',
+                            'border-width': 2,
+                            'border-color': '#888',
+                            'text-valign': 'center',
+                            'text-halign': 'center',
+                            'font-size': '12px',
+                            'font-weight': 'bold',
+                            'color': '#333',
+                            'text-wrap': 'wrap',
+                            'text-max-width': '80px'
+                        }
+                    },
+                    {
+                        selector: 'node[type="master"]',
+                        style: {
+                            'background-color': '#4a9eff',
+                            'border-color': '#0066cc',
+                            'color': 'white'
+                        }
+                    },
+                    {
+                        selector: 'node[type="slave"]',
+                        style: {
+                            'background-color': '#52c41a',
+                            'border-color': '#389e0d',
+                            'color': 'white'
+                        }
+                    },
+                    {
+                        selector: 'node[type="relay"]',
+                        style: {
+                            'background-color': '#ff7a45',
+                            'border-color': '#d4380d',
+                            'color': 'white'
+                        }
+                    },
+                    {
+                        selector: 'edge',
+                        style: {
+                            'width': 2,
+                            'line-color': '#999',
+                            'target-arrow-color': '#999',
+                            'target-arrow-shape': 'triangle',
+                            'curve-style': 'bezier',
+                            'label': 'data(label)',
+                            'font-size': '10px',
+                            'text-rotation': 'autorotate',
+                            'text-margin-y': -10
+                        }
+                    },
+                    {
+                        selector: 'edge[label="request"]',
+                        style: {
+                            'line-color': '#4a9eff',
+                            'target-arrow-color': '#4a9eff'
+                        }
+                    },
+                    {
+                        selector: 'edge[label="response"]',
+                        style: {
+                            'line-color': '#52c41a',
+                            'target-arrow-color': '#52c41a'
+                        }
+                    },
+                    {
+                        selector: 'edge[label="forward"]',
+                        style: {
+                            'line-color': '#ff7a45',
+                            'target-arrow-color': '#ff7a45'
+                        }
+                    },
+                    {
+                        selector: 'edge[label="return"]',
+                        style: {
+                            'line-color': '#faad14',
+                            'target-arrow-color': '#faad14'
+                        }
+                    }
+                ]
+            });
+
+            // Add hover tooltip for nodes
+            cy.on('mouseover', 'node', function(evt) {
+                const node = evt.target;
+                const data = node.data();
+                let tooltip = `${data.label}\nID: ${data.id}\nType: ${data.type}`;
+                
+                if (data.queues && data.queues.length > 0) {
+                    tooltip += '\n\nQueues:';
+                    data.queues.forEach(q => {
+                        const cap = q.capacity === -1 ? '∞' : q.capacity;
+                        tooltip += `\n${q.name}: ${q.length}/${cap}`;
+                    });
+                }
+
+                if (data.payload) {
+                    tooltip += '\n\nStats:';
+                    for (const [key, value] of Object.entries(data.payload)) {
+                        if (typeof value === 'number') {
+                            tooltip += `\n${key}: ${value.toFixed(2)}`;
+                        } else {
+                            tooltip += `\n${key}: ${value}`;
+                        }
+                    }
+                }
+
+                node.qtip({
+                    content: tooltip,
+                    position: {
+                        my: 'top center',
+                        at: 'bottom center'
+                    },
+                    style: {
+                        classes: 'qtip-bootstrap',
+                        tip: {
+                            width: 16,
+                            height: 8
+                        }
+                    },
+                    show: {
+                        event: 'mouseover',
+                        ready: true
+                    },
+                    hide: {
+                        event: 'mouseout'
+                    }
+                }, evt);
+            });
+        }
+
+        // Fetch frame data from API
+        async function fetchFrame() {
+            try {
+                const response = await fetch('/api/frame');
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        return null; // No frame available yet
+                    }
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const frame = await response.json();
+                return frame;
+            } catch (error) {
+                console.error('Error fetching frame:', error);
+                showError('Failed to fetch simulation data: ' + error.message);
+                return null;
+            }
+        }
+
+        // Update visualization with frame data
+        function updateVisualization(frame) {
+            if (!frame || !frame.nodes || !frame.edges) {
+                return;
+            }
+
+            currentFrame = frame;
+
+            // Update status info
+            document.getElementById('currentCycle').textContent = frame.cycle || 0;
+            document.getElementById('inFlightCount').textContent = frame.inFlightCount || 0;
+            
+            const statusEl = document.getElementById('simStatus');
+            if (frame.cycle >= (frame.totalCycles || 1000)) {
+                statusEl.innerHTML = 'Status: <strong style="color: #52c41a;">Completed</strong>';
+            } else {
+                statusEl.innerHTML = 'Status: <strong style="color: #1890ff;">Running</strong>';
+            }
+
+            // Initialize topology on first frame
+            if (!topologyInitialized) {
+                const elements = [];
+
+                // Add nodes
+                frame.nodes.forEach(node => {
+                    const nodeData = {
+                        group: 'nodes',
+                        data: {
+                            id: String(node.id),
+                            label: node.label || `Node ${node.id}`,
+                            type: node.type,
+                            queues: node.queues || [],
+                            payload: node.payload || {}
+                        }
+                    };
+                    elements.push(nodeData);
+                });
+
+                // Add edges
+                frame.edges.forEach(edge => {
+                    const edgeLabel = `${edge.label} (${edge.latency}cy)`;
+                    elements.push({
+                        group: 'edges',
+                        data: {
+                            id: `e${edge.source}-${edge.target}`,
+                            source: String(edge.source),
+                            target: String(edge.target),
+                            label: edgeLabel,
+                            latency: edge.latency
+                        }
+                    });
+                });
+
+                // Add all elements
+                cy.add(elements);
+                
+                // Apply custom layout after elements are added
+                // Use setTimeout to ensure Cytoscape has processed the elements
+                setTimeout(() => {
+                    applyCustomLayout();
+                }, 50);
+                
+                topologyInitialized = true;
+            }
+
+            // Update existing nodes with new data (without re-layout)
+            frame.nodes.forEach(node => {
+                const nodeId = String(node.id);
+                const cyNode = cy.getElementById(nodeId);
+                
+                if (cyNode.length > 0) {
+                    // Update node data
+                    let label = node.label || `Node ${node.id}`;
+                    if (node.queues && node.queues.length > 0) {
+                        const queueInfo = node.queues.map(q => {
+                            const cap = q.capacity === -1 ? '∞' : q.capacity;
+                            return `${q.name}:${q.length}/${cap}`;
+                        }).join(' ');
+                        label += `\n${queueInfo}`;
+                    }
+
+                    cyNode.data({
+                        label: label,
+                        queues: node.queues || [],
+                        payload: node.payload || {}
+                    });
+                }
+            });
+
+            // Update statistics
+            updateStatistics(frame.stats);
+        }
+
+        // Update statistics panel
+        function updateStatistics(stats) {
+            const panel = document.getElementById('statsPanel');
+            if (!stats || !stats.Global) {
+                panel.innerHTML = '<div class="stats-item"><div style="text-align: center; color: #999;">No data available</div></div>';
+                return;
+            }
+
+            let html = '';
+
+            // Global stats
+            html += '<div class="stats-item">';
+            html += '<h4>Global Statistics</h4>';
+            html += '<div class="stats-grid">';
+            html += `<div class="stats-value">Total Requests: <strong>${stats.Global.TotalRequests}</strong></div>`;
+            html += `<div class="stats-value">Completed: <strong>${stats.Global.Completed}</strong></div>`;
+            html += `<div class="stats-value">Completion Rate: <strong>${stats.Global.CompletionRate.toFixed(2)}%</strong></div>`;
+            html += `<div class="stats-value">Avg Delay: <strong>${stats.Global.AvgEndToEndDelay.toFixed(2)} cy</strong></div>`;
+            html += `<div class="stats-value">Max Delay: <strong>${stats.Global.MaxDelay} cy</strong></div>`;
+            html += `<div class="stats-value">Min Delay: <strong>${stats.Global.MinDelay} cy</strong></div>`;
+            html += '</div>';
+            html += '</div>';
+
+            // Master stats
+            if (stats.PerMaster && stats.PerMaster.length > 0) {
+                html += '<div class="stats-item">';
+                html += '<h4>Master Statistics</h4>';
+                stats.PerMaster.forEach((m, idx) => {
+                    if (m) {
+                        html += `<div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #eee;">`;
+                        html += `<strong>Master ${idx}</strong><br>`;
+                        html += `Completed: ${m.CompletedRequests}, `;
+                        html += `Avg Delay: ${m.AvgDelay.toFixed(2)} cy, `;
+                        html += `Max: ${m.MaxDelay} cy, Min: ${m.MinDelay} cy`;
+                        html += '</div>';
+                    }
+                });
+                html += '</div>';
+            }
+
+            // Slave stats
+            if (stats.PerSlave && stats.PerSlave.length > 0) {
+                html += '<div class="stats-item">';
+                html += '<h4>Slave Statistics</h4>';
+                stats.PerSlave.forEach((s, idx) => {
+                    if (s) {
+                        html += `<div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #eee;">`;
+                        html += `<strong>Slave ${idx}</strong><br>`;
+                        html += `Processed: ${s.TotalProcessed}, `;
+                        html += `Max Queue: ${s.MaxQueueLength}, `;
+                        html += `Avg Queue: ${s.AvgQueueLength.toFixed(2)}`;
+                        html += '</div>';
+                    }
+                });
+                html += '</div>';
+            }
+
+            panel.innerHTML = html;
+        }
+
+        // Send control command
+        async function sendControl(type, config) {
+            try {
+                const body = { type: type };
+                if (config) {
+                    body.config = config;
+                }
+
+                const response = await fetch('/api/control', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(body)
+                });
+
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(text || `HTTP ${response.status}`);
+                }
+
+                hideError();
+                return true;
+            } catch (error) {
+                console.error('Error sending control:', error);
+                showError('Failed to send command: ' + error.message);
+                return false;
+            }
+        }
+
+        // Get configuration from form
+        function getConfigFromForm() {
+            const slaveWeightsStr = document.getElementById('slaveWeights').value;
+            const slaveWeights = slaveWeightsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+
+            return {
+                NumMasters: parseInt(document.getElementById('numMasters').value) || 3,
+                NumSlaves: parseInt(document.getElementById('numSlaves').value) || 2,
+                NumRelays: 1,
+                TotalCycles: parseInt(document.getElementById('totalCycles').value) || 1000,
+                MasterRelayLatency: parseInt(document.getElementById('masterRelayLatency').value) || 2,
+                RelayMasterLatency: parseInt(document.getElementById('relayMasterLatency').value) || 2,
+                RelaySlaveLatency: parseInt(document.getElementById('relaySlaveLatency').value) || 1,
+                SlaveRelayLatency: parseInt(document.getElementById('slaveRelayLatency').value) || 1,
+                SlaveProcessRate: parseInt(document.getElementById('slaveProcessRate').value) || 2,
+                RequestRate: parseFloat(document.getElementById('requestRate').value) || 0.3,
+                SlaveWeights: slaveWeights.length > 0 ? slaveWeights : [1, 1]
+            };
+        }
+
+        // Validate configuration
+        function validateConfig(config) {
+            if (config.NumMasters <= 0 || config.NumSlaves <= 0) {
+                return 'NumMasters and NumSlaves must be positive';
+            }
+            if (config.TotalCycles <= 0) {
+                return 'TotalCycles must be positive';
+            }
+            if (config.RequestRate < 0 || config.RequestRate > 1) {
+                return 'RequestRate must be between 0 and 1';
+            }
+            if (config.SlaveWeights.length !== config.NumSlaves) {
+                return `SlaveWeights length (${config.SlaveWeights.length}) must match NumSlaves (${config.NumSlaves})`;
+            }
+            return null;
+        }
+
+        // Show error message
+        function showError(message) {
+            const errorEl = document.getElementById('errorMessage');
+            errorEl.textContent = message;
+            errorEl.classList.add('show');
+        }
+
+        // Hide error message
+        function hideError() {
+            const errorEl = document.getElementById('errorMessage');
+            errorEl.classList.remove('show');
+        }
+
+        // Start polling for frames
+        function startPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+            }
+            pollInterval = setInterval(async () => {
+                if (!isPaused) {
+                    const frame = await fetchFrame();
+                    if (frame) {
+                        updateVisualization(frame);
+                    }
+                }
+            }, 500); // Poll every 500ms
+        }
+
+        // Stop polling
+        function stopPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
+
+        // Event listeners
+        document.getElementById('btnPause').addEventListener('click', async () => {
+            const success = await sendControl('pause');
+            if (success) {
+                isPaused = true;
+            }
+        });
+
+        document.getElementById('btnResume').addEventListener('click', async () => {
+            const success = await sendControl('resume');
+            if (success) {
+                isPaused = false;
+            }
+        });
+
+        document.getElementById('btnReset').addEventListener('click', async () => {
+            const config = getConfigFromForm();
+            const error = validateConfig(config);
+            if (error) {
+                showError(error);
+                return;
+            }
+            const success = await sendControl('reset', config);
+            if (success) {
+                isPaused = false;
+                // Clear visualization and reset topology
+                cy.elements().remove();
+                topologyInitialized = false;
+                document.getElementById('currentCycle').textContent = '-';
+                document.getElementById('inFlightCount').textContent = '-';
+                document.getElementById('simStatus').innerHTML = 'Status: <strong>Resetting...</strong>';
+            }
+        });
+
+        // Initialize
+        initCytoscape();
+        startPolling();
+
+        // Reapply layout on window resize
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            if (topologyInitialized) {
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(() => {
+                    applyCustomLayout();
+                }, 250);
+            }
+        });
+
+        // Initial frame fetch
+        fetchFrame().then(frame => {
+            if (frame) {
+                updateVisualization(frame);
+            }
+        });
+    </script>
+</body>
+</html>
+
