@@ -22,7 +22,7 @@ func NewSlave(id int, rate int) *Slave {
 		ProcessRate: rate,
 		queue:       make([]*Packet, 0),
 	}
-	s.AddQueue("request_queue", 0, -1) // unlimited capacity
+	s.AddQueue("request_queue", 0, 20) // Limited capacity for high load visualization
 	return s
 }
 

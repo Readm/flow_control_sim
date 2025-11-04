@@ -18,8 +18,8 @@ func main() {
 		RelayMasterLatency: 2,
 		RelaySlaveLatency:  1,
 		SlaveRelayLatency:  1,
-		SlaveProcessRate:   2,
-		RequestRate:        0.3,
+		SlaveProcessRate:   1,   // Reduced to create higher load
+		RequestRate:        0.8, // Increased to generate more requests
 		SlaveWeights:       []int{1, 1},
 		Headless:           *headless,
 		VisualMode:         "web",
