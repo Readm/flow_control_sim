@@ -1,12 +1,12 @@
 package main
 
-// NodeType represents the type of a node
+// NodeType represents the CHI protocol node type
 type NodeType string
 
 const (
-	NodeTypeMaster NodeType = "master"
-	NodeTypeSlave  NodeType = "slave"
-	NodeTypeRelay  NodeType = "relay"
+	NodeTypeRN NodeType = "RN" // Request Node - initiates transactions
+	NodeTypeHN NodeType = "HN" // Home Node - manages cache coherence
+	NodeTypeSN NodeType = "SN" // Slave Node - provides data
 )
 
 // QueueInfo represents queue information for visualization

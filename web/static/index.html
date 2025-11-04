@@ -398,9 +398,10 @@
             const centerX = containerWidth * 0.5;   // Relay in center
             const rightX = containerWidth * 0.8;     // Slave nodes on right
             
-            const masters = cy.nodes('[type="master"]');
-            const slaves = cy.nodes('[type="slave"]');
-            const relays = cy.nodes('[type="relay"]');
+            // Support both CHI node types (RN/HN/SN) and legacy types (master/slave/relay)
+            const masters = cy.nodes('[type="RN"], [type="master"]');
+            const slaves = cy.nodes('[type="SN"], [type="slave"]');
+            const relays = cy.nodes('[type="HN"], [type="relay"]');
             
             // Layout Master nodes on left, vertically distributed
             if (masters.length > 0) {
@@ -471,7 +472,7 @@
                         }
                     },
                     {
-                        selector: 'node[type="master"]',
+                        selector: 'node[type="RN"], node[type="master"]',
                         style: {
                             'background-color': '#4a9eff',
                             'border-color': '#0066cc',
@@ -479,7 +480,7 @@
                         }
                     },
                     {
-                        selector: 'node[type="slave"]',
+                        selector: 'node[type="SN"], node[type="slave"]',
                         style: {
                             'background-color': '#52c41a',
                             'border-color': '#389e0d',
@@ -487,7 +488,7 @@
                         }
                     },
                     {
-                        selector: 'node[type="relay"]',
+                        selector: 'node[type="HN"], node[type="relay"]',
                         style: {
                             'background-color': '#ff7a45',
                             'border-color': '#d4380d',
@@ -509,14 +510,14 @@
                         }
                     },
                     {
-                        selector: 'edge[label="request"]',
+                        selector: 'edge[label="Req"], edge[label="request"]',
                         style: {
                             'line-color': '#4a9eff',
                             'target-arrow-color': '#4a9eff'
                         }
                     },
                     {
-                        selector: 'edge[label="response"]',
+                        selector: 'edge[label="Comp"], edge[label="response"]',
                         style: {
                             'line-color': '#52c41a',
                             'target-arrow-color': '#52c41a'
@@ -545,6 +546,13 @@
                 const data = node.data();
                 let tooltip = `${data.label}\nID: ${data.id}\nType: ${data.type}`;
                 
+                // Display CHI protocol information
+                if (data.payload && data.payload.chiProtocol) {
+                    const nodeTypeMap = {'RN': 'Request Node (CHI)', 'HN': 'Home Node (CHI)', 'SN': 'Slave Node (CHI)'};
+                    const chiType = data.payload.nodeType || data.type;
+                    tooltip += `\nCHI Protocol: ${nodeTypeMap[chiType] || chiType}`;
+                }
+                
                 if (data.queues && data.queues.length > 0) {
                     tooltip += '\n\nQueues:';
                     data.queues.forEach(q => {
@@ -556,6 +564,8 @@
                 if (data.payload) {
                     tooltip += '\n\nStats:';
                     for (const [key, value] of Object.entries(data.payload)) {
+                        // Skip internal CHI protocol fields in tooltip
+                        if (key === 'chiProtocol' || key === 'nodeType') continue;
                         if (typeof value === 'number') {
                             tooltip += `\n${key}: ${value.toFixed(2)}`;
                         } else {

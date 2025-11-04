@@ -1,10 +1,38 @@
 package main
 
-// Packet represents a generic message flowing through the simulator.
-// It is used for both request and response by distinguishing the Type field.
+// CHITransactionType represents CHI protocol transaction types
+type CHITransactionType string
+
+const (
+	CHITxnReadNoSnp  CHITransactionType = "ReadNoSnp"
+	CHITxnWriteNoSnp CHITransactionType = "WriteNoSnp"
+	CHITxnReadOnce   CHITransactionType = "ReadOnce"
+	CHITxnWriteUnique CHITransactionType = "WriteUnique"
+)
+
+// CHIMessageType represents CHI protocol message types
+type CHIMessageType string
+
+const (
+	CHIMsgReq  CHIMessageType = "Req"  // Request message
+	CHIMsgResp CHIMessageType = "Resp" // Response message
+	CHIMsgData CHIMessageType = "Data" // Data message
+	CHIMsgComp CHIMessageType = "Comp" // Completion message
+)
+
+// CHIResponseType represents CHI response types
+type CHIResponseType string
+
+const (
+	CHIRespCompData CHIResponseType = "CompData" // Completion with data
+	CHIRespCompAck  CHIResponseType = "CompAck"  // Completion acknowledgment
+)
+
+// Packet represents a CHI protocol message flowing through the simulator.
+// It supports both legacy "request"/"response" types and new CHI protocol fields.
 type Packet struct {
     ID          int64  // unique packet id
-    Type        string // "request" or "response"
+    Type        string // legacy: "request" or "response" (kept for compatibility during transition)
     SrcID       int    // source node id
     DstID       int    // destination node id
 
@@ -13,9 +41,16 @@ type Packet struct {
     ReceivedAt  int // cycle when received by next hop
     CompletedAt int // cycle when processed (for requests)
 
-    // Request specific
-    MasterID  int   // original master id
+    // Legacy fields (kept for compatibility)
+    MasterID  int   // original master/request node id
     RequestID int64 // request id (same as ID for request packets)
+
+    // CHI protocol fields
+    TransactionType CHITransactionType // CHI transaction type (ReadNoSnp, WriteNoSnp, etc.)
+    MessageType     CHIMessageType     // CHI message type (Req, Resp, Data, Comp)
+    ResponseType    CHIResponseType    // CHI response type (CompData, CompAck, etc.)
+    Address         uint64             // memory address for the transaction
+    DataSize        int                // data size in bytes (default: 64 for cache line)
 }
 
 // Config holds simulation configuration values.

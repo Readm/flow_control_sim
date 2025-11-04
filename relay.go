@@ -1,63 +1,90 @@
 package main
 
-// Relay forwards packets according to DstID with fixed per-link latencies.
-// Relay now supports buffering packets in a queue.
-type Relay struct {
+// HomeNode (HN) represents a CHI Home Node that manages cache coherence and routes transactions.
+// It receives requests from Request Nodes and forwards them to Slave Nodes,
+// then routes responses back to the originating Request Node.
+type HomeNode struct {
 	Node  // embedded Node base class
 	queue []*Packet
 }
 
-func NewRelay(id int) *Relay {
-	r := &Relay{
+func NewHomeNode(id int) *HomeNode {
+	hn := &HomeNode{
 		Node: Node{
 			ID:   id,
-			Type: NodeTypeRelay,
+			Type: NodeTypeHN,
 		},
 		queue: make([]*Packet, 0),
 	}
-	r.AddQueue("forward_queue", 0, -1) // unlimited capacity
-	return r
+	hn.AddQueue("forward_queue", 0, -1) // unlimited capacity
+	return hn
 }
 
-// OnPacket enqueues a packet instead of forwarding immediately.
-func (r *Relay) OnPacket(p *Packet, cycle int, ch *Channel, cfg *Config) {
+// OnPacket enqueues a CHI packet received at the Home Node.
+// For ReadNoSnp requests, this will be forwarded to the target Slave Node.
+// For responses from Slave Nodes, this will be forwarded back to the Request Node.
+func (hn *HomeNode) OnPacket(p *Packet, cycle int, ch *Channel, cfg *Config) {
 	if p == nil {
 		return
 	}
-	r.queue = append(r.queue, p)
-	r.UpdateQueue("forward_queue", len(r.queue))
+	p.ReceivedAt = cycle
+	hn.queue = append(hn.queue, p)
+	hn.UpdateQueue("forward_queue", len(hn.queue))
 }
 
-// Tick processes the queue and forwards packets with appropriate latencies.
-// Returns the number of packets forwarded.
-func (r *Relay) Tick(cycle int, ch *Channel, cfg *Config) int {
-	if len(r.queue) == 0 {
+// Tick processes the queue and forwards CHI packets according to CHI protocol rules.
+// For ReadNoSnp transactions:
+//   - Requests from RN: forward to target SN
+//   - CompData responses from SN: forward back to originating RN
+func (hn *HomeNode) Tick(cycle int, ch *Channel, cfg *Config) int {
+	if len(hn.queue) == 0 {
 		return 0
 	}
 
 	count := 0
-	for _, p := range r.queue {
+	for _, p := range hn.queue {
 		var latency int
 		var toID int
-		switch p.Type {
-		case "request":
-			toID = p.DstID // target slave id
+
+		// CHI protocol routing logic
+		if p.MessageType == CHIMsgReq {
+			// This is a request from Request Node, forward to Slave Node
+			// For ReadNoSnp, the DstID already points to the target Slave Node
+			toID = p.DstID
 			latency = cfg.RelaySlaveLatency
-		case "response":
-			toID = p.DstID // target master id
+		} else if p.MessageType == CHIMsgComp || p.MessageType == CHIMsgResp {
+			// This is a response from Slave Node, forward back to Request Node
+			// The MasterID field contains the original Request Node ID
+			toID = p.MasterID
 			latency = cfg.RelayMasterLatency
-		default:
+		} else if p.Type == "request" {
+			// Legacy support: treat as request, forward to Slave Node
+			toID = p.DstID
+			latency = cfg.RelaySlaveLatency
+		} else if p.Type == "response" {
+			// Legacy support: treat as response, forward to Request Node
+			toID = p.DstID
+			latency = cfg.RelayMasterLatency
+		} else {
 			continue
 		}
+
 		p.SentAt = cycle
-		ch.Send(p, r.ID, toID, cycle, latency)
+		ch.Send(p, hn.ID, toID, cycle, latency)
 		count++
 	}
 
 	// clear the queue after forwarding
-	r.queue = r.queue[:0]
-	r.UpdateQueue("forward_queue", 0)
+	hn.queue = hn.queue[:0]
+	hn.UpdateQueue("forward_queue", 0)
 	return count
+}
+
+// Legacy type alias for backward compatibility during transition
+type Relay = HomeNode
+
+func NewRelay(id int) *Relay {
+	return NewHomeNode(id)
 }
 
 

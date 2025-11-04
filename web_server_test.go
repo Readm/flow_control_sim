@@ -23,7 +23,7 @@ func TestWebServer_FrameEndpoint(t *testing.T) {
 	frame := &SimulationFrame{
 		Cycle: 10,
 		Nodes: []NodeSnapshot{
-			{ID: 1, Type: NodeTypeMaster, Label: "Master 0"},
+			{ID: 1, Type: NodeTypeRN, Label: "RN 0"},
 		},
 		Edges: []EdgeSnapshot{},
 	}

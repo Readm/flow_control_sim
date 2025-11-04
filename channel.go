@@ -1,14 +1,16 @@
 package main
 
-// InFlightMessage represents a packet that is currently in transit.
+// InFlightMessage represents a CHI protocol packet that is currently in transit.
+// It carries CHI messages (Req, Resp, Data, Comp) between nodes.
 type InFlightMessage struct {
-    Packet       *Packet
+    Packet       *Packet // Contains CHI protocol fields (TransactionType, MessageType, etc.)
     FromID       int
     ToID         int
     ArrivalCycle int
 }
 
-// Channel is a simple infinite-capacity link layer that only models fixed delays.
+// Channel is a simple infinite-capacity link layer that models fixed delays for CHI protocol messages.
+// It supports all CHI message types (Req, Resp, Data, Comp) with configurable latencies.
 type Channel struct {
     inFlight []*InFlightMessage
 }
@@ -17,7 +19,8 @@ func NewChannel() *Channel {
     return &Channel{inFlight: make([]*InFlightMessage, 0)}
 }
 
-// Send enqueues a packet that will arrive at target after given latency.
+// Send enqueues a CHI protocol packet that will arrive at target after given latency.
+// The packet may contain CHI message types (CHIMsgReq, CHIMsgResp, CHIMsgData, CHIMsgComp).
 func (c *Channel) Send(packet *Packet, fromID, toID, currentCycle, latency int) {
     msg := &InFlightMessage{
         Packet:       packet,

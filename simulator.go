@@ -58,12 +58,12 @@ func NewSimulator(cfg *Config) *Simulator {
 
 	labels := make(map[int]string, len(masters)+len(slaves)+1)
 	for i, m := range masters {
-		labels[m.ID] = fmt.Sprintf("Master %d", i)
+		labels[m.ID] = fmt.Sprintf("RN %d", i) // Request Node
 	}
 	for i, s := range slaves {
-		labels[s.ID] = fmt.Sprintf("Slave %d", i)
+		labels[s.ID] = fmt.Sprintf("SN %d", i) // Slave Node
 	}
-	labels[relay.ID] = "Relay 0"
+	labels[relay.ID] = "HN 0" // Home Node
 
 	sim := &Simulator{
 		Masters:    masters,
@@ -105,17 +105,19 @@ func (s *Simulator) buildEdges() []EdgeSnapshot {
 	if s.Relay == nil {
 		return edges
 	}
-	relayID := s.Relay.ID
+	homeNodeID := s.Relay.ID
 	for _, m := range s.Masters {
+		// CHI edges: RN -> HN (Req), HN -> RN (Comp)
 		edges = append(edges,
-			EdgeSnapshot{Source: m.ID, Target: relayID, Label: "request", Latency: s.cfg.MasterRelayLatency},
-			EdgeSnapshot{Source: relayID, Target: m.ID, Label: "response", Latency: s.cfg.RelayMasterLatency},
+			EdgeSnapshot{Source: m.ID, Target: homeNodeID, Label: "Req", Latency: s.cfg.MasterRelayLatency},
+			EdgeSnapshot{Source: homeNodeID, Target: m.ID, Label: "Comp", Latency: s.cfg.RelayMasterLatency},
 		)
 	}
 	for _, sl := range s.Slaves {
+		// CHI edges: HN -> SN (Req), SN -> HN (Comp)
 		edges = append(edges,
-			EdgeSnapshot{Source: relayID, Target: sl.ID, Label: "forward", Latency: s.cfg.RelaySlaveLatency},
-			EdgeSnapshot{Source: sl.ID, Target: relayID, Label: "return", Latency: s.cfg.SlaveRelayLatency},
+			EdgeSnapshot{Source: homeNodeID, Target: sl.ID, Label: "Req", Latency: s.cfg.RelaySlaveLatency},
+			EdgeSnapshot{Source: sl.ID, Target: homeNodeID, Label: "Comp", Latency: s.cfg.SlaveRelayLatency},
 		)
 	}
 	return edges
@@ -145,6 +147,8 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"avgDelay":          stats.AvgDelay,
 			"maxDelay":          stats.MaxDelay,
 			"minDelay":          stats.MinDelay,
+			"nodeType":          "RN", // CHI Request Node
+			"chiProtocol":       true,
 		}
 		nodes = append(nodes, NodeSnapshot{
 			ID:      m.ID,
@@ -161,6 +165,8 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"totalProcessed": stats.TotalProcessed,
 			"maxQueue":       stats.MaxQueueLength,
 			"avgQueue":       stats.AvgQueueLength,
+			"nodeType":       "SN", // CHI Slave Node
+			"chiProtocol":    true,
 		}
 		nodes = append(nodes, NodeSnapshot{
 			ID:      sl.ID,
@@ -172,14 +178,26 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 	}
 
 	if s.Relay != nil {
+		// Get queue length from queue info
+		queueInfo := s.Relay.GetQueueInfo()
+		queueLength := 0
+		for _, q := range queueInfo {
+			if q.Name == "forward_queue" {
+				queueLength = q.Length
+				break
+			}
+		}
+		payload := map[string]any{
+			"queueLength": queueLength,
+			"nodeType":    "HN", // CHI Home Node
+			"chiProtocol": true,
+		}
 		nodes = append(nodes, NodeSnapshot{
-			ID:     s.Relay.ID,
-			Type:   s.Relay.Type,
-			Label:  s.nodeLabels[s.Relay.ID],
-			Queues: cloneQueues(s.Relay.GetQueueInfo()),
-			Payload: map[string]any{
-				"queueLength": len(s.Relay.queue),
-			},
+			ID:      s.Relay.ID,
+			Type:    s.Relay.Type,
+			Label:   s.nodeLabels[s.Relay.ID],
+			Queues:  cloneQueues(s.Relay.GetQueueInfo()),
+			Payload: payload,
 		})
 	}
 
@@ -227,17 +245,26 @@ func (s *Simulator) Run() {
 		arrivals := s.Chan.CollectArrivals(cycle)
 		for _, a := range arrivals {
 			if s.Relay != nil && a.ToID == s.Relay.ID {
+				// CHI message arrives at Home Node
 				s.Relay.OnPacket(a.Packet, cycle, s.Chan, s.cfg)
 				continue
 			}
 			if m := s.masterByID[a.ToID]; m != nil {
-				if a.Packet.Type == "response" {
+				// CHI response arrives at Request Node
+				// Check for CHI response or legacy response type
+				isCHIResponse := a.Packet.MessageType == CHIMsgComp || a.Packet.MessageType == CHIMsgResp
+				isLegacyResponse := a.Packet.Type == "response"
+				if isCHIResponse || isLegacyResponse {
 					m.OnResponse(a.Packet, cycle)
 				}
 				continue
 			}
 			if sl := s.slaveByID[a.ToID]; sl != nil {
-				if a.Packet.Type == "request" {
+				// CHI request arrives at Slave Node
+				// Check for CHI request or legacy request type
+				isCHIRequest := a.Packet.MessageType == CHIMsgReq
+				isLegacyRequest := a.Packet.Type == "request"
+				if isCHIRequest || isLegacyRequest {
 					sl.EnqueueRequest(a.Packet)
 				}
 				continue
@@ -317,12 +344,12 @@ func (s *Simulator) reset(newCfg *Config) {
 
 	labels := make(map[int]string, len(masters)+len(slaves)+1)
 	for i, m := range masters {
-		labels[m.ID] = fmt.Sprintf("Master %d", i)
+		labels[m.ID] = fmt.Sprintf("RN %d", i) // Request Node
 	}
 	for i, s := range slaves {
-		labels[s.ID] = fmt.Sprintf("Slave %d", i)
+		labels[s.ID] = fmt.Sprintf("SN %d", i) // Slave Node
 	}
-	labels[relay.ID] = "Relay 0"
+	labels[relay.ID] = "HN 0" // Home Node
 
 	s.Masters = masters
 	s.Slaves = slaves

@@ -1,7 +1,8 @@
 package main
 
-// Slave processes incoming request packets in FIFO order with a fixed rate.
-type Slave struct {
+// SlaveNode (SN) represents a CHI Slave Node that processes requests and provides data.
+// It processes CHI protocol requests in FIFO order and generates appropriate CHI responses.
+type SlaveNode struct {
 	Node  // embedded Node base class
 	ProcessRate    int
 	queue          []*Packet
@@ -13,82 +14,118 @@ type Slave struct {
 	Samples        int64
 }
 
-func NewSlave(id int, rate int) *Slave {
-	s := &Slave{
+func NewSlaveNode(id int, rate int) *SlaveNode {
+	sn := &SlaveNode{
 		Node: Node{
 			ID:   id,
-			Type: NodeTypeSlave,
+			Type: NodeTypeSN,
 		},
 		ProcessRate: rate,
 		queue:       make([]*Packet, 0),
 	}
-	s.AddQueue("request_queue", 0, 20) // Limited capacity for high load visualization
-	return s
+	sn.AddQueue("request_queue", 0, 20) // Limited capacity for high load visualization
+	return sn
 }
 
-func (s *Slave) EnqueueRequest(p *Packet) {
-	s.queue = append(s.queue, p)
-	if len(s.queue) > s.MaxQueueLength {
-		s.MaxQueueLength = len(s.queue)
+func (sn *SlaveNode) EnqueueRequest(p *Packet) {
+	// Note: ReceivedAt will be set by the simulator when the packet arrives
+	sn.queue = append(sn.queue, p)
+	if len(sn.queue) > sn.MaxQueueLength {
+		sn.MaxQueueLength = len(sn.queue)
 	}
-	s.UpdateQueue("request_queue", len(s.queue))
+	sn.UpdateQueue("request_queue", len(sn.queue))
 }
 
-// Tick processes up to ProcessRate requests from the head of queue and returns generated responses.
-func (s *Slave) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
-	s.TotalQueueSum += int64(len(s.queue))
-	s.Samples++
+// Tick processes up to ProcessRate requests from the head of queue and returns generated CHI responses.
+// For ReadNoSnp transactions, generates CompData responses.
+func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
+	sn.TotalQueueSum += int64(len(sn.queue))
+	sn.Samples++
 
-	if s.ProcessRate <= 0 || len(s.queue) == 0 {
-		s.UpdateQueue("request_queue", len(s.queue))
+	if sn.ProcessRate <= 0 || len(sn.queue) == 0 {
+		sn.UpdateQueue("request_queue", len(sn.queue))
 		return nil
 	}
-	n := s.ProcessRate
-	if n > len(s.queue) {
-		n = len(s.queue)
+	n := sn.ProcessRate
+	if n > len(sn.queue) {
+		n = len(sn.queue)
 	}
-	processed := s.queue[:n]
-	s.queue = s.queue[n:]
+	processed := sn.queue[:n]
+	sn.queue = sn.queue[n:]
 
 	responses := make([]*Packet, 0, n)
 	for _, req := range processed {
 		req.CompletedAt = cycle
-		s.ProcessedCount++
+		sn.ProcessedCount++
 
-		// generate response packet
-		resp := &Packet{
-			ID:        packetIDs.Allocate(),
-			Type:      "response",
-			SrcID:     s.ID,
-			DstID:     req.MasterID, // symmetric return to master
-			SentAt:    cycle,        // will be updated by sender if needed
-			RequestID: req.ID,
-			MasterID:  req.MasterID,
-		}
+		// Generate CHI protocol response
+		// For ReadNoSnp, generate CompData (Completion with Data)
+		resp := sn.generateCHIResponse(req, cycle, packetIDs)
 		responses = append(responses, resp)
 	}
-	s.UpdateQueue("request_queue", len(s.queue))
+	sn.UpdateQueue("request_queue", len(sn.queue))
 	return responses
 }
 
-func (s *Slave) QueueLength() int { return len(s.queue) }
+// generateCHIResponse creates a CHI protocol response packet based on the request.
+// For ReadNoSnp transactions, returns CompData response.
+func (sn *SlaveNode) generateCHIResponse(req *Packet, cycle int, packetIDs *PacketIDAllocator) *Packet {
+	resp := &Packet{
+		ID:        packetIDs.Allocate(),
+		Type:      "response", // legacy field
+		SrcID:     sn.ID,
+		DstID:     req.MasterID, // return to Request Node via Home Node
+		SentAt:    cycle,
+		RequestID: req.RequestID,
+		MasterID:  req.MasterID,
+		Address:   req.Address, // preserve address from request
+		DataSize:  req.DataSize, // preserve data size from request
+	}
 
-type SlaveStats struct {
+	// Set CHI protocol fields based on transaction type
+	if req.TransactionType == CHITxnReadNoSnp {
+		resp.TransactionType = CHITxnReadNoSnp
+		resp.MessageType = CHIMsgComp
+		resp.ResponseType = CHIRespCompData // Completion with Data for read
+	} else if req.MessageType == CHIMsgReq {
+		// Generic CHI request, generate CompData response
+		resp.TransactionType = req.TransactionType
+		resp.MessageType = CHIMsgComp
+		resp.ResponseType = CHIRespCompData
+	} else {
+		// Legacy support
+		resp.MessageType = CHIMsgResp
+	}
+
+	return resp
+}
+
+func (sn *SlaveNode) QueueLength() int { return len(sn.queue) }
+
+type SlaveNodeStats struct {
     TotalProcessed  int
     MaxQueueLength  int
     AvgQueueLength  float64
 }
 
-func (s *Slave) SnapshotStats() *SlaveStats {
+func (sn *SlaveNode) SnapshotStats() *SlaveNodeStats {
     var avg float64
-    if s.Samples > 0 {
-        avg = float64(s.TotalQueueSum) / float64(s.Samples)
+    if sn.Samples > 0 {
+        avg = float64(sn.TotalQueueSum) / float64(sn.Samples)
     }
-    return &SlaveStats{
-        TotalProcessed: s.ProcessedCount,
-        MaxQueueLength: s.MaxQueueLength,
+    return &SlaveNodeStats{
+        TotalProcessed: sn.ProcessedCount,
+        MaxQueueLength: sn.MaxQueueLength,
         AvgQueueLength: avg,
     }
+}
+
+// Legacy type aliases for backward compatibility during transition
+type Slave = SlaveNode
+type SlaveStats = SlaveNodeStats
+
+func NewSlave(id int, rate int) *Slave {
+	return NewSlaveNode(id, rate)
 }
 
 
