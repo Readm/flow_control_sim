@@ -217,7 +217,8 @@ func (s *Simulator) Run() {
 	s.isPaused = false
 
 	for s.current < s.cfg.TotalCycles {
-		// Check for control commands
+		// Check for control commands (except step, handled in paused section)
+		stepCommandPending := false
 		if s.visualizer != nil {
 			cmd, hasCmd := s.visualizer.NextCommand()
 			if hasCmd {
@@ -229,14 +230,29 @@ func (s *Simulator) Run() {
 				case CommandReset:
 					s.reset(cmd.ConfigOverride)
 					continue
+				case CommandStep:
+					// Step command is handled in paused section below
+					// Mark it as pending so we can process it there
+					if s.isPaused {
+						stepCommandPending = true
+					}
+					// If not paused, ignore step command (frontend should disable button)
 				}
 			}
 		}
 
 		// Wait if paused
 		if s.isPaused {
-			time.Sleep(100 * time.Millisecond)
-			continue
+			// Check for step command while paused
+			if stepCommandPending {
+				// Execute one cycle in step mode
+				// Continue to execute cycle below (break out of pause wait)
+				// isPaused remains true after execution
+			} else {
+				// No step command, wait normally
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
 		}
 
 		cycle := s.current

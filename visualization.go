@@ -8,6 +8,7 @@ const (
 	CommandPause  ControlCommandType = "pause"
 	CommandResume ControlCommandType = "resume"
 	CommandReset  ControlCommandType = "reset"
+	CommandStep   ControlCommandType = "step"
 )
 
 // ControlCommand captures a control instruction for the simulator.

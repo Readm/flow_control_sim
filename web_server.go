@@ -139,6 +139,8 @@ func (ws *WebServer) handleControl(w http.ResponseWriter, r *http.Request) {
 			}
 			cmd.ConfigOverride = req.Config
 		}
+	case "step":
+		cmd.Type = CommandStep
 	default:
 		http.Error(w, "Invalid command type", http.StatusBadRequest)
 		return

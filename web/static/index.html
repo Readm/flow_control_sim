@@ -233,6 +233,7 @@
             <div class="control-buttons">
                 <button id="btnPause" class="primary">Pause</button>
                 <button id="btnResume" class="primary">Resume</button>
+                <button id="btnStep" class="primary">Step</button>
                 <button id="btnReset" class="danger">Reset</button>
             </div>
             <div class="status-info">
@@ -636,6 +637,9 @@
                 statusEl.innerHTML = 'Status: <strong style="color: #1890ff;">Running</strong>';
             }
 
+            // Update button states based on current pause status
+            updateButtonStates();
+
             // Initialize topology on first frame
             if (!topologyInitialized) {
                 const elements = [];
@@ -876,11 +880,10 @@
                 clearInterval(pollInterval);
             }
             pollInterval = setInterval(async () => {
-                if (!isPaused) {
-                    const frame = await fetchFrame();
-                    if (frame) {
-                        updateVisualization(frame);
-                    }
+                // Poll regardless of pause state to get updates after step commands
+                const frame = await fetchFrame();
+                if (frame) {
+                    updateVisualization(frame);
                 }
             }, 500); // Poll every 500ms
         }
@@ -893,11 +896,20 @@
             }
         }
 
+        // Update button states based on pause status
+        function updateButtonStates() {
+            const btnStep = document.getElementById('btnStep');
+            if (btnStep) {
+                btnStep.disabled = !isPaused;
+            }
+        }
+
         // Event listeners
         document.getElementById('btnPause').addEventListener('click', async () => {
             const success = await sendControl('pause');
             if (success) {
                 isPaused = true;
+                updateButtonStates();
             }
         });
 
@@ -905,6 +917,18 @@
             const success = await sendControl('resume');
             if (success) {
                 isPaused = false;
+                updateButtonStates();
+            }
+        });
+
+        document.getElementById('btnStep').addEventListener('click', async () => {
+            if (!isPaused) {
+                return; // Step button should only work when paused
+            }
+            const success = await sendControl('step');
+            if (success) {
+                // Step command sent, state remains paused
+                // Frame will be updated on next poll
             }
         });
 
@@ -918,6 +942,7 @@
             const success = await sendControl('reset', config);
             if (success) {
                 isPaused = false;
+                updateButtonStates();
                 // Clear visualization and reset topology
                 cy.elements().remove();
                 topologyInitialized = false;
