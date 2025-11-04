@@ -7,7 +7,14 @@ import (
 
 func main() {
 	var headless = flag.Bool("headless", false, "Run in headless mode (no GUI)")
+	var benchmark = flag.Bool("benchmark", false, "Run performance benchmark test")
 	flag.Parse()
+
+	// If benchmark mode, run benchmark suite
+	if *benchmark {
+		RunBenchmarkSuite()
+		return
+	}
 
 	cfg := &Config{
 		NumMasters:         3,

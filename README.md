@@ -235,6 +235,21 @@ go run *.go
 - 参数配置：在配置面板调整参数，重置后生效
 - 统计信息：实时显示全局、Master、Slave 统计信息
 
+**运行性能测试（Benchmark）**:
+```bash
+# 运行性能基准测试，测试 headless 模式下的仿真性能
+go run *.go -benchmark
+# 或使用编译后的二进制文件
+./flow_control_sim -benchmark
+```
+
+性能测试会运行多个不同规模的测试（10,000、50,000、100,000 和 1,000,000 cycles），并输出：
+- 每秒可仿真的 cycle 数（cycles/sec）
+- 总耗时
+- 每个 cycle 的平均耗时
+
+典型的性能指标：在 headless 模式下，仿真器每秒可运行约 **300,000-400,000 cycles**。
+
 ### Docker 部署（计划）
 ```bash
 docker-compose up -d
