@@ -30,7 +30,6 @@ type Simulator struct {
 func NewSimulator(cfg *Config) *Simulator {
 	idAlloc := NewNodeIDAllocator()
 	pktAlloc := NewPacketIDAllocator()
-	ch := NewChannel()
 
 	masters := make([]*Master, cfg.NumMasters)
 	masterByID := make(map[int]*Master, cfg.NumMasters)
@@ -53,6 +52,25 @@ func NewSimulator(cfg *Config) *Simulator {
 	// single relay in phase one
 	relayID := idAlloc.Allocate()
 	relay := NewRelay(relayID)
+
+	// Create node registry for channel
+	nodeRegistry := make(map[int]NodeReceiver)
+	for _, m := range masters {
+		nodeRegistry[m.ID] = m
+	}
+	for _, s := range slaves {
+		nodeRegistry[s.ID] = s
+	}
+	if relay != nil {
+		nodeRegistry[relay.ID] = relay
+	}
+
+	// Create channel with bandwidth limit and node registry
+	bandwidthLimit := cfg.BandwidthLimit
+	if bandwidthLimit <= 0 {
+		bandwidthLimit = 1 // default to 1 if not specified
+	}
+	ch := NewChannel(bandwidthLimit, nodeRegistry)
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -225,11 +243,24 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		})
 	}
 
+	// Get pipeline state from channel
+	pipelineState := s.Chan.GetPipelineState(cycle)
+	
+	// Update edges with pipeline stages
+	edges := make([]EdgeSnapshot, len(s.edges))
+	copy(edges, s.edges)
+	for i := range edges {
+		edgeKey := EdgeKey{FromID: edges[i].Source, ToID: edges[i].Target}
+		if stages, exists := pipelineState[edgeKey]; exists {
+			edges[i].PipelineStages = stages
+		}
+	}
+
 	stats := s.CollectStats()
 	frame := &SimulationFrame{
 		Cycle:         cycle,
 		Nodes:         nodes,
-		Edges:         s.edges,
+		Edges:         edges,
 		InFlightCount: s.Chan.InFlightCount(),
 		Stats:         stats,
 	}
@@ -282,34 +313,8 @@ func (s *Simulator) Run() {
 		cycle := s.current
 		s.current++
 
-		arrivals := s.Chan.CollectArrivals(cycle)
-		for _, a := range arrivals {
-			if s.Relay != nil && a.ToID == s.Relay.ID {
-				// CHI message arrives at Home Node
-				s.Relay.OnPacket(a.Packet, cycle, s.Chan, s.cfg)
-				continue
-			}
-			if m := s.masterByID[a.ToID]; m != nil {
-				// CHI response arrives at Request Node
-				// Check for CHI response or legacy response type
-				isCHIResponse := a.Packet.MessageType == CHIMsgComp || a.Packet.MessageType == CHIMsgResp
-				isLegacyResponse := a.Packet.Type == "response"
-				if isCHIResponse || isLegacyResponse {
-					m.OnResponse(a.Packet, cycle)
-				}
-				continue
-			}
-			if sl := s.slaveByID[a.ToID]; sl != nil {
-				// CHI request arrives at Slave Node
-				// Check for CHI request or legacy request type
-				isCHIRequest := a.Packet.MessageType == CHIMsgReq
-				isLegacyRequest := a.Packet.Type == "request"
-				if isCHIRequest || isLegacyRequest {
-					sl.EnqueueRequest(a.Packet)
-				}
-				continue
-			}
-		}
+		// Process channel pipeline (handles packet movement and backpressure)
+		s.Chan.Tick(cycle)
 
 		relayID := -1
 		if s.Relay != nil {
@@ -359,7 +364,6 @@ func (s *Simulator) reset(newCfg *Config) {
 	// Reinitialize simulator with new config
 	idAlloc := NewNodeIDAllocator()
 	pktAlloc := NewPacketIDAllocator()
-	ch := NewChannel()
 
 	masters := make([]*Master, s.cfg.NumMasters)
 	masterByID := make(map[int]*Master, s.cfg.NumMasters)
@@ -381,6 +385,25 @@ func (s *Simulator) reset(newCfg *Config) {
 
 	relayID := idAlloc.Allocate()
 	relay := NewRelay(relayID)
+
+	// Create node registry for channel
+	nodeRegistry := make(map[int]NodeReceiver)
+	for _, m := range masters {
+		nodeRegistry[m.ID] = m
+	}
+	for _, s := range slaves {
+		nodeRegistry[s.ID] = s
+	}
+	if relay != nil {
+		nodeRegistry[relay.ID] = relay
+	}
+
+	// Create channel with bandwidth limit and node registry
+	bandwidthLimit := s.cfg.BandwidthLimit
+	if bandwidthLimit <= 0 {
+		bandwidthLimit = 1 // default to 1 if not specified
+	}
+	ch := NewChannel(bandwidthLimit, nodeRegistry)
 
 	labels := make(map[int]string, len(masters)+len(slaves)+1)
 	for i, m := range masters {

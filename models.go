@@ -71,6 +71,9 @@ type Config struct {
     SlaveProcessRate int     // requests processed per cycle per slave
     RequestRate      float64 // per-master per-cycle probability to generate one request
 
+    // channel bandwidth limit
+    BandwidthLimit int // maximum packets per slot in pipeline (per edge per cycle)
+
     // weighting for choosing destination slave (length == NumSlaves)
     SlaveWeights []int
 

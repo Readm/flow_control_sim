@@ -20,9 +20,28 @@ func NewHomeNode(id int) *HomeNode {
 	return hn
 }
 
+// CanReceive checks if the HomeNode can receive packets from the given edge.
+// HomeNode always can receive (unlimited capacity for forward_queue).
+func (hn *HomeNode) CanReceive(edgeKey EdgeKey, packetCount int) bool {
+	// forward_queue has unlimited capacity (-1)
+	return true
+}
+
+// OnPackets receives packets from the channel and enqueues them.
+func (hn *HomeNode) OnPackets(messages []*InFlightMessage, cycle int) {
+	for _, msg := range messages {
+		if msg.Packet != nil {
+			msg.Packet.ReceivedAt = cycle
+			hn.queue = append(hn.queue, msg.Packet)
+		}
+	}
+	hn.UpdateQueue("forward_queue", len(hn.queue))
+}
+
 // OnPacket enqueues a CHI packet received at the Home Node.
 // For ReadNoSnp requests, this will be forwarded to the target Slave Node.
 // For responses from Slave Nodes, this will be forwarded back to the Request Node.
+// This method is kept for backward compatibility but is now called by OnPackets.
 func (hn *HomeNode) OnPacket(p *Packet, cycle int, ch *Channel, cfg *Config) {
 	if p == nil {
 		return

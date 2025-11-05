@@ -26,12 +26,19 @@ type NodeSnapshot struct {
 	Payload map[string]any `json:"payload,omitempty"`
 }
 
+// PipelineStageInfo represents the state of a single stage in a pipeline
+type PipelineStageInfo struct {
+	StageIndex  int `json:"stageIndex"`  // 0 to latency-1
+	PacketCount int `json:"packetCount"`
+}
+
 // EdgeSnapshot describes a logical connection between nodes.
 type EdgeSnapshot struct {
-	Source  int    `json:"source"`
-	Target  int    `json:"target"`
-	Label   string `json:"label"`
-	Latency int    `json:"latency"`
+	Source        int                 `json:"source"`
+	Target        int                 `json:"target"`
+	Label         string              `json:"label"`
+	Latency       int                 `json:"latency"`
+	PipelineStages []PipelineStageInfo `json:"pipelineStages,omitempty"`
 }
 
 // SimulationFrame aggregates information required by frontends for a cycle.

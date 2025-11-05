@@ -34,6 +34,7 @@ func main() {
 				SlaveRelayLatency:  1,
 				SlaveProcessRate:   1,
 				RequestRate:        0.8,
+				BandwidthLimit:     1,
 				SlaveWeights:       []int{1, 1},
 				Headless:           *headless,
 				VisualMode:         "web",

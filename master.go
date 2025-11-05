@@ -87,6 +87,22 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Channel,
 	ch.Send(p, rn.ID, homeNodeID, cycle, cfg.MasterRelayLatency)
 }
 
+// CanReceive checks if the RequestNode can receive packets from the given edge.
+// RequestNode always can receive (unlimited capacity for pending_requests).
+func (rn *RequestNode) CanReceive(edgeKey EdgeKey, packetCount int) bool {
+	// pending_requests queue has unlimited capacity (-1)
+	return true
+}
+
+// OnPackets receives packets from the channel and processes them as responses.
+func (rn *RequestNode) OnPackets(messages []*InFlightMessage, cycle int) {
+	for _, msg := range messages {
+		if msg.Packet != nil {
+			rn.OnResponse(msg.Packet, cycle)
+		}
+	}
+}
+
 // OnResponse processes a CHI response arriving to the request node at given cycle.
 // Handles CompData responses for ReadNoSnp transactions.
 func (rn *RequestNode) OnResponse(p *Packet, cycle int) {

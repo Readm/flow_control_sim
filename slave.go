@@ -3,9 +3,9 @@ package main
 // SlaveNode (SN) represents a CHI Slave Node that processes requests and provides data.
 // It processes CHI protocol requests in FIFO order and generates appropriate CHI responses.
 type SlaveNode struct {
-	Node  // embedded Node base class
-	ProcessRate    int
-	queue          []*Packet
+	Node        // embedded Node base class
+	ProcessRate int
+	queue       []*Packet
 
 	// stats
 	ProcessedCount int
@@ -25,6 +25,24 @@ func NewSlaveNode(id int, rate int) *SlaveNode {
 	}
 	sn.AddQueue("request_queue", 0, 20) // Limited capacity for high load visualization
 	return sn
+}
+
+// CanReceive checks if the SlaveNode can receive packets from the given edge.
+// Checks if the request_queue has capacity (capacity is 20).
+func (sn *SlaveNode) CanReceive(edgeKey EdgeKey, packetCount int) bool {
+	// request_queue has capacity 20
+	const maxCapacity = 20
+	return len(sn.queue)+packetCount <= maxCapacity
+}
+
+// OnPackets receives packets from the channel and enqueues them.
+func (sn *SlaveNode) OnPackets(messages []*InFlightMessage, cycle int) {
+	for _, msg := range messages {
+		if msg.Packet != nil {
+			msg.Packet.ReceivedAt = cycle
+			sn.EnqueueRequest(msg.Packet)
+		}
+	}
 }
 
 func (sn *SlaveNode) EnqueueRequest(p *Packet) {
@@ -78,7 +96,7 @@ func (sn *SlaveNode) generateCHIResponse(req *Packet, cycle int, packetIDs *Pack
 		SentAt:    cycle,
 		RequestID: req.RequestID,
 		MasterID:  req.MasterID,
-		Address:   req.Address, // preserve address from request
+		Address:   req.Address,  // preserve address from request
 		DataSize:  req.DataSize, // preserve data size from request
 	}
 
@@ -131,21 +149,21 @@ func (sn *SlaveNode) GetQueuePackets() []PacketInfo {
 }
 
 type SlaveNodeStats struct {
-    TotalProcessed  int
-    MaxQueueLength  int
-    AvgQueueLength  float64
+	TotalProcessed int
+	MaxQueueLength int
+	AvgQueueLength float64
 }
 
 func (sn *SlaveNode) SnapshotStats() *SlaveNodeStats {
-    var avg float64
-    if sn.Samples > 0 {
-        avg = float64(sn.TotalQueueSum) / float64(sn.Samples)
-    }
-    return &SlaveNodeStats{
-        TotalProcessed: sn.ProcessedCount,
-        MaxQueueLength: sn.MaxQueueLength,
-        AvgQueueLength: avg,
-    }
+	var avg float64
+	if sn.Samples > 0 {
+		avg = float64(sn.TotalQueueSum) / float64(sn.Samples)
+	}
+	return &SlaveNodeStats{
+		TotalProcessed: sn.ProcessedCount,
+		MaxQueueLength: sn.MaxQueueLength,
+		AvgQueueLength: avg,
+	}
 }
 
 // Legacy type aliases for backward compatibility during transition
@@ -155,5 +173,3 @@ type SlaveStats = SlaveNodeStats
 func NewSlave(id int, rate int) *Slave {
 	return NewSlaveNode(id, rate)
 }
-
-
