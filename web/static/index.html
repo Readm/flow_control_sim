@@ -452,6 +452,7 @@
         let currentConfigName = null; // Track current network configuration name
         let lastConfigHash = null; // Track last config hash from frame to detect config changes
         let expectingReset = false; // Track if we're waiting for a reset frame (cycle 0)
+        let isStepProcessing = false; // Track if a step command is being processed
 
         // Calculate load percentage for a queue
         function calculateQueueLoad(queue) {
@@ -1036,15 +1037,15 @@
                 for (let stageIdx = 0; stageIdx < latency; stageIdx++) {
                     // Calculate point position along the curve
                     // Adjust positions to avoid overlapping with nodes while maintaining semantic meaning
-                    // Slot[0] (first stage) should be near source, Slot[latency-1] (last stage) near target
+                    // Slot[0] (first stage, ready to arrive) should be near target, Slot[latency-1] (last stage, entry point) near source
                     let t;
                     if (latency === 1) {
                         t = 0.5; // Single stage in the middle
                     } else {
                         // Distribute points from 40% to 60% of the curve to avoid node overlap
-                        // Map stageIdx from [0, latency-1] to [0.4, 0.6]
+                        // Map stageIdx from [0, latency-1] to [0.6, 0.4] (reversed: Slot[0] near target, Slot[latency-1] near source)
                         // This ensures no point is at t=0 (source node) or t=1 (target node)
-                        t = 0.4 + (stageIdx / (latency - 1)) * 0.2;
+                        t = 0.6 - (stageIdx / (latency - 1)) * 0.2;
                     }
                     
                     // Directly calculate the point on the curve at parameter t
@@ -1454,6 +1455,15 @@
             errorEl.classList.remove('show');
         }
 
+        // Fetch frame immediately (used after step commands)
+        async function fetchFrameImmediate() {
+            const frame = await fetchFrame();
+            if (frame) {
+                updateVisualization(frame);
+            }
+            return frame;
+        }
+
         // Start polling for frames
         function startPolling() {
             if (pollInterval) {
@@ -1489,7 +1499,8 @@
                 btnResume.disabled = !isPaused; // Disable when running
             }
             if (btnStep) {
-                btnStep.disabled = !isPaused; // Enable only when paused
+                // Disable step button if not paused or if a step is being processed
+                btnStep.disabled = !isPaused || isStepProcessing;
             }
         }
 
@@ -1511,13 +1522,37 @@
         });
 
         document.getElementById('btnStep').addEventListener('click', async () => {
-            if (!isPaused) {
-                return; // Step button should only work when paused
+            if (!isPaused || isStepProcessing) {
+                return; // Step button should only work when paused and not processing
             }
-            const success = await sendControl('step');
-            if (success) {
-                // Step command sent, state remains paused
-                // Frame will be updated on next poll
+            
+            // Set processing flag to prevent duplicate clicks
+            isStepProcessing = true;
+            updateButtonStates();
+            
+            try {
+                const success = await sendControl('step');
+                if (success) {
+                    // Step command sent, immediately fetch frame to get updated state
+                    // Wait a short time for simulator to process the step
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    
+                    // Try to fetch frame multiple times with short delays to ensure we get the update
+                    let frame = null;
+                    for (let i = 0; i < 5; i++) {
+                        frame = await fetchFrameImmediate();
+                        if (frame) {
+                            break;
+                        }
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                }
+            } finally {
+                // Reset processing flag after a delay to allow for visual feedback
+                setTimeout(() => {
+                    isStepProcessing = false;
+                    updateButtonStates();
+                }, 200);
             }
         });
 
