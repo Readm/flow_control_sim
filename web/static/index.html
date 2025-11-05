@@ -729,6 +729,24 @@
                 showPacketModal(data);
             });
 
+            // Update pipeline state points on render (for pan/zoom)
+            cy.on('render', function() {
+                if (!currentFrame) {
+                    return;
+                }
+                currentFrame.edges.forEach(edge => {
+                    const edgeId = `e${edge.source}-${edge.target}`;
+                    const cyEdge = cy.getElementById(edgeId);
+                    if (cyEdge.length > 0) {
+                        const pipelineStages = cyEdge.data('pipelineStages') || edge.pipelineStages || [];
+                        const bandwidthLimit = cyEdge.data('bandwidthLimit') || edge.bandwidthLimit || 1;
+                        if (pipelineStages.length > 0 && bandwidthLimit > 0) {
+                            drawPipelineStatePoints(cyEdge, pipelineStages, bandwidthLimit);
+                        }
+                    }
+                });
+            });
+
             // Add hover tooltip for edges to show pipeline stages
             cy.on('mouseover', 'edge', function(evt) {
                 const edge = evt.target;
@@ -911,6 +929,208 @@
             }
         }
 
+        // Calculate points along a bezier curve for an edge
+        function calculateBezierPoints(edge, numPoints) {
+            if (!edge || numPoints <= 0) {
+                return [];
+            }
+            
+            const sourceNode = edge.source();
+            const targetNode = edge.target();
+            
+            if (!sourceNode || !targetNode) {
+                return [];
+            }
+            
+            // Use rendered positions for accurate placement
+            const sourcePos = sourceNode.renderedPosition();
+            const targetPos = targetNode.renderedPosition();
+            
+            // Calculate control points for bezier curve
+            // Cytoscape uses control points for bezier edges
+            const dx = targetPos.x - sourcePos.x;
+            const dy = targetPos.y - sourcePos.y;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            
+            if (length === 0) {
+                return [];
+            }
+            
+            // Control point offset (perpendicular direction)
+            const perpX = -dy / length;
+            const perpY = dx / length;
+            const offset = Math.min(length * 0.3, 50); // Control point offset
+            
+            const cp1X = sourcePos.x + dx * 0.3 + perpX * offset;
+            const cp1Y = sourcePos.y + dy * 0.3 + perpY * offset;
+            const cp2X = sourcePos.x + dx * 0.7 + perpX * offset;
+            const cp2Y = sourcePos.y + dy * 0.7 + perpY * offset;
+            
+            // Calculate points along cubic bezier curve
+            const points = [];
+            for (let i = 0; i < numPoints; i++) {
+                const t = numPoints === 1 ? 0 : i / (numPoints - 1);
+                const point = bezierPoint(t, sourcePos.x, sourcePos.y, cp1X, cp1Y, cp2X, cp2Y, targetPos.x, targetPos.y);
+                points.push(point);
+            }
+            
+            return points;
+        }
+        
+        // Calculate a point on a cubic bezier curve at parameter t
+        function bezierPoint(t, x0, y0, x1, y1, x2, y2, x3, y3) {
+            const mt = 1 - t;
+            const mt2 = mt * mt;
+            const mt3 = mt2 * mt;
+            const t2 = t * t;
+            const t3 = t2 * t;
+            
+            return {
+                x: mt3 * x0 + 3 * mt2 * t * x1 + 3 * mt * t2 * x2 + t3 * x3,
+                y: mt3 * y0 + 3 * mt2 * t * y1 + 3 * mt * t2 * y2 + t3 * y3
+            };
+        }
+        
+        // Calculate tangent direction at a point on bezier curve
+        function calculateTangent(t, x0, y0, x1, y1, x2, y2, x3, y3) {
+            const mt = 1 - t;
+            const mt2 = mt * mt;
+            const t2 = t * t;
+            
+            const dx = -3 * mt2 * x0 + (3 * mt2 - 6 * mt * t) * x1 + (6 * mt * t - 3 * t2) * x2 + 3 * t2 * x3;
+            const dy = -3 * mt2 * y0 + (3 * mt2 - 6 * mt * t) * y1 + (6 * mt * t - 3 * t2) * y2 + 3 * t2 * y3;
+            
+            const length = Math.sqrt(dx * dx + dy * dy);
+            if (length === 0) {
+                return { x: 0, y: 1 };
+            }
+            return { x: dx / length, y: dy / length };
+        }
+        
+        // Calculate perpendicular direction (rotated 90 degrees)
+        function calculatePerpendicular(tangent) {
+            return { x: -tangent.y, y: tangent.x };
+        }
+        
+        // Draw pipeline state points on an edge
+        function drawPipelineStatePoints(edge, pipelineStages, bandwidthLimit) {
+            if (!pipelineStages || pipelineStages.length === 0 || !bandwidthLimit) {
+                return;
+            }
+            
+            const edgeId = `e${edge.source}-${edge.target}`;
+            const overlayId = `pipeline-overlay-${edgeId}`;
+            
+            // Remove existing overlay if any
+            const existingOverlay = document.getElementById(overlayId);
+            if (existingOverlay) {
+                existingOverlay.remove();
+            }
+            
+            const numStages = pipelineStages.length;
+            if (numStages === 0) {
+                return;
+            }
+            
+            // Calculate bezier curve points
+            const bezierPoints = calculateBezierPoints(edge, numStages);
+            if (bezierPoints.length === 0) {
+                return;
+            }
+            
+            // Get Cytoscape container
+            const container = document.getElementById('cy');
+            if (!container) {
+                return;
+            }
+            
+            // Create SVG overlay
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.id = overlayId;
+            svg.style.position = 'absolute';
+            svg.style.top = '0';
+            svg.style.left = '0';
+            svg.style.width = '100%';
+            svg.style.height = '100%';
+            svg.style.pointerEvents = 'none';
+            svg.style.zIndex = '1000';
+            
+            // Get Cytoscape viewport info
+            const cyPan = cy.pan();
+            const cyZoom = cy.zoom();
+            const containerRect = container.getBoundingClientRect();
+            
+            // Draw points for each stage
+            bezierPoints.forEach((point, stageIdx) => {
+                const stage = pipelineStages[stageIdx];
+                if (!stage) {
+                    return;
+                }
+                
+                // Calculate t value for this stage
+                const t = numStages === 1 ? 0 : stageIdx / (numStages - 1);
+                
+                // Get source and target positions for tangent calculation
+                const sourceNode = edge.source();
+                const targetNode = edge.target();
+                const sourcePos = sourceNode.renderedPosition();
+                const targetPos = targetNode.renderedPosition();
+                
+                const dx = targetPos.x - sourcePos.x;
+                const dy = targetPos.y - sourcePos.y;
+                const length = Math.sqrt(dx * dx + dy * dy);
+                
+                if (length === 0) {
+                    return;
+                }
+                
+                const perpX = -dy / length;
+                const perpY = dx / length;
+                const offset = Math.min(length * 0.3, 50);
+                
+                const cp1X = sourcePos.x + dx * 0.3 + perpX * offset;
+                const cp1Y = sourcePos.y + dy * 0.3 + perpY * offset;
+                const cp2X = sourcePos.x + dx * 0.7 + perpX * offset;
+                const cp2Y = sourcePos.y + dy * 0.7 + perpY * offset;
+                
+                const tangent = calculateTangent(t, sourcePos.x, sourcePos.y, cp1X, cp1Y, cp2X, cp2Y, targetPos.x, targetPos.y);
+                const perp = calculatePerpendicular(tangent);
+                
+                // Convert Cytoscape model coordinates to screen coordinates
+                // Cytoscape uses model coordinates where center is at (0, 0)
+                // renderedPosition() returns model coordinates, need to convert to screen
+                const screenX = point.x * cyZoom + cyPan.x + containerRect.width / 2;
+                const screenY = point.y * cyZoom + cyPan.y + containerRect.height / 2;
+                
+                // Draw M points (bandwidth limit) perpendicular to curve
+                const pointSpacing = 5; // Spacing between points
+                const totalWidth = (bandwidthLimit - 1) * pointSpacing;
+                const startOffset = -totalWidth / 2;
+                
+                for (let i = 0; i < bandwidthLimit; i++) {
+                    const offsetX = startOffset + i * pointSpacing;
+                    const x = screenX + perp.x * offsetX;
+                    const y = screenY + perp.y * offsetX;
+                    
+                    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    circle.setAttribute('cx', x);
+                    circle.setAttribute('cy', y);
+                    circle.setAttribute('r', '3');
+                    
+                    // Color: red if has packet, gray if no packet
+                    if (i < stage.packetCount) {
+                        circle.setAttribute('fill', '#ff4d4f'); // Red for packets
+                    } else {
+                        circle.setAttribute('fill', '#999'); // Gray for empty
+                    }
+                    
+                    svg.appendChild(circle);
+                }
+            });
+            
+            container.appendChild(svg);
+        }
+        
         // Update visualization with frame data
         function updateVisualization(frame) {
             if (!frame || !frame.nodes || !frame.edges) {
@@ -966,6 +1186,7 @@
                 frame.edges.forEach(edge => {
                     const edgeLabel = `${edge.label} (${edge.latency}cy)`;
                     const pipelineStages = edge.pipelineStages || [];
+                    const bandwidthLimit = edge.bandwidthLimit || 1;
                     elements.push({
                         group: 'edges',
                         data: {
@@ -974,7 +1195,8 @@
                             target: String(edge.target),
                             label: edgeLabel,
                             latency: edge.latency,
-                            pipelineStages: pipelineStages
+                            pipelineStages: pipelineStages,
+                            bandwidthLimit: bandwidthLimit
                         }
                     });
                 });
@@ -1032,6 +1254,7 @@
                 
                 if (cyEdge.length > 0) {
                     const pipelineStages = edge.pipelineStages || [];
+                    const bandwidthLimit = edge.bandwidthLimit || 1;
                     let edgeLabel = `${edge.label} (${edge.latency}cy)`;
                     
                     // Add pipeline stages info to label if available
@@ -1042,7 +1265,8 @@
                     
                     cyEdge.data({
                         label: edgeLabel,
-                        pipelineStages: pipelineStages
+                        pipelineStages: pipelineStages,
+                        bandwidthLimit: bandwidthLimit
                     });
                     
                     // Update edge style based on backpressure (Slot[0] has packets but can't advance)
@@ -1053,6 +1277,14 @@
                     } else {
                         cyEdge.style('line-color', '#91d5ff'); // Blue for normal
                         cyEdge.style('width', 2);
+                    }
+                    
+                    // Draw pipeline state points
+                    if (pipelineStages.length > 0 && bandwidthLimit > 0) {
+                        // Use setTimeout to ensure Cytoscape has finished rendering
+                        setTimeout(() => {
+                            drawPipelineStatePoints(cyEdge, pipelineStages, bandwidthLimit);
+                        }, 10);
                     }
                 }
             });
@@ -1298,6 +1530,12 @@
             if (success) {
                 isPaused = true; // Reset pauses at cycle 0
                 updateButtonStates();
+                // Clear all pipeline overlays
+                const container = document.getElementById('cy');
+                if (container) {
+                    const overlays = container.querySelectorAll('[id^="pipeline-overlay-"]');
+                    overlays.forEach(overlay => overlay.remove());
+                }
                 // Clear visualization and reset topology
                 cy.elements().remove();
                 topologyInitialized = false;

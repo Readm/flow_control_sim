@@ -254,6 +254,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		if stages, exists := pipelineState[edgeKey]; exists {
 			edges[i].PipelineStages = stages
 		}
+		edges[i].BandwidthLimit = s.cfg.BandwidthLimit
 	}
 
 	stats := s.CollectStats()
