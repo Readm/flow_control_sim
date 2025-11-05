@@ -1234,12 +1234,6 @@
                     const pipelineStages = edge.pipelineStages || [];
                     let edgeLabel = `${edge.label} (${edge.latency}cy)`;
                     
-                    // Add pipeline stages info to label if available
-                    if (pipelineStages.length > 0) {
-                        const stageInfo = pipelineStages.map(s => `S${s.stageIndex}:${s.packetCount}`).join(' ');
-                        edgeLabel += `\n[${stageInfo}]`;
-                    }
-                    
                     cyEdge.data({
                         label: edgeLabel,
                         pipelineStages: pipelineStages,
