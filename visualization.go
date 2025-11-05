@@ -39,6 +39,7 @@ type EdgeSnapshot struct {
 	Label         string              `json:"label"`
 	Latency       int                 `json:"latency"`
 	PipelineStages []PipelineStageInfo `json:"pipelineStages,omitempty"`
+	BandwidthLimit int                `json:"bandwidthLimit"`
 }
 
 // SimulationFrame aggregates information required by frontends for a cycle.

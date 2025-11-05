@@ -424,6 +424,7 @@
 
     <div class="visualization-area">
         <div id="cy"></div>
+        <svg id="pipelineOverlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10;"></svg>
         <div id="loading" class="loading" style="display: none;">
             <div>Loading simulation data...</div>
         </div>
@@ -771,6 +772,13 @@
                     }
                 }, evt);
             });
+
+            // Update pipeline state points when view changes (pan, zoom, render)
+            cy.on('render', function() {
+                if (currentFrame) {
+                    drawPipelineStatePoints(currentFrame);
+                }
+            });
         }
 
         // Format CHI protocol field values for display
@@ -892,6 +900,197 @@
             modal.classList.remove('show');
         }
 
+        // Calculate a point on the bezier curve at parameter t (0 to 1)
+        function calculateBezierPoint(cyEdge, t) {
+            if (!cyEdge || cyEdge.length === 0) {
+                return null;
+            }
+
+            const source = cyEdge.source();
+            const target = cyEdge.target();
+            const sourcePos = source.renderedPosition();
+            const targetPos = target.renderedPosition();
+
+            // For bezier curves, Cytoscape uses control points
+            // We'll approximate the curve by using a quadratic bezier with a control point
+            const midX = (sourcePos.x + targetPos.x) / 2;
+            const midY = (sourcePos.y + targetPos.y) / 2;
+            
+            // Calculate perpendicular offset for bezier control point
+            const dx = targetPos.x - sourcePos.x;
+            const dy = targetPos.y - sourcePos.y;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            
+            if (length === 0) {
+                return { x: sourcePos.x, y: sourcePos.y };
+            }
+            
+            // Perpendicular vector (rotated 90 degrees)
+            const perpX = -dy / length;
+            const perpY = dx / length;
+            
+            // Control point offset (adjust curve height)
+            const curveOffset = Math.min(length * 0.3, 50);
+            const controlX = midX + perpX * curveOffset;
+            const controlY = midY + perpY * curveOffset;
+
+            // Quadratic bezier formula: (1-t)^2*P0 + 2*(1-t)*t*P1 + t^2*P2
+            const x = (1 - t) * (1 - t) * sourcePos.x + 2 * (1 - t) * t * controlX + t * t * targetPos.x;
+            const y = (1 - t) * (1 - t) * sourcePos.y + 2 * (1 - t) * t * controlY + t * t * targetPos.y;
+            
+            return { x, y };
+        }
+
+        // Calculate points along a bezier curve for an edge (for calculating perpendicular direction)
+        function calculateBezierPoints(cyEdge, numPoints) {
+            const points = [];
+            for (let i = 0; i <= numPoints; i++) {
+                const t = i / numPoints;
+                const point = calculateBezierPoint(cyEdge, t);
+                if (point) {
+                    points.push(point);
+                }
+            }
+            return points;
+        }
+
+        // Calculate perpendicular direction at a point on the curve at parameter t
+        function calculatePerpendicularAtT(cyEdge, t) {
+            const dt = 0.01; // Small delta for calculating tangent
+            const t1 = Math.max(0, t - dt);
+            const t2 = Math.min(1, t + dt);
+            
+            const p1 = calculateBezierPoint(cyEdge, t1);
+            const p2 = calculateBezierPoint(cyEdge, t2);
+            
+            if (!p1 || !p2) {
+                return { x: 0, y: 1 }; // Default vertical
+            }
+            
+            const dx = p2.x - p1.x;
+            const dy = p2.y - p1.y;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            
+            if (length === 0) {
+                return { x: 0, y: 1 };
+            }
+
+            // Perpendicular vector (rotated 90 degrees clockwise)
+            return {
+                x: dy / length,
+                y: -dx / length
+            };
+        }
+
+        // Draw pipeline state points on edges
+        function drawPipelineStatePoints(frame) {
+            if (!frame || !frame.edges || !cy) {
+                return;
+            }
+
+            const overlay = document.getElementById('pipelineOverlay');
+            if (!overlay) {
+                return;
+            }
+
+            // Clear existing points
+            overlay.innerHTML = '';
+
+            // Get container position for coordinate conversion
+            const container = document.getElementById('cy');
+            const containerRect = container.getBoundingClientRect();
+            const cyPan = cy.pan();
+            const cyZoom = cy.zoom();
+
+            frame.edges.forEach(edge => {
+                const edgeId = `e${edge.source}-${edge.target}`;
+                const cyEdge = cy.getElementById(edgeId);
+                
+                if (cyEdge.length === 0) {
+                    return;
+                }
+
+                // Get data from both frame edge and Cytoscape edge (Cytoscape edge has the latest data)
+                const edgeData = cyEdge.data();
+                const latency = edgeData.latency || edge.latency || 1;
+                const bandwidthLimit = edgeData.bandwidthLimit || edge.bandwidthLimit || 1;
+                const pipelineStages = edgeData.pipelineStages || edge.pipelineStages || [];
+
+                // Calculate points along the bezier curve
+                const curvePoints = calculateBezierPoints(cyEdge, latency);
+                
+                if (curvePoints.length === 0) {
+                    return;
+                }
+
+                // Create a mapping of stageIndex to PacketCount
+                const stageMap = {};
+                pipelineStages.forEach(stage => {
+                    stageMap[stage.stageIndex] = stage.packetCount;
+                });
+
+                // Draw points for each stage
+                for (let stageIdx = 0; stageIdx < latency; stageIdx++) {
+                    // Calculate point position along the curve
+                    // Adjust positions to avoid overlapping with nodes while maintaining semantic meaning
+                    // Slot[0] (first stage) should be near source, Slot[latency-1] (last stage) near target
+                    let t;
+                    if (latency === 1) {
+                        t = 0.5; // Single stage in the middle
+                    } else {
+                        // Distribute points from 40% to 60% of the curve to avoid node overlap
+                        // Map stageIdx from [0, latency-1] to [0.4, 0.6]
+                        // This ensures no point is at t=0 (source node) or t=1 (target node)
+                        t = 0.4 + (stageIdx / (latency - 1)) * 0.2;
+                    }
+                    
+                    // Directly calculate the point on the curve at parameter t
+                    const curvePoint = calculateBezierPoint(cyEdge, t);
+                    if (!curvePoint) {
+                        continue;
+                    }
+                    
+                    // Calculate perpendicular direction at this point
+                    const perpDir = calculatePerpendicularAtT(cyEdge, t);
+
+                    // renderedPosition() already returns viewport coordinates (with zoom and pan applied)
+                    // Since SVG overlay is positioned absolutely over the Cytoscape container, we can use these coordinates directly
+                    const viewportX = curvePoint.x;
+                    const viewportY = curvePoint.y;
+
+                    const packetCount = stageMap[stageIdx] || 0;
+                    const pointSpacing = 4; // Spacing between points in perpendicular direction
+                    const totalWidth = (bandwidthLimit - 1) * pointSpacing;
+                    const startOffset = -totalWidth / 2;
+
+                    // Draw points for this stage
+                    for (let i = 0; i < bandwidthLimit; i++) {
+                        const offsetX = startOffset + i * pointSpacing;
+                        const pointX = viewportX + perpDir.x * offsetX;
+                        const pointY = viewportY + perpDir.y * offsetX;
+
+                        const isFilled = i < packetCount;
+                        const color = isFilled ? '#ff4d4f' : '#999';
+                        const radius = 3;
+
+                        // Create circle element
+                        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                        circle.setAttribute('cx', pointX);
+                        circle.setAttribute('cy', pointY);
+                        circle.setAttribute('r', radius);
+                        circle.setAttribute('fill', color);
+                        circle.setAttribute('stroke', '#fff');
+                        circle.setAttribute('stroke-width', '0.5');
+                        overlay.appendChild(circle);
+                    }
+                }
+            });
+
+            // Update SVG size to match container
+            overlay.setAttribute('width', containerRect.width);
+            overlay.setAttribute('height', containerRect.height);
+        }
+
         // Fetch frame data from API
         async function fetchFrame() {
             try {
@@ -974,7 +1173,8 @@
                             target: String(edge.target),
                             label: edgeLabel,
                             latency: edge.latency,
-                            pipelineStages: pipelineStages
+                            pipelineStages: pipelineStages,
+                            bandwidthLimit: edge.bandwidthLimit
                         }
                     });
                 });
@@ -1042,7 +1242,8 @@
                     
                     cyEdge.data({
                         label: edgeLabel,
-                        pipelineStages: pipelineStages
+                        pipelineStages: pipelineStages,
+                        bandwidthLimit: edge.bandwidthLimit
                     });
                     
                     // Update edge style based on backpressure (Slot[0] has packets but can't advance)
@@ -1056,6 +1257,9 @@
                     }
                 }
             });
+
+            // Draw pipeline state points
+            drawPipelineStatePoints(frame);
 
             // Update statistics
             updateStatistics(frame.stats);
