@@ -4,6 +4,29 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"time"
+)
+
+// Simulation constants
+const (
+	// DefaultVisualizationDelay is the delay between visualization updates in web mode
+	DefaultVisualizationDelay = 50 * time.Millisecond
+
+	// Queue capacity constants
+	DefaultSlaveQueueCapacity   = 20 // Limited capacity for high load visualization
+	UnlimitedQueueCapacity      = -1 // Unlimited queue capacity
+	DefaultRequestQueueCapacity = -1 // Unlimited for pending requests
+	DefaultForwardQueueCapacity = -1 // Unlimited for forward queue
+
+	// Channel and bandwidth constants
+	DefaultBandwidthLimit = 1 // Default maximum packets per slot in pipeline
+
+	// Address and data size constants
+	DefaultAddressBase   = uint64(0x1000) // Base address for CHI transactions
+	DefaultCacheLineSize = 64             // Standard cache line size in bytes
+
+	// Config hash constants
+	ConfigHashLength = 16 // Length of config hash in hex characters
 )
 
 // CHITransactionType represents CHI protocol transaction types
@@ -36,9 +59,14 @@ const (
 
 // Packet represents a CHI protocol message flowing through the simulator.
 // It supports both legacy "request"/"response" types and new CHI protocol fields.
+//
+// Migration status:
+// - Primary fields: Use CHI protocol fields (TransactionType, MessageType, ResponseType)
+// - Legacy fields: Kept for backward compatibility, will be deprecated in future versions
+// - When to use: New code should prefer CHI fields; legacy fields are checked as fallback
 type Packet struct {
 	ID    int64  // unique packet id
-	Type  string // legacy: "request" or "response" (kept for compatibility during transition)
+	Type  string // legacy: "request" or "response" - use MessageType instead (kept for compatibility)
 	SrcID int    // source node id
 	DstID int    // destination node id
 
@@ -47,16 +75,20 @@ type Packet struct {
 	ReceivedAt  int // cycle when received by next hop
 	CompletedAt int // cycle when processed (for requests)
 
-	// Legacy fields (kept for compatibility)
-	MasterID  int   // original master/request node id
-	RequestID int64 // request id (same as ID for request packets)
+	// Legacy fields (deprecated, kept for backward compatibility)
+	// These fields are maintained for compatibility with older code but should not be used in new code.
+	// Migration: Use CHI protocol fields (MessageType, TransactionType) instead of Type.
+	// MasterID is equivalent to the original Request Node ID in CHI terminology.
+	MasterID  int   // legacy: original master/request node id - use CHI MessageType + DstID instead
+	RequestID int64 // legacy: request id - same as ID for request packets, preserved for compatibility
 
-	// CHI protocol fields
+	// CHI protocol fields (preferred)
+	// These are the primary fields for packet identification and routing in CHI protocol.
 	TransactionType CHITransactionType // CHI transaction type (ReadNoSnp, WriteNoSnp, etc.)
-	MessageType     CHIMessageType     // CHI message type (Req, Resp, Data, Comp)
+	MessageType     CHIMessageType     // CHI message type (Req, Resp, Data, Comp) - primary field for message type
 	ResponseType    CHIResponseType    // CHI response type (CompData, CompAck, etc.)
 	Address         uint64             // memory address for the transaction
-	DataSize        int                // data size in bytes (default: 64 for cache line)
+	DataSize        int                // data size in bytes (default: DefaultCacheLineSize)
 }
 
 // Config holds simulation configuration values.
@@ -138,6 +170,6 @@ func computeConfigHash(cfg *Config) string {
 
 	// Compute SHA256 hash
 	hash := sha256.Sum256([]byte(hashInput))
-	// Return first 16 characters of hex representation (64 bits of entropy)
-	return hex.EncodeToString(hash[:])[:16]
+	// Return first ConfigHashLength characters of hex representation
+	return hex.EncodeToString(hash[:])[:ConfigHashLength]
 }

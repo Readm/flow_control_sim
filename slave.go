@@ -23,16 +23,14 @@ func NewSlaveNode(id int, rate int) *SlaveNode {
 		ProcessRate: rate,
 		queue:       make([]*Packet, 0),
 	}
-	sn.AddQueue("request_queue", 0, 20) // Limited capacity for high load visualization
+	sn.AddQueue("request_queue", 0, DefaultSlaveQueueCapacity)
 	return sn
 }
 
 // CanReceive checks if the SlaveNode can receive packets from the given edge.
-// Checks if the request_queue has capacity (capacity is 20).
+// Checks if the request_queue has capacity.
 func (sn *SlaveNode) CanReceive(edgeKey EdgeKey, packetCount int) bool {
-	// request_queue has capacity 20
-	const maxCapacity = 20
-	return len(sn.queue)+packetCount <= maxCapacity
+	return len(sn.queue)+packetCount <= DefaultSlaveQueueCapacity
 }
 
 // OnPackets receives packets from the channel and enqueues them.
@@ -167,9 +165,12 @@ func (sn *SlaveNode) SnapshotStats() *SlaveNodeStats {
 }
 
 // Legacy type aliases for backward compatibility during transition
+// These are kept temporarily for compatibility but should be migrated to SlaveNode
 type Slave = SlaveNode
 type SlaveStats = SlaveNodeStats
 
+// NewSlave creates a new SlaveNode (legacy compatibility function)
+// Deprecated: Use NewSlaveNode instead
 func NewSlave(id int, rate int) *Slave {
 	return NewSlaveNode(id, rate)
 }

@@ -81,24 +81,17 @@ func GetConfigByName(name string) *Config {
 		if cfg.Name == name {
 			// Create a copy to avoid modifying the original
 			original := cfg.Config
-			cfgCopy := &Config{
-				NumMasters:         original.NumMasters,
-				NumSlaves:          original.NumSlaves,
-				NumRelays:          original.NumRelays,
-				TotalCycles:        original.TotalCycles,
-				MasterRelayLatency: original.MasterRelayLatency,
-				RelayMasterLatency: original.RelayMasterLatency,
-				RelaySlaveLatency:  original.RelaySlaveLatency,
-				SlaveRelayLatency:  original.SlaveRelayLatency,
-				SlaveProcessRate:   original.SlaveProcessRate,
-				RequestRate:        original.RequestRate,
-				BandwidthLimit:     original.BandwidthLimit,
-				SlaveWeights:       make([]int, len(original.SlaveWeights)),
-				Headless:           original.Headless,
-				VisualMode:         original.VisualMode,
+			if original == nil {
+				return nil
 			}
-			copy(cfgCopy.SlaveWeights, original.SlaveWeights)
-			return cfgCopy
+			// Use struct value copy for the base config
+			cfgCopy := *original
+			// Deep copy the slice to avoid sharing the underlying array
+			if original.SlaveWeights != nil {
+				cfgCopy.SlaveWeights = make([]int, len(original.SlaveWeights))
+				copy(cfgCopy.SlaveWeights, original.SlaveWeights)
+			}
+			return &cfgCopy
 		}
 	}
 	return nil

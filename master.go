@@ -33,9 +33,9 @@ func NewRequestNode(id int, requestRate float64) *RequestNode {
 		RequestRate:      requestRate,
 		generatedAtByReq: make(map[int64]int),
 		MinDelay:         int(^uint(0) >> 1), // max int
-		nextAddress:      0x1000,             // start from a base address
+		nextAddress:      DefaultAddressBase,
 	}
-	rn.AddQueue("pending_requests", 0, -1) // unlimited capacity
+	rn.AddQueue("pending_requests", 0, DefaultRequestQueueCapacity)
 	return rn
 }
 
@@ -43,7 +43,7 @@ func NewRequestNode(id int, requestRate float64) *RequestNode {
 // ReadNoSnp is a simple read request that does not require snoop operations.
 func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID int, homeNodeID int) *Packet {
 	address := rn.nextAddress
-	rn.nextAddress += 64 // increment by cache line size (64 bytes)
+	rn.nextAddress += DefaultCacheLineSize
 
 	return &Packet{
 		ID:              reqID,
@@ -57,7 +57,7 @@ func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID 
 		TransactionType: CHITxnReadNoSnp,
 		MessageType:     CHIMsgReq,
 		Address:         address,
-		DataSize:        64, // standard cache line size
+		DataSize:        DefaultCacheLineSize,
 	}
 }
 
@@ -180,9 +180,12 @@ func (rn *RequestNode) GetPendingRequests() []PacketInfo {
 }
 
 // Legacy type aliases for backward compatibility during transition
+// These are kept temporarily for compatibility but should be migrated to RequestNode
 type Master = RequestNode
 type MasterStats = RequestNodeStats
 
+// NewMaster creates a new RequestNode (legacy compatibility function)
+// Deprecated: Use NewRequestNode instead
 func NewMaster(id int, requestRate float64) *Master {
 	return NewRequestNode(id, requestRate)
 }

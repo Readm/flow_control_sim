@@ -8,13 +8,13 @@ import (
 )
 
 type Simulator struct {
-	Masters []*Master
-	Slaves  []*Slave
-	Relay   *Relay
+	Masters []*RequestNode
+	Slaves  []*SlaveNode
+	Relay   *HomeNode
 	Chan    *Channel
 
-	masterByID map[int]*Master
-	slaveByID  map[int]*Slave
+	masterByID map[int]*RequestNode
+	slaveByID  map[int]*SlaveNode
 	nodeLabels map[int]string
 	edges      []EdgeSnapshot
 
@@ -28,31 +28,39 @@ type Simulator struct {
 	isRunning bool
 }
 
-func NewSimulator(cfg *Config) *Simulator {
+// initializeSimulatorComponents creates and initializes all simulator components from config
+func initializeSimulatorComponents(cfg *Config) (
+	masters []*RequestNode,
+	slaves []*SlaveNode,
+	relay *HomeNode,
+	ch *Channel,
+	masterByID map[int]*RequestNode,
+	slaveByID map[int]*SlaveNode,
+	labels map[int]string,
+) {
 	idAlloc := NewNodeIDAllocator()
-	pktAlloc := NewPacketIDAllocator()
 
-	masters := make([]*Master, cfg.NumMasters)
-	masterByID := make(map[int]*Master, cfg.NumMasters)
+	masters = make([]*RequestNode, cfg.NumMasters)
+	masterByID = make(map[int]*RequestNode, cfg.NumMasters)
 	for i := 0; i < cfg.NumMasters; i++ {
 		id := idAlloc.Allocate()
-		m := NewMaster(id, cfg.RequestRate)
+		m := NewRequestNode(id, cfg.RequestRate)
 		masters[i] = m
 		masterByID[id] = m
 	}
 
-	slaves := make([]*Slave, cfg.NumSlaves)
-	slaveByID := make(map[int]*Slave, cfg.NumSlaves)
+	slaves = make([]*SlaveNode, cfg.NumSlaves)
+	slaveByID = make(map[int]*SlaveNode, cfg.NumSlaves)
 	for i := 0; i < cfg.NumSlaves; i++ {
 		id := idAlloc.Allocate()
-		s := NewSlave(id, cfg.SlaveProcessRate)
+		s := NewSlaveNode(id, cfg.SlaveProcessRate)
 		slaves[i] = s
 		slaveByID[id] = s
 	}
 
 	// single relay in phase one
 	relayID := idAlloc.Allocate()
-	relay := NewRelay(relayID)
+	relay = NewHomeNode(relayID)
 
 	// Create node registry for channel
 	nodeRegistry := make(map[int]NodeReceiver)
@@ -69,13 +77,12 @@ func NewSimulator(cfg *Config) *Simulator {
 	// Create channel with bandwidth limit and node registry
 	bandwidthLimit := cfg.BandwidthLimit
 	if bandwidthLimit <= 0 {
-		bandwidthLimit = 1 // default to 1 if not specified
+		bandwidthLimit = DefaultBandwidthLimit
 	}
-	ch := NewChannel(bandwidthLimit, nodeRegistry)
+	ch = NewChannel(bandwidthLimit, nodeRegistry)
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-
-	labels := make(map[int]string, len(masters)+len(slaves)+1)
+	// Create node labels
+	labels = make(map[int]string, len(masters)+len(slaves)+1)
 	for i, m := range masters {
 		labels[m.ID] = fmt.Sprintf("RN %d", i) // Request Node
 	}
@@ -83,6 +90,15 @@ func NewSimulator(cfg *Config) *Simulator {
 		labels[s.ID] = fmt.Sprintf("SN %d", i) // Slave Node
 	}
 	labels[relay.ID] = "HN 0" // Home Node
+
+	return masters, slaves, relay, ch, masterByID, slaveByID, labels
+}
+
+func NewSimulator(cfg *Config) *Simulator {
+	pktAlloc := NewPacketIDAllocator()
+	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(cfg)
+
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	sim := &Simulator{
 		Masters:    masters,
@@ -369,7 +385,7 @@ func (s *Simulator) Run() {
 
 		// Small delay to allow visualization updates
 		if s.visualizer != nil && !s.visualizer.IsHeadless() {
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(DefaultVisualizationDelay)
 		}
 	}
 
@@ -386,57 +402,8 @@ func (s *Simulator) reset(newCfg *Config) {
 	}
 
 	// Reinitialize simulator with new config
-	idAlloc := NewNodeIDAllocator()
 	pktAlloc := NewPacketIDAllocator()
-
-	masters := make([]*Master, s.cfg.NumMasters)
-	masterByID := make(map[int]*Master, s.cfg.NumMasters)
-	for i := 0; i < s.cfg.NumMasters; i++ {
-		id := idAlloc.Allocate()
-		m := NewMaster(id, s.cfg.RequestRate)
-		masters[i] = m
-		masterByID[id] = m
-	}
-
-	slaves := make([]*Slave, s.cfg.NumSlaves)
-	slaveByID := make(map[int]*Slave, s.cfg.NumSlaves)
-	for i := 0; i < s.cfg.NumSlaves; i++ {
-		id := idAlloc.Allocate()
-		sl := NewSlave(id, s.cfg.SlaveProcessRate)
-		slaves[i] = sl
-		slaveByID[id] = sl
-	}
-
-	relayID := idAlloc.Allocate()
-	relay := NewRelay(relayID)
-
-	// Create node registry for channel
-	nodeRegistry := make(map[int]NodeReceiver)
-	for _, m := range masters {
-		nodeRegistry[m.ID] = m
-	}
-	for _, s := range slaves {
-		nodeRegistry[s.ID] = s
-	}
-	if relay != nil {
-		nodeRegistry[relay.ID] = relay
-	}
-
-	// Create channel with bandwidth limit and node registry
-	bandwidthLimit := s.cfg.BandwidthLimit
-	if bandwidthLimit <= 0 {
-		bandwidthLimit = 1 // default to 1 if not specified
-	}
-	ch := NewChannel(bandwidthLimit, nodeRegistry)
-
-	labels := make(map[int]string, len(masters)+len(slaves)+1)
-	for i, m := range masters {
-		labels[m.ID] = fmt.Sprintf("RN %d", i) // Request Node
-	}
-	for i, s := range slaves {
-		labels[s.ID] = fmt.Sprintf("SN %d", i) // Slave Node
-	}
-	labels[relay.ID] = "HN 0" // Home Node
+	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(s.cfg)
 
 	s.Masters = masters
 	s.Slaves = slaves
@@ -473,12 +440,12 @@ type GlobalStats struct {
 
 type SimulationStats struct {
 	Global    *GlobalStats
-	PerMaster []*MasterStats
-	PerSlave  []*SlaveStats
+	PerMaster []*RequestNodeStats
+	PerSlave  []*SlaveNodeStats
 }
 
 func (s *Simulator) CollectStats() *SimulationStats {
-	ms := make([]*MasterStats, len(s.Masters))
+	ms := make([]*RequestNodeStats, len(s.Masters))
 	totalReq := 0
 	completed := 0
 	var sumDelay int64
@@ -504,7 +471,7 @@ func (s *Simulator) CollectStats() *SimulationStats {
 			}
 		}
 	}
-	ss := make([]*SlaveStats, len(s.Slaves))
+	ss := make([]*SlaveNodeStats, len(s.Slaves))
 	for i, sl := range s.Slaves {
 		ss[i] = sl.SnapshotStats()
 	}

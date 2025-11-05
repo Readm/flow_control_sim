@@ -16,7 +16,7 @@ func NewHomeNode(id int) *HomeNode {
 		},
 		queue: make([]*Packet, 0),
 	}
-	hn.AddQueue("forward_queue", 0, -1) // unlimited capacity
+	hn.AddQueue("forward_queue", 0, DefaultForwardQueueCapacity)
 	return hn
 }
 
@@ -128,8 +128,11 @@ func (hn *HomeNode) GetQueuePackets() []PacketInfo {
 }
 
 // Legacy type alias for backward compatibility during transition
+// This is kept temporarily for compatibility but should be migrated to HomeNode
 type Relay = HomeNode
 
+// NewRelay creates a new HomeNode (legacy compatibility function)
+// Deprecated: Use NewHomeNode instead
 func NewRelay(id int) *Relay {
 	return NewHomeNode(id)
 }
