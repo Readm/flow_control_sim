@@ -55,7 +55,7 @@ func RunBenchmarkSuite() {
 		RelaySlaveLatency:  1,
 		SlaveRelayLatency:  1,
 		SlaveProcessRate:   1,
-		RequestRate:        0.8,
+		RequestRateConfig:        0.8,
 		SlaveWeights:       []int{1, 1},
 		Headless:           true,
 		VisualMode:         "none",

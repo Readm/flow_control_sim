@@ -16,7 +16,7 @@ func TestBasicFlow(t *testing.T) {
 		RelaySlaveLatency:   1,
 		SlaveRelayLatency:   1,
 		SlaveProcessRate:    1,
-		RequestRate:         0.5,
+		RequestRateConfig:         0.5,
 		BandwidthLimit:      1,
 		SlaveWeights:        []int{1, 1, 1},
 		Headless:            true,  // Test in headless mode
@@ -71,7 +71,7 @@ func TestReadNoSnpTransaction(t *testing.T) {
 		RelaySlaveLatency:   1,
 		SlaveRelayLatency:   1,
 		SlaveProcessRate:    1,
-		RequestRate:         1.0, // Always generate requests
+		RequestRateConfig:         1.0, // Always generate requests
 		BandwidthLimit:      1,
 		SlaveWeights:        []int{1},
 		Headless:            true,

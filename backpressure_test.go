@@ -18,7 +18,7 @@ func TestBackpressure(t *testing.T) {
 		RelaySlaveLatency:  1,
 		SlaveRelayLatency:  1,
 		SlaveProcessRate:   1,  // Process only 1 packet per cycle
-		RequestRate:        1.0, // Always generate requests
+		RequestRateConfig:        1.0, // Always generate requests
 		BandwidthLimit:     1,
 		SlaveWeights:       []int{1},
 		Headless:           true,
@@ -72,7 +72,7 @@ func TestBackpressure(t *testing.T) {
 		// Generate requests
 		for _, m := range sim.Masters {
 			if sim.Relay != nil {
-				m.Tick(cycle, sim.cfg, sim.Relay.ID, sim.Chan, sim.rng, sim.pktIDs, sim.Slaves)
+				m.Tick(cycle, sim.cfg, sim.Relay.ID, sim.Chan, sim.pktIDs, sim.Slaves)
 			}
 		}
 		
@@ -122,7 +122,7 @@ func TestBackpressureDetailed(t *testing.T) {
 		RelaySlaveLatency:  1,
 		SlaveRelayLatency:  1,
 		SlaveProcessRate:   1,  // Very slow processing
-		RequestRate:        1.0, // High request rate
+		RequestRateConfig:        1.0, // High request rate
 		BandwidthLimit:     1,
 		SlaveWeights:       []int{1},
 		Headless:           true,
@@ -165,7 +165,7 @@ func TestBackpressureDetailed(t *testing.T) {
 		// Generate requests
 		for _, m := range sim.Masters {
 			if sim.Relay != nil {
-				m.Tick(cycle, sim.cfg, sim.Relay.ID, sim.Chan, sim.rng, sim.pktIDs, sim.Slaves)
+				m.Tick(cycle, sim.cfg, sim.Relay.ID, sim.Chan, sim.pktIDs, sim.Slaves)
 			}
 		}
 		

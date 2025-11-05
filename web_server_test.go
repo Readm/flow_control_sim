@@ -140,7 +140,7 @@ func TestWebServer_ControlEndpoint(t *testing.T) {
 		NumMasters: 2,
 		NumSlaves:  2,
 		TotalCycles: 100,
-		RequestRate: 0.5,
+		RequestRateConfig: 0.5,
 		SlaveWeights: []int{1, 1},
 	}
 	cfgJSON, _ := json.Marshal(map[string]interface{}{

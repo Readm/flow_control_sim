@@ -107,7 +107,21 @@ type Config struct {
 
 	// processing and generation
 	SlaveProcessRate int     // requests processed per cycle per slave
-	RequestRate      float64 // per-master per-cycle probability to generate one request
+	
+	// Request generation: uses RequestGenerator interface
+	// Generators are created in Simulator initialization (requires rng)
+	// If RequestGenerators is nil or empty, RequestGenerator is used for all masters
+	// If RequestGenerators is provided, it overrides RequestGenerator per master
+	RequestGenerator  RequestGenerator   // default generator for all masters (created in Simulator init)
+	RequestGenerators []RequestGenerator // per-master override (optional, len should match NumMasters)
+	
+	// Generator configuration (used to create generators if not already set)
+	// These fields are used when RequestGenerator is nil
+	RequestRateConfig float64 // probability for ProbabilityGenerator (0.0-1.0)
+	
+	// ScheduleGenerator configuration (optional)
+	// If ScheduleConfig is non-nil, ScheduleGenerator will be created instead of ProbabilityGenerator
+	ScheduleConfig map[int]map[int][]ScheduleItem // cycle -> masterIndex -> []ScheduleItem
 
 	// channel bandwidth limit
 	BandwidthLimit int // maximum packets per slot in pipeline (per edge per cycle)

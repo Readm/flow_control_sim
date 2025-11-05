@@ -16,7 +16,7 @@ func DebugBackpressure() {
 		RelaySlaveLatency:  1,  // Latency 1 means packets arrive quickly
 		SlaveRelayLatency:  1,
 		SlaveProcessRate:   1,  // Process only 1 per cycle
-		RequestRate:        1.0,
+		RequestRateConfig:        1.0,
 		BandwidthLimit:     1,
 		SlaveWeights:       []int{1},
 		Headless:           true,
@@ -29,7 +29,7 @@ func DebugBackpressure() {
 	fmt.Println("Configuration:")
 	fmt.Printf("  SlaveProcessRate: %d (processes 1 packet per cycle)\n", cfg.SlaveProcessRate)
 	fmt.Printf("  RelaySlaveLatency: %d (packets arrive after 1 cycle)\n", cfg.RelaySlaveLatency)
-	fmt.Printf("  RequestRate: %.1f (always generates requests)\n", cfg.RequestRate)
+	fmt.Printf("  RequestRateConfig: %.1f (always generates requests)\n", cfg.RequestRateConfig)
 	fmt.Println()
 	
 	edgeKey := EdgeKey{FromID: sim.Relay.ID, ToID: sim.Slaves[0].ID}
@@ -63,7 +63,7 @@ func DebugBackpressure() {
 		// Generate requests
 		for _, m := range sim.Masters {
 			if sim.Relay != nil {
-				m.Tick(cycle, sim.cfg, sim.Relay.ID, sim.Chan, sim.rng, sim.pktIDs, sim.Slaves)
+				m.Tick(cycle, sim.cfg, sim.Relay.ID, sim.Chan, sim.pktIDs, sim.Slaves)
 			}
 		}
 		

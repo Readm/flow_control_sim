@@ -200,8 +200,8 @@ func (ws *WebServer) validateConfig(cfg *Config) error {
 	if cfg.TotalCycles <= 0 {
 		return &validationError{msg: "TotalCycles must be positive"}
 	}
-	if cfg.RequestRate < 0 || cfg.RequestRate > 1 {
-		return &validationError{msg: "RequestRate must be between 0 and 1"}
+	if cfg.RequestRateConfig < 0 || cfg.RequestRateConfig > 1 {
+		return &validationError{msg: "RequestRateConfig must be between 0 and 1"}
 	}
 	if len(cfg.SlaveWeights) != cfg.NumSlaves {
 		return &validationError{msg: "SlaveWeights length must match NumSlaves"}

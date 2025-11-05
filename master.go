@@ -8,7 +8,8 @@ import (
 // It generates CHI protocol requests and collects responses.
 type RequestNode struct {
 	Node        // embedded Node base class
-	RequestRate float64
+	generator   RequestGenerator
+	masterIndex int  // index of this master in the masters array (for generator)
 
 	// track request generation times by request id
 	generatedAtByReq map[int64]int
@@ -24,13 +25,14 @@ type RequestNode struct {
 	nextAddress uint64
 }
 
-func NewRequestNode(id int, requestRate float64) *RequestNode {
+func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *RequestNode {
 	rn := &RequestNode{
 		Node: Node{
 			ID:   id,
 			Type: NodeTypeRN,
 		},
-		RequestRate:      requestRate,
+		generator:        generator,
+		masterIndex:     masterIndex,
 		generatedAtByReq: make(map[int64]int),
 		MinDelay:         int(^uint(0) >> 1), // max int
 		nextAddress:      DefaultAddressBase,
@@ -61,30 +63,77 @@ func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID 
 	}
 }
 
-// Tick may generate at most one ReadNoSnp request per cycle with probability RequestRate.
-func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Channel, rng *rand.Rand, packetIDs *PacketIDAllocator, slaves []*SlaveNode) {
+// Tick may generate request(s) per cycle based on the configured RequestGenerator.
+// Supports generating multiple requests in the same cycle.
+func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Channel, packetIDs *PacketIDAllocator, slaves []*SlaveNode) {
 	if homeNodeID < 0 {
 		return
 	}
-	if rng.Float64() >= rn.RequestRate {
+	if rn.generator == nil {
 		return
 	}
-	// choose destination slave node by weights (returns index)
-	slaveIndex := weightedChoose(rng, cfg.SlaveWeights)
-	if slaveIndex < 0 || slaveIndex >= len(slaves) {
+	
+	// Query generator for requests to generate
+	results := rn.generator.ShouldGenerate(cycle, rn.masterIndex, len(slaves))
+	if len(results) == 0 {
 		return
 	}
-	// get actual slave node ID from the slaves array
-	dstSNID := slaves[slaveIndex].ID
-
-	reqID := packetIDs.Allocate()
-	p := rn.GenerateReadNoSnpRequest(reqID, cycle, dstSNID, homeNodeID)
-	rn.TotalRequests++
-	rn.generatedAtByReq[reqID] = cycle
-	rn.UpdateQueue("pending_requests", len(rn.generatedAtByReq))
-
-	// Send ReadNoSnp request to Home Node
-	ch.Send(p, rn.ID, homeNodeID, cycle, cfg.MasterRelayLatency)
+	
+	// Generate all requested packets
+	for _, result := range results {
+		if !result.ShouldGenerate {
+			continue
+		}
+		if result.SlaveIndex < 0 || result.SlaveIndex >= len(slaves) {
+			continue
+		}
+		
+		// Get actual slave node ID from the slaves array
+		dstSNID := slaves[result.SlaveIndex].ID
+		
+		reqID := packetIDs.Allocate()
+		
+		// Determine address and data size
+		address := result.Address
+		if address == 0 {
+			address = rn.nextAddress
+			rn.nextAddress += DefaultCacheLineSize
+		}
+		
+		dataSize := result.DataSize
+		if dataSize == 0 {
+			dataSize = DefaultCacheLineSize
+		}
+		
+		// Determine transaction type
+		txnType := result.TransactionType
+		if txnType == "" {
+			txnType = CHITxnReadNoSnp
+		}
+		
+		// Generate request packet
+		p := &Packet{
+			ID:              reqID,
+			Type:            "request", // legacy field
+			SrcID:           rn.ID,
+			DstID:           dstSNID,
+			GeneratedAt:     cycle,
+			SentAt:          cycle,
+			MasterID:        rn.ID,
+			RequestID:       reqID,
+			TransactionType: txnType,
+			MessageType:     CHIMsgReq,
+			Address:         address,
+			DataSize:        dataSize,
+		}
+		
+		rn.TotalRequests++
+		rn.generatedAtByReq[reqID] = cycle
+		rn.UpdateQueue("pending_requests", len(rn.generatedAtByReq))
+		
+		// Send request to Home Node
+		ch.Send(p, rn.ID, homeNodeID, cycle, cfg.MasterRelayLatency)
+	}
 }
 
 // CanReceive checks if the RequestNode can receive packets from the given edge.
@@ -186,8 +235,10 @@ type MasterStats = RequestNodeStats
 
 // NewMaster creates a new RequestNode (legacy compatibility function)
 // Deprecated: Use NewRequestNode instead
-func NewMaster(id int, requestRate float64) *Master {
-	return NewRequestNode(id, requestRate)
+// Note: This function is kept for backward compatibility but requires a generator
+// For legacy code, create a ProbabilityGenerator first
+func NewMaster(id int, masterIndex int, generator RequestGenerator) *Master {
+	return NewRequestNode(id, masterIndex, generator)
 }
 
 // weightedChoose returns an index in [0,len(weights)) with probability proportional to weights.

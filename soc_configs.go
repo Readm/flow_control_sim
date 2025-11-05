@@ -23,7 +23,7 @@ func GetPredefinedConfigs() []SOCNetworkConfig {
 				RelaySlaveLatency:  1,
 				SlaveRelayLatency:  1,
 				SlaveProcessRate:   1,
-				RequestRate:        0.8,
+				RequestRateConfig:  0.8,
 				BandwidthLimit:     1,
 				SlaveWeights:       []int{1, 1},
 				Headless:           false,
@@ -43,7 +43,7 @@ func GetPredefinedConfigs() []SOCNetworkConfig {
 				RelaySlaveLatency:  1,
 				SlaveRelayLatency:  1,
 				SlaveProcessRate:   1,
-				RequestRate:        0.8,
+				RequestRateConfig:  0.8,
 				BandwidthLimit:     1,
 				SlaveWeights:       []int{1},
 				Headless:           false,
@@ -63,11 +63,41 @@ func GetPredefinedConfigs() []SOCNetworkConfig {
 				RelaySlaveLatency:  1,
 				SlaveRelayLatency:  1,
 				SlaveProcessRate:   1,  // Slow: only 1 packet per cycle
-				RequestRate:        1.0, // High: always generate requests
+				RequestRateConfig:  1.0, // High: always generate requests
 				BandwidthLimit:     3,  // Allow multiple packets per slot
 				SlaveWeights:       []int{1},
 				Headless:           false,
 				VisualMode:         "web",
+			},
+		},
+		{
+			Name:        "single_request_10cycle_latency",
+			Description: "Single Request Test: 1 RN, 1 HN, 1 SN, 10-cycle latency, single ReadNoSnp request",
+			Config: &Config{
+				NumMasters:         1,
+				NumSlaves:          1,
+				NumRelays:          1,
+				TotalCycles:        60,
+				MasterRelayLatency: 10,
+				RelayMasterLatency: 10,
+				RelaySlaveLatency:  10,
+				SlaveRelayLatency:  10,
+				SlaveProcessRate:   1,
+				BandwidthLimit:     1,
+				SlaveWeights:       []int{1},
+				Headless:           false,
+				VisualMode:         "web",
+				// Use ScheduleGenerator for deterministic single request at cycle 0
+				ScheduleConfig: map[int]map[int][]ScheduleItem{
+					0: {
+						0: {
+							{
+								SlaveIndex:      0,
+								TransactionType: CHITxnReadNoSnp,
+							},
+						},
+					},
+				},
 			},
 		},
 	}
@@ -75,6 +105,7 @@ func GetPredefinedConfigs() []SOCNetworkConfig {
 
 // GetConfigByName returns a copy of the Config for the specified network configuration name
 // Returns nil if the configuration is not found
+// Note: RequestGenerator will be created in Simulator initialization (requires rng)
 func GetConfigByName(name string) *Config {
 	configs := GetPredefinedConfigs()
 	for _, cfg := range configs {
@@ -91,6 +122,21 @@ func GetConfigByName(name string) *Config {
 				cfgCopy.SlaveWeights = make([]int, len(original.SlaveWeights))
 				copy(cfgCopy.SlaveWeights, original.SlaveWeights)
 			}
+			
+			// Deep copy ScheduleConfig if present
+			if original.ScheduleConfig != nil {
+				cfgCopy.ScheduleConfig = make(map[int]map[int][]ScheduleItem)
+				for cycle, masterMap := range original.ScheduleConfig {
+					cfgCopy.ScheduleConfig[cycle] = make(map[int][]ScheduleItem)
+					for masterIdx, items := range masterMap {
+						itemsCopy := make([]ScheduleItem, len(items))
+						copy(itemsCopy, items)
+						cfgCopy.ScheduleConfig[cycle][masterIdx] = itemsCopy
+					}
+				}
+			}
+			
+			// RequestGenerator will be created in Simulator initialization
 			return &cfgCopy
 		}
 	}

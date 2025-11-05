@@ -29,7 +29,7 @@ type Simulator struct {
 }
 
 // initializeSimulatorComponents creates and initializes all simulator components from config
-func initializeSimulatorComponents(cfg *Config) (
+func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 	masters []*RequestNode,
 	slaves []*SlaveNode,
 	relay *HomeNode,
@@ -40,11 +40,71 @@ func initializeSimulatorComponents(cfg *Config) (
 ) {
 	idAlloc := NewNodeIDAllocator()
 
+	// Create request generators for each master
+	// If RequestGenerators is provided, use it; otherwise use RequestGenerator for all
+	// If no generator is set, create ProbabilityGenerator from RequestRateConfig
+	generators := make([]RequestGenerator, cfg.NumMasters)
+
+	// Prepare slave weights
+	slaveWeights := cfg.SlaveWeights
+	if len(slaveWeights) != cfg.NumSlaves {
+		slaveWeights = make([]int, cfg.NumSlaves)
+		for j := range slaveWeights {
+			slaveWeights[j] = 1
+		}
+	}
+
+	// Create default generator if needed
+	if cfg.RequestGenerator == nil {
+		if cfg.ScheduleConfig != nil && len(cfg.ScheduleConfig) > 0 {
+			// Create ScheduleGenerator from ScheduleConfig
+			cfg.RequestGenerator = NewScheduleGenerator(cfg.ScheduleConfig)
+		} else if cfg.RequestRateConfig > 0 {
+			// Create ProbabilityGenerator from RequestRateConfig
+			cfg.RequestGenerator = NewProbabilityGenerator(cfg.RequestRateConfig, slaveWeights, rng)
+		}
+	}
+
+	if cfg.RequestGenerators != nil && len(cfg.RequestGenerators) > 0 {
+		// Use per-master generators
+		for i := 0; i < cfg.NumMasters; i++ {
+			if i < len(cfg.RequestGenerators) && cfg.RequestGenerators[i] != nil {
+				generators[i] = cfg.RequestGenerators[i]
+			} else if cfg.RequestGenerator != nil {
+				generators[i] = cfg.RequestGenerator
+			} else {
+				// Fallback: create ProbabilityGenerator with RequestRateConfig or default
+				rate := cfg.RequestRateConfig
+				if rate <= 0 {
+					rate = 0.5 // default
+				}
+				generators[i] = NewProbabilityGenerator(rate, slaveWeights, rng)
+			}
+		}
+	} else {
+		// Use default generator for all masters
+		if cfg.RequestGenerator != nil {
+			for i := 0; i < cfg.NumMasters; i++ {
+				generators[i] = cfg.RequestGenerator
+			}
+		} else {
+			// Fallback: create ProbabilityGenerator with RequestRateConfig or default
+			rate := cfg.RequestRateConfig
+			if rate <= 0 {
+				rate = 0.5 // default
+			}
+			defaultGen := NewProbabilityGenerator(rate, slaveWeights, rng)
+			for i := 0; i < cfg.NumMasters; i++ {
+				generators[i] = defaultGen
+			}
+		}
+	}
+
 	masters = make([]*RequestNode, cfg.NumMasters)
 	masterByID = make(map[int]*RequestNode, cfg.NumMasters)
 	for i := 0; i < cfg.NumMasters; i++ {
 		id := idAlloc.Allocate()
-		m := NewRequestNode(id, cfg.RequestRate)
+		m := NewRequestNode(id, i, generators[i])
 		masters[i] = m
 		masterByID[id] = m
 	}
@@ -96,9 +156,8 @@ func initializeSimulatorComponents(cfg *Config) (
 
 func NewSimulator(cfg *Config) *Simulator {
 	pktAlloc := NewPacketIDAllocator()
-	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(cfg)
-
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(cfg, rng)
 
 	sim := &Simulator{
 		Masters:    masters,
@@ -361,7 +420,7 @@ func (s *Simulator) Run() {
 			if relayID < 0 {
 				continue
 			}
-			m.Tick(cycle, s.cfg, relayID, s.Chan, s.rng, s.pktIDs, s.Slaves)
+			m.Tick(cycle, s.cfg, relayID, s.Chan, s.pktIDs, s.Slaves)
 		}
 
 		if s.Relay != nil {
@@ -403,7 +462,7 @@ func (s *Simulator) reset(newCfg *Config) {
 
 	// Reinitialize simulator with new config
 	pktAlloc := NewPacketIDAllocator()
-	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(s.cfg)
+	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(s.cfg, s.rng)
 
 	s.Masters = masters
 	s.Slaves = slaves
