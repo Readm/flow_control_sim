@@ -40,7 +40,7 @@ func TestBackpressureVerify(t *testing.T) {
 		cycle := sim.current
 		sim.current++
 		
-		// Check state BEFORE Channel.Tick
+		// Check state BEFORE Link.Tick
 		pipelineState := sim.Chan.GetPipelineState(cycle)
 		stages, exists := pipelineState[edgeKey]
 		slot0Packets := 0
@@ -54,10 +54,10 @@ func TestBackpressureVerify(t *testing.T) {
 			maxQueueObserved = slaveQueueLen
 		}
 		
-		// Process channel
+		// Process link
 		sim.Chan.Tick(cycle)
 		
-		// Check state AFTER Channel.Tick
+		// Check state AFTER Link.Tick
 		pipelineStateAfter := sim.Chan.GetPipelineState(cycle)
 		stagesAfter, existsAfter := pipelineStateAfter[edgeKey]
 		slot0After := 0

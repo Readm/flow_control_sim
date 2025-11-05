@@ -65,7 +65,7 @@ func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID 
 
 // Tick may generate request(s) per cycle based on the configured RequestGenerator.
 // Supports generating multiple requests in the same cycle.
-func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Channel, packetIDs *PacketIDAllocator, slaves []*SlaveNode) {
+func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, packetIDs *PacketIDAllocator, slaves []*SlaveNode) {
 	if homeNodeID < 0 {
 		return
 	}

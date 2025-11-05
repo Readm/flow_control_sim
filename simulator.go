@@ -11,7 +11,7 @@ type Simulator struct {
 	Masters []*RequestNode
 	Slaves  []*SlaveNode
 	Relay   *HomeNode
-	Chan    *Channel
+	Chan    *Link
 
 	masterByID map[int]*RequestNode
 	slaveByID  map[int]*SlaveNode
@@ -33,7 +33,7 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 	masters []*RequestNode,
 	slaves []*SlaveNode,
 	relay *HomeNode,
-	ch *Channel,
+	ch *Link,
 	masterByID map[int]*RequestNode,
 	slaveByID map[int]*SlaveNode,
 	labels map[int]string,
@@ -122,7 +122,7 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 	relayID := idAlloc.Allocate()
 	relay = NewHomeNode(relayID)
 
-	// Create node registry for channel
+	// Create node registry for link
 	nodeRegistry := make(map[int]NodeReceiver)
 	for _, m := range masters {
 		nodeRegistry[m.ID] = m
@@ -134,12 +134,12 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 		nodeRegistry[relay.ID] = relay
 	}
 
-	// Create channel with bandwidth limit and node registry
+	// Create link with bandwidth limit and node registry
 	bandwidthLimit := cfg.BandwidthLimit
 	if bandwidthLimit <= 0 {
 		bandwidthLimit = DefaultBandwidthLimit
 	}
-	ch = NewChannel(bandwidthLimit, nodeRegistry)
+	ch = NewLink(bandwidthLimit, nodeRegistry)
 
 	// Create node labels
 	labels = make(map[int]string, len(masters)+len(slaves)+1)
@@ -319,7 +319,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		})
 	}
 
-	// Get pipeline state from channel
+	// Get pipeline state from link
 	pipelineState := s.Chan.GetPipelineState(cycle)
 
 	// Update edges with pipeline stages
@@ -408,7 +408,7 @@ func (s *Simulator) Run() {
 		cycle := s.current
 		s.current++
 
-		// Process channel pipeline (handles packet movement and backpressure)
+		// Process link pipeline (handles packet movement and backpressure)
 		s.Chan.Tick(cycle)
 
 		relayID := -1

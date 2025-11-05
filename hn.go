@@ -42,7 +42,7 @@ func (hn *HomeNode) OnPackets(messages []*InFlightMessage, cycle int) {
 // For ReadNoSnp requests, this will be forwarded to the target Slave Node.
 // For responses from Slave Nodes, this will be forwarded back to the Request Node.
 // This method is kept for backward compatibility but is now called by OnPackets.
-func (hn *HomeNode) OnPacket(p *Packet, cycle int, ch *Channel, cfg *Config) {
+func (hn *HomeNode) OnPacket(p *Packet, cycle int, ch *Link, cfg *Config) {
 	if p == nil {
 		return
 	}
@@ -55,7 +55,7 @@ func (hn *HomeNode) OnPacket(p *Packet, cycle int, ch *Channel, cfg *Config) {
 // For ReadNoSnp transactions:
 //   - Requests from RN: forward to target SN
 //   - CompData responses from SN: forward back to originating RN
-func (hn *HomeNode) Tick(cycle int, ch *Channel, cfg *Config) int {
+func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 	if len(hn.queue) == 0 {
 		return 0
 	}

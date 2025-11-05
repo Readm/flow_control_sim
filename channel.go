@@ -34,23 +34,23 @@ type Pipeline struct {
     sendQueue []pendingPacket // packets waiting when bandwidth limit is reached
 }
 
-// NodeReceiver interface defines methods for nodes to receive packets from channels
+// NodeReceiver interface defines methods for nodes to receive packets from links
 type NodeReceiver interface {
     CanReceive(edgeKey EdgeKey, packetCount int) bool
     OnPackets(messages []*InFlightMessage, cycle int)
 }
 
-// Channel implements a pipeline-based link layer with bandwidth limits and backpressure.
+// Link implements a pipeline-based link layer with bandwidth limits and backpressure.
 // Each edge (fromID->toID) has an independent pipeline with latency stages.
-type Channel struct {
+type Link struct {
     bandwidthLimit int
     pipelines      map[EdgeKey]*Pipeline
     nodeRegistry    map[int]NodeReceiver // maps node ID to receiver interface
 }
 
-// NewChannel creates a new channel with the given bandwidth limit and node registry
-func NewChannel(bandwidthLimit int, nodeRegistry map[int]NodeReceiver) *Channel {
-    return &Channel{
+// NewLink creates a new link with the given bandwidth limit and node registry
+func NewLink(bandwidthLimit int, nodeRegistry map[int]NodeReceiver) *Link {
+    return &Link{
         bandwidthLimit: bandwidthLimit,
         pipelines:      make(map[EdgeKey]*Pipeline),
         nodeRegistry:    nodeRegistry,
@@ -58,7 +58,7 @@ func NewChannel(bandwidthLimit int, nodeRegistry map[int]NodeReceiver) *Channel 
 }
 
 // getOrCreatePipeline gets or creates a pipeline for the given edge key
-func (c *Channel) getOrCreatePipeline(edgeKey EdgeKey, latency int) *Pipeline {
+func (c *Link) getOrCreatePipeline(edgeKey EdgeKey, latency int) *Pipeline {
     if pipeline, exists := c.pipelines[edgeKey]; exists {
         return pipeline
     }
@@ -121,7 +121,7 @@ func (p *Pipeline) fillFromQueue(cycle int) {
 
 // Send enqueues a CHI protocol packet into the pipeline.
 // The packet enters the last slot (Slot[latency-1]) if bandwidth allows, otherwise queues.
-func (c *Channel) Send(packet *Packet, fromID, toID, currentCycle, latency int) {
+func (c *Link) Send(packet *Packet, fromID, toID, currentCycle, latency int) {
     edgeKey := EdgeKey{FromID: fromID, ToID: toID}
     pipeline := c.getOrCreatePipeline(edgeKey, latency)
     
@@ -146,8 +146,8 @@ func (c *Channel) Send(packet *Packet, fromID, toID, currentCycle, latency int) 
     }
 }
 
-// Tick processes one cycle of the channel, handling backpressure and packet movement
-func (c *Channel) Tick(cycle int) {
+// Tick processes one cycle of the link, handling backpressure and packet movement
+func (c *Link) Tick(cycle int) {
     for edgeKey, pipeline := range c.pipelines {
         // Check if Slot[0] has packets ready to arrive
         if len(pipeline.slots[0].packets) > 0 {
@@ -171,7 +171,7 @@ func (c *Channel) Tick(cycle int) {
 }
 
 // InFlightCount returns the total number of packets in all pipelines
-func (c *Channel) InFlightCount() int {
+func (c *Link) InFlightCount() int {
     total := 0
     for _, pipeline := range c.pipelines {
         for _, slot := range pipeline.slots {
@@ -183,7 +183,7 @@ func (c *Channel) InFlightCount() int {
 }
 
 // GetPipelineState returns the current state of all pipelines for visualization
-func (c *Channel) GetPipelineState(cycle int) map[EdgeKey][]PipelineStageInfo {
+func (c *Link) GetPipelineState(cycle int) map[EdgeKey][]PipelineStageInfo {
     result := make(map[EdgeKey][]PipelineStageInfo)
     for edgeKey, pipeline := range c.pipelines {
         stages := make([]PipelineStageInfo, pipeline.latency)

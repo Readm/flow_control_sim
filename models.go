@@ -18,7 +18,7 @@ const (
 	DefaultRequestQueueCapacity = -1 // Unlimited for pending requests
 	DefaultForwardQueueCapacity = -1 // Unlimited for forward queue
 
-	// Channel and bandwidth constants
+	// Link and bandwidth constants
 	DefaultBandwidthLimit = 1 // Default maximum packets per slot in pipeline
 
 	// Address and data size constants

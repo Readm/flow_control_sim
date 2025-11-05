@@ -38,7 +38,7 @@ func DebugBackpressure() {
 		cycle := sim.current
 		sim.current++
 		
-		// State BEFORE Channel.Tick
+		// State BEFORE Link.Tick
 		pipelineState := sim.Chan.GetPipelineState(cycle)
 		stages, _ := pipelineState[edgeKey]
 		slot0Before := 0
@@ -48,10 +48,10 @@ func DebugBackpressure() {
 		slaveQueueBefore := len(sim.Slaves[0].queue)
 		canReceive := sim.Slaves[0].CanReceive(edgeKey, 1)
 		
-		// Process channel
+		// Process link
 		sim.Chan.Tick(cycle)
 		
-		// State AFTER Channel.Tick
+		// State AFTER Link.Tick
 		slaveQueueAfter := len(sim.Slaves[0].queue)
 		pipelineStateAfter := sim.Chan.GetPipelineState(cycle)
 		stagesAfter, _ := pipelineStateAfter[edgeKey]
