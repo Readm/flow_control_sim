@@ -445,7 +445,7 @@
     <script>
         let cy;
         let pollInterval;
-        let isPaused = false;
+        let isPaused = true; // Web mode starts paused at cycle 0
         let currentFrame = null;
         let topologyInitialized = false;
 
@@ -1243,9 +1243,18 @@
 
         // Update button states based on pause status
         function updateButtonStates() {
+            const btnPause = document.getElementById('btnPause');
+            const btnResume = document.getElementById('btnResume');
             const btnStep = document.getElementById('btnStep');
+            
+            if (btnPause) {
+                btnPause.disabled = isPaused; // Disable when paused
+            }
+            if (btnResume) {
+                btnResume.disabled = !isPaused; // Disable when running
+            }
             if (btnStep) {
-                btnStep.disabled = !isPaused;
+                btnStep.disabled = !isPaused; // Enable only when paused
             }
         }
 
@@ -1287,7 +1296,7 @@
             const totalCycles = parseInt(document.getElementById('totalCycles').value);
             const success = await sendControl('reset', configName, totalCycles);
             if (success) {
-                isPaused = false;
+                isPaused = true; // Reset pauses at cycle 0
                 updateButtonStates();
                 // Clear visualization and reset topology
                 cy.elements().remove();
@@ -1301,6 +1310,7 @@
         // Initialize
         loadConfigurations();
         initCytoscape();
+        updateButtonStates(); // Set initial button states (paused at cycle 0)
         startPolling();
 
         // Modal close event listeners (initialize after DOM is ready)

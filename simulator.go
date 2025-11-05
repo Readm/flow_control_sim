@@ -23,7 +23,7 @@ type Simulator struct {
 	current    int
 	visualizer Visualizer
 
-	isPaused bool
+	isPaused  bool
 	isRunning bool
 }
 
@@ -245,7 +245,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 
 	// Get pipeline state from channel
 	pipelineState := s.Chan.GetPipelineState(cycle)
-	
+
 	// Update edges with pipeline stages
 	edges := make([]EdgeSnapshot, len(s.edges))
 	copy(edges, s.edges)
@@ -269,7 +269,17 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 
 func (s *Simulator) Run() {
 	s.isRunning = true
-	s.isPaused = false
+
+	// If web frontend is available, start paused at cycle 0
+	// Otherwise (headless mode), start running immediately
+	if s.visualizer != nil && !s.visualizer.IsHeadless() {
+		s.isPaused = true
+		// Publish initial frame at cycle 0
+		frame := s.buildFrame(0)
+		s.visualizer.PublishFrame(frame)
+	} else {
+		s.isPaused = false
+	}
 
 	for s.current < s.cfg.TotalCycles {
 		// Check for control commands (except step, handled in paused section)
@@ -425,7 +435,17 @@ func (s *Simulator) reset(newCfg *Config) {
 	s.pktIDs = pktAlloc
 	s.current = 0
 	s.edges = s.buildEdges()
-	s.isPaused = false
+
+	// If web frontend is available, pause at cycle 0 after reset
+	// Otherwise (headless mode), continue running
+	if s.visualizer != nil && !s.visualizer.IsHeadless() {
+		s.isPaused = true
+		// Publish frame at cycle 0 after reset
+		frame := s.buildFrame(0)
+		s.visualizer.PublishFrame(frame)
+	} else {
+		s.isPaused = false
+	}
 }
 
 type GlobalStats struct {
@@ -498,4 +518,3 @@ func percent(a, b int) float64 {
 	}
 	return float64(a) / float64(b) * 100.0
 }
-
