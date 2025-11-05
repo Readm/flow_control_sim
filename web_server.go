@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"log"
 	"net/http"
 	"sync"
 )
@@ -121,11 +123,23 @@ func (ws *WebServer) handleControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read request body for debugging
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("[DEBUG] Error reading request body: %v", err)
+		http.Error(w, "Error reading request body", http.StatusBadRequest)
+		return
+	}
+	log.Printf("[DEBUG] Received /api/control request: Method=%s, Body=%s", r.Method, string(bodyBytes))
+
+	// Create a new reader for JSON decoder since we already read the body
 	var req controlRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		log.Printf("[DEBUG] Error decoding JSON: %v", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	log.Printf("[DEBUG] Parsed request: Type=%s, ConfigName=%s, TotalCycles=%v", req.Type, req.ConfigName, req.TotalCycles)
 
 	var cmd ControlCommand
 	switch req.Type {
@@ -135,18 +149,24 @@ func (ws *WebServer) handleControl(w http.ResponseWriter, r *http.Request) {
 		cmd.Type = CommandResume
 	case "reset":
 		cmd.Type = CommandReset
+		log.Printf("[DEBUG] Processing reset command, ConfigName=%s", req.ConfigName)
 		if req.ConfigName != "" {
 			// Use predefined configuration by name
 			predefinedCfg := GetConfigByName(req.ConfigName)
 			if predefinedCfg == nil {
+				log.Printf("[DEBUG] Config name '%s' not found", req.ConfigName)
 				http.Error(w, "Invalid config name: "+req.ConfigName, http.StatusBadRequest)
 				return
 			}
+			log.Printf("[DEBUG] Found config '%s': NumMasters=%d, NumSlaves=%d, TotalCycles=%d",
+				req.ConfigName, predefinedCfg.NumMasters, predefinedCfg.NumSlaves, predefinedCfg.TotalCycles)
 			// Override TotalCycles if provided
 			if req.TotalCycles != nil && *req.TotalCycles > 0 {
+				log.Printf("[DEBUG] Overriding TotalCycles from %d to %d", predefinedCfg.TotalCycles, *req.TotalCycles)
 				predefinedCfg.TotalCycles = *req.TotalCycles
 			}
 			cmd.ConfigOverride = predefinedCfg
+			log.Printf("[DEBUG] Set ConfigOverride with config name '%s'", req.ConfigName)
 		} else if req.Config != nil {
 			// Direct config provided (for backward compatibility and testing)
 			if err := ws.validateConfig(req.Config); err != nil {
@@ -164,9 +184,11 @@ func (ws *WebServer) handleControl(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case ws.commands <- cmd:
+		log.Printf("[DEBUG] Command queued successfully: Type=%s, HasConfig=%v", cmd.Type, cmd.ConfigOverride != nil)
 		w.WriteHeader(http.StatusAccepted)
 		w.Write([]byte("Command accepted"))
 	default:
+		log.Printf("[DEBUG] Command queue full, cannot accept command")
 		http.Error(w, "Command queue full", http.StatusServiceUnavailable)
 	}
 }
@@ -222,4 +244,3 @@ func (ws *WebServer) handleConfigs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to encode configs", http.StatusInternalServerError)
 	}
 }
-

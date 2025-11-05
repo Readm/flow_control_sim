@@ -49,6 +49,7 @@ type SimulationFrame struct {
 	Edges         []EdgeSnapshot   `json:"edges"`
 	InFlightCount int              `json:"inFlightCount"`
 	Stats         *SimulationStats `json:"stats,omitempty"`
+	ConfigHash    string           `json:"configHash,omitempty"` // Hash of current config to detect config changes
 }
 
 // Visualizer defines methods for visualization implementations.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"time"
 )
@@ -258,12 +259,14 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 	}
 
 	stats := s.CollectStats()
+	configHash := computeConfigHash(s.cfg)
 	frame := &SimulationFrame{
 		Cycle:         cycle,
 		Nodes:         nodes,
 		Edges:         edges,
 		InFlightCount: s.Chan.InFlightCount(),
 		Stats:         stats,
+		ConfigHash:    configHash,
 	}
 	return frame
 }
@@ -294,6 +297,12 @@ func (s *Simulator) Run() {
 				case CommandResume:
 					s.isPaused = false
 				case CommandReset:
+					if cmd.ConfigOverride != nil {
+						log.Printf("[DEBUG] Simulator received reset command with config: NumMasters=%d, NumSlaves=%d, TotalCycles=%d",
+							cmd.ConfigOverride.NumMasters, cmd.ConfigOverride.NumSlaves, cmd.ConfigOverride.TotalCycles)
+					} else {
+						log.Printf("[DEBUG] Simulator received reset command without config override")
+					}
 					s.reset(cmd.ConfigOverride)
 					continue
 				case CommandStep:
@@ -369,7 +378,11 @@ func (s *Simulator) Run() {
 
 func (s *Simulator) reset(newCfg *Config) {
 	if newCfg != nil {
+		log.Printf("[DEBUG] Simulator.reset: Applying new config: NumMasters=%d, NumSlaves=%d, TotalCycles=%d",
+			newCfg.NumMasters, newCfg.NumSlaves, newCfg.TotalCycles)
 		s.cfg = newCfg
+	} else {
+		log.Printf("[DEBUG] Simulator.reset: No new config provided, using existing config")
 	}
 
 	// Reinitialize simulator with new config

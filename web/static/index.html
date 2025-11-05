@@ -449,6 +449,9 @@
         let isPaused = true; // Web mode starts paused at cycle 0
         let currentFrame = null;
         let topologyInitialized = false;
+        let currentConfigName = null; // Track current network configuration name
+        let lastConfigHash = null; // Track last config hash from frame to detect config changes
+        let expectingReset = false; // Track if we're waiting for a reset frame (cycle 0)
 
         // Calculate load percentage for a queue
         function calculateQueueLoad(queue) {
@@ -1118,6 +1121,33 @@
 
             currentFrame = frame;
 
+            // Check for config change using configHash from frame
+            const configHash = frame.configHash || null;
+            let shouldReinitialize = false;
+
+            if (expectingReset && frame.cycle === 0) {
+                // This is the reset frame we were waiting for
+                shouldReinitialize = true;
+                expectingReset = false;
+                console.log('[DEBUG] Received reset frame (cycle 0), reinitializing topology');
+            } else if (configHash && lastConfigHash !== null && configHash !== lastConfigHash) {
+                // Config hash changed, network structure has changed
+                shouldReinitialize = true;
+                console.log('[DEBUG] Config hash changed:', lastConfigHash, '->', configHash, ', reinitializing topology');
+            } else if (lastConfigHash === null && configHash) {
+                // First frame with config hash, initialize it
+                lastConfigHash = configHash;
+            }
+
+            if (shouldReinitialize) {
+                cy.elements().remove();
+                topologyInitialized = false;
+                // Update lastConfigHash if configHash is available
+                if (configHash) {
+                    lastConfigHash = configHash;
+                }
+            }
+
             // Update status info
             document.getElementById('currentCycle').textContent = frame.cycle || 0;
             document.getElementById('inFlightCount').textContent = frame.inFlightCount || 0;
@@ -1132,7 +1162,7 @@
             // Update button states based on current pause status
             updateButtonStates();
 
-            // Initialize topology on first frame
+            // Initialize topology on first frame or after config change
             if (!topologyInitialized) {
                 const elements = [];
 
@@ -1189,6 +1219,13 @@
                 }, 50);
                 
                 topologyInitialized = true;
+                // Update current config name after topology is initialized
+                const newConfigName = getConfigFromForm();
+                currentConfigName = newConfigName;
+                // Update lastConfigHash if we have it from frame
+                if (frame.configHash) {
+                    lastConfigHash = frame.configHash;
+                }
             }
 
             // Update existing nodes with new data (without re-layout)
@@ -1499,6 +1536,11 @@
                 // Clear visualization and reset topology
                 cy.elements().remove();
                 topologyInitialized = false;
+                // Update current config name to track the new configuration
+                currentConfigName = configName;
+                // Set flag to wait for reset frame (cycle 0)
+                expectingReset = true;
+                console.log('[DEBUG] Reset clicked, waiting for cycle 0 frame');
                 document.getElementById('currentCycle').textContent = '-';
                 document.getElementById('inFlightCount').textContent = '-';
                 document.getElementById('simStatus').innerHTML = 'Status: <strong>Resetting...</strong>';
