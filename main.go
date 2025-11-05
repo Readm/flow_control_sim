@@ -2,12 +2,14 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"time"
 )
 
 func main() {
 	var headless = flag.Bool("headless", false, "Run in headless mode (no GUI)")
 	var benchmark = flag.Bool("benchmark", false, "Run performance benchmark test")
+	var configName = flag.String("config", "", "Predefined configuration name (e.g., 'backpressure_test', 'multi_master_multi_slave')")
 	flag.Parse()
 
 	// If benchmark mode, run benchmark suite
@@ -16,36 +18,29 @@ func main() {
 		return
 	}
 
-	// Use first predefined configuration as default
+	// Use predefined configuration
 	configs := GetPredefinedConfigs()
 	var cfg *Config
-	if len(configs) > 0 {
-		cfg = GetConfigByName(configs[0].Name)
+	
+	// If config name is specified, use it; otherwise use first config
+	selectedConfigName := *configName
+	if selectedConfigName == "" && len(configs) > 0 {
+		selectedConfigName = configs[0].Name
+	}
+	
+	if selectedConfigName != "" {
+		cfg = GetConfigByName(selectedConfigName)
 		if cfg == nil {
-			// Fallback to default if GetConfigByName fails
-			cfg = &Config{
-				NumMasters:         3,
-				NumSlaves:          2,
-				NumRelays:          1,
-				TotalCycles:        1000,
-				MasterRelayLatency: 2,
-				RelayMasterLatency: 2,
-				RelaySlaveLatency:  1,
-				SlaveRelayLatency:  1,
-				SlaveProcessRate:   1,
-				RequestRate:        0.8,
-				BandwidthLimit:     1,
-				SlaveWeights:       []int{1, 1},
-				Headless:           *headless,
-				VisualMode:         "web",
-			}
+			fmt.Printf("Warning: Configuration '%s' not found, using default\n", selectedConfigName)
 		} else {
 			// Override Headless and VisualMode based on flag
 			cfg.Headless = *headless
 			cfg.VisualMode = "web"
 		}
-	} else {
-		// Fallback if no predefined configs
+	}
+	
+	if cfg == nil {
+		// Fallback to default if GetConfigByName fails or no configs available
 		cfg = &Config{
 			NumMasters:         3,
 			NumSlaves:          2,
@@ -57,6 +52,7 @@ func main() {
 			SlaveRelayLatency:  1,
 			SlaveProcessRate:   1,
 			RequestRate:        0.8,
+			BandwidthLimit:     1,
 			SlaveWeights:       []int{1, 1},
 			Headless:           *headless,
 			VisualMode:         "web",

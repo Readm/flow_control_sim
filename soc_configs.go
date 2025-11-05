@@ -50,6 +50,26 @@ func GetPredefinedConfigs() []SOCNetworkConfig {
 				VisualMode:         "web",
 			},
 		},
+		{
+			Name:        "backpressure_test",
+			Description: "Backpressure Test: High load, slow processing (3 Masters, 1 Slave, triggers backpressure)",
+			Config: &Config{
+				NumMasters:         3,
+				NumSlaves:          1,
+				NumRelays:          1,
+				TotalCycles:        500,
+				MasterRelayLatency: 1,
+				RelayMasterLatency: 1,
+				RelaySlaveLatency:  1,
+				SlaveRelayLatency:  1,
+				SlaveProcessRate:   1,  // Slow: only 1 packet per cycle
+				RequestRate:        1.0, // High: always generate requests
+				BandwidthLimit:     3,  // Allow multiple packets per slot
+				SlaveWeights:       []int{1},
+				Headless:           false,
+				VisualMode:         "web",
+			},
+		},
 	}
 }
 

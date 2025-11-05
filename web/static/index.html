@@ -728,6 +728,49 @@
                 const data = node.data();
                 showPacketModal(data);
             });
+
+            // Add hover tooltip for edges to show pipeline stages
+            cy.on('mouseover', 'edge', function(evt) {
+                const edge = evt.target;
+                const data = edge.data();
+                let tooltip = `${data.label}\nSource: ${data.source} → Target: ${data.target}`;
+                
+                if (data.pipelineStages && data.pipelineStages.length > 0) {
+                    tooltip += '\n\nPipeline Stages:';
+                    data.pipelineStages.forEach(stage => {
+                        tooltip += `\nStage ${stage.stageIndex}: ${stage.packetCount} packet(s)`;
+                    });
+                    
+                    // Indicate potential backpressure if Slot[0] has packets
+                    if (data.pipelineStages[0] && data.pipelineStages[0].packetCount > 0) {
+                        tooltip += '\n\n⚠ Slot[0] has packets (may indicate backpressure)';
+                    }
+                } else {
+                    tooltip += '\n\nNo pipeline data available';
+                }
+
+                edge.qtip({
+                    content: tooltip,
+                    position: {
+                        my: 'top center',
+                        at: 'bottom center'
+                    },
+                    style: {
+                        classes: 'qtip-bootstrap',
+                        tip: {
+                            width: 16,
+                            height: 8
+                        }
+                    },
+                    show: {
+                        event: 'mouseover',
+                        ready: true
+                    },
+                    hide: {
+                        event: 'mouseout'
+                    }
+                }, evt);
+            });
         }
 
         // Format CHI protocol field values for display
@@ -922,6 +965,7 @@
                 // Add edges
                 frame.edges.forEach(edge => {
                     const edgeLabel = `${edge.label} (${edge.latency}cy)`;
+                    const pipelineStages = edge.pipelineStages || [];
                     elements.push({
                         group: 'edges',
                         data: {
@@ -929,7 +973,8 @@
                             source: String(edge.source),
                             target: String(edge.target),
                             label: edgeLabel,
-                            latency: edge.latency
+                            latency: edge.latency,
+                            pipelineStages: pipelineStages
                         }
                     });
                 });
@@ -977,6 +1022,38 @@
                         height: nodeHeight,
                         progressBg: progressBg
                     });
+                }
+            });
+
+            // Update existing edges with pipeline stages
+            frame.edges.forEach(edge => {
+                const edgeId = `e${edge.source}-${edge.target}`;
+                const cyEdge = cy.getElementById(edgeId);
+                
+                if (cyEdge.length > 0) {
+                    const pipelineStages = edge.pipelineStages || [];
+                    let edgeLabel = `${edge.label} (${edge.latency}cy)`;
+                    
+                    // Add pipeline stages info to label if available
+                    if (pipelineStages.length > 0) {
+                        const stageInfo = pipelineStages.map(s => `S${s.stageIndex}:${s.packetCount}`).join(' ');
+                        edgeLabel += `\n[${stageInfo}]`;
+                    }
+                    
+                    cyEdge.data({
+                        label: edgeLabel,
+                        pipelineStages: pipelineStages
+                    });
+                    
+                    // Update edge style based on backpressure (Slot[0] has packets but can't advance)
+                    if (pipelineStages.length > 0 && pipelineStages[0].packetCount > 0) {
+                        // Check if this indicates backpressure (would need receiver state, simplified here)
+                        cyEdge.style('line-color', '#ff4d4f'); // Red for potential backpressure
+                        cyEdge.style('width', 3);
+                    } else {
+                        cyEdge.style('line-color', '#91d5ff'); // Blue for normal
+                        cyEdge.style('width', 2);
+                    }
                 }
             });
 
