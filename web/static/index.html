@@ -396,57 +396,19 @@
         <div class="control-section">
             <h3>Configuration</h3>
             <div class="config-form">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Num Masters</label>
-                        <input type="number" id="numMasters" min="1" value="3">
-                    </div>
-                    <div class="form-group">
-                        <label>Num Slaves</label>
-                        <input type="number" id="numSlaves" min="1" value="2">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Total Cycles</label>
-                        <input type="number" id="totalCycles" min="1" value="1000">
-                    </div>
-                    <div class="form-group">
-                        <label>Request Rate</label>
-                        <input type="number" id="requestRate" min="0" max="1" step="0.1" value="0.8">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Master→Relay Latency</label>
-                        <input type="number" id="masterRelayLatency" min="1" value="2">
-                    </div>
-                    <div class="form-group">
-                        <label>Relay→Master Latency</label>
-                        <input type="number" id="relayMasterLatency" min="1" value="2">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Relay→Slave Latency</label>
-                        <input type="number" id="relaySlaveLatency" min="1" value="1">
-                    </div>
-                    <div class="form-group">
-                        <label>Slave→Relay Latency</label>
-                        <input type="number" id="slaveRelayLatency" min="1" value="1">
-                    </div>
+                <div class="form-group">
+                    <label>Network Configuration</label>
+                    <select id="networkConfig" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                        <option value="">Loading configurations...</option>
+                    </select>
                 </div>
                 <div class="form-group">
-                    <label>Slave Process Rate</label>
-                    <input type="number" id="slaveProcessRate" min="1" value="1">
-                </div>
-                <div class="form-group">
-                    <label>Slave Weights (comma-separated)</label>
-                    <input type="text" id="slaveWeights" value="1,1" placeholder="1,1,1">
+                    <label>Total Cycles</label>
+                    <input type="number" id="totalCycles" min="1" value="1000">
                 </div>
             </div>
             <div class="status-info" style="margin-top: 10px; font-size: 11px; color: #999;">
-                Configuration changes take effect after Reset.
+                Select a predefined network configuration. Changes take effect after Reset.
             </div>
         </div>
 
@@ -1083,11 +1045,14 @@
         }
 
         // Send control command
-        async function sendControl(type, config) {
+        async function sendControl(type, configName, totalCycles) {
             try {
                 const body = { type: type };
-                if (config) {
-                    body.config = config;
+                if (configName) {
+                    body.configName = configName;
+                }
+                if (totalCycles !== undefined && totalCycles !== null) {
+                    body.totalCycles = totalCycles;
                 }
 
                 const response = await fetch('/api/control', {
@@ -1112,39 +1077,54 @@
             }
         }
 
-        // Get configuration from form
-        function getConfigFromForm() {
-            const slaveWeightsStr = document.getElementById('slaveWeights').value;
-            const slaveWeights = slaveWeightsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+        // Load available network configurations
+        async function loadConfigurations() {
+            try {
+                const response = await fetch('/api/configs');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const configs = await response.json();
+                
+                const select = document.getElementById('networkConfig');
+                select.innerHTML = '';
+                
+                if (configs.length === 0) {
+                    select.innerHTML = '<option value="">No configurations available</option>';
+                    return;
+                }
+                
+                configs.forEach((cfg, index) => {
+                    const option = document.createElement('option');
+                    option.value = cfg.name;
+                    option.textContent = cfg.description;
+                    if (index === 0) {
+                        option.selected = true;
+                    }
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading configurations:', error);
+                const select = document.getElementById('networkConfig');
+                select.innerHTML = '<option value="">Error loading configurations</option>';
+                showError('Failed to load network configurations: ' + error.message);
+            }
+        }
 
-            return {
-                NumMasters: parseInt(document.getElementById('numMasters').value) || 3,
-                NumSlaves: parseInt(document.getElementById('numSlaves').value) || 2,
-                NumRelays: 1,
-                TotalCycles: parseInt(document.getElementById('totalCycles').value) || 1000,
-                MasterRelayLatency: parseInt(document.getElementById('masterRelayLatency').value) || 2,
-                RelayMasterLatency: parseInt(document.getElementById('relayMasterLatency').value) || 2,
-                RelaySlaveLatency: parseInt(document.getElementById('relaySlaveLatency').value) || 1,
-                SlaveRelayLatency: parseInt(document.getElementById('slaveRelayLatency').value) || 1,
-                SlaveProcessRate: parseInt(document.getElementById('slaveProcessRate').value) || 2,
-                RequestRate: parseFloat(document.getElementById('requestRate').value) || 0.3,
-                SlaveWeights: slaveWeights.length > 0 ? slaveWeights : [1, 1]
-            };
+        // Get selected configuration name from form
+        function getConfigFromForm() {
+            const select = document.getElementById('networkConfig');
+            return select.value;
         }
 
         // Validate configuration
-        function validateConfig(config) {
-            if (config.NumMasters <= 0 || config.NumSlaves <= 0) {
-                return 'NumMasters and NumSlaves must be positive';
+        function validateConfig(configName) {
+            if (!configName) {
+                return 'Please select a network configuration';
             }
-            if (config.TotalCycles <= 0) {
-                return 'TotalCycles must be positive';
-            }
-            if (config.RequestRate < 0 || config.RequestRate > 1) {
-                return 'RequestRate must be between 0 and 1';
-            }
-            if (config.SlaveWeights.length !== config.NumSlaves) {
-                return `SlaveWeights length (${config.SlaveWeights.length}) must match NumSlaves (${config.NumSlaves})`;
+            const totalCycles = parseInt(document.getElementById('totalCycles').value);
+            if (isNaN(totalCycles) || totalCycles <= 0) {
+                return 'TotalCycles must be a positive number';
             }
             return null;
         }
@@ -1221,13 +1201,14 @@
         });
 
         document.getElementById('btnReset').addEventListener('click', async () => {
-            const config = getConfigFromForm();
-            const error = validateConfig(config);
+            const configName = getConfigFromForm();
+            const error = validateConfig(configName);
             if (error) {
                 showError(error);
                 return;
             }
-            const success = await sendControl('reset', config);
+            const totalCycles = parseInt(document.getElementById('totalCycles').value);
+            const success = await sendControl('reset', configName, totalCycles);
             if (success) {
                 isPaused = false;
                 updateButtonStates();
@@ -1241,6 +1222,7 @@
         });
 
         // Initialize
+        loadConfigurations();
         initCytoscape();
         startPolling();
 

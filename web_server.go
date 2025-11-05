@@ -25,6 +25,7 @@ func NewWebServer(addr string) *WebServer {
 	mux.HandleFunc("/api/frame", ws.handleFrame)
 	mux.HandleFunc("/api/stats", ws.handleStats)
 	mux.HandleFunc("/api/control", ws.handleControl)
+	mux.HandleFunc("/api/configs", ws.handleConfigs)
 	mux.Handle("/", http.FileServer(http.Dir("web/static")))
 
 	ws.server = &http.Server{
@@ -108,8 +109,10 @@ func (ws *WebServer) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 type controlRequest struct {
-	Type   string  `json:"type"`
-	Config *Config `json:"config,omitempty"`
+	Type        string  `json:"type"`
+	Config      *Config `json:"config,omitempty"`
+	ConfigName  string  `json:"configName,omitempty"`
+	TotalCycles *int    `json:"totalCycles,omitempty"`
 }
 
 func (ws *WebServer) handleControl(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +135,20 @@ func (ws *WebServer) handleControl(w http.ResponseWriter, r *http.Request) {
 		cmd.Type = CommandResume
 	case "reset":
 		cmd.Type = CommandReset
-		if req.Config != nil {
+		if req.ConfigName != "" {
+			// Use predefined configuration by name
+			predefinedCfg := GetConfigByName(req.ConfigName)
+			if predefinedCfg == nil {
+				http.Error(w, "Invalid config name: "+req.ConfigName, http.StatusBadRequest)
+				return
+			}
+			// Override TotalCycles if provided
+			if req.TotalCycles != nil && *req.TotalCycles > 0 {
+				predefinedCfg.TotalCycles = *req.TotalCycles
+			}
+			cmd.ConfigOverride = predefinedCfg
+		} else if req.Config != nil {
+			// Direct config provided (for backward compatibility and testing)
 			if err := ws.validateConfig(req.Config); err != nil {
 				http.Error(w, "Invalid config: "+err.Error(), http.StatusBadRequest)
 				return
@@ -177,5 +193,33 @@ type validationError struct {
 
 func (e *validationError) Error() string {
 	return e.msg
+}
+
+func (ws *WebServer) handleConfigs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	configs := GetPredefinedConfigs()
+	// Return only name and description, not the full config
+	configList := make([]struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}, len(configs))
+	for i, cfg := range configs {
+		configList[i] = struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}{
+			Name:        cfg.Name,
+			Description: cfg.Description,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(configList); err != nil {
+		http.Error(w, "Failed to encode configs", http.StatusInternalServerError)
+	}
 }
 

@@ -1,0 +1,83 @@
+package main
+
+// SOCNetworkConfig represents a predefined SOC network configuration
+type SOCNetworkConfig struct {
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Config      *Config `json:"-"`
+}
+
+// GetPredefinedConfigs returns all available predefined SOC network configurations
+func GetPredefinedConfigs() []SOCNetworkConfig {
+	return []SOCNetworkConfig{
+		{
+			Name:        "multi_master_multi_slave",
+			Description: "Multi-Master Multi-Slave Network (3 Masters, 2 Slaves, 1 Home Node)",
+			Config: &Config{
+				NumMasters:         3,
+				NumSlaves:          2,
+				NumRelays:          1,
+				TotalCycles:        1000,
+				MasterRelayLatency: 2,
+				RelayMasterLatency: 2,
+				RelaySlaveLatency:  1,
+				SlaveRelayLatency:  1,
+				SlaveProcessRate:   1,
+				RequestRate:        0.8,
+				SlaveWeights:       []int{1, 1},
+				Headless:           false,
+				VisualMode:         "web",
+			},
+		},
+		{
+			Name:        "simple_single_master_slave",
+			Description: "Simple Single Master-Slave Network (1 Master, 1 Slave, 1 Home Node)",
+			Config: &Config{
+				NumMasters:         1,
+				NumSlaves:          1,
+				NumRelays:          1,
+				TotalCycles:        1000,
+				MasterRelayLatency: 2,
+				RelayMasterLatency: 2,
+				RelaySlaveLatency:  1,
+				SlaveRelayLatency:  1,
+				SlaveProcessRate:   1,
+				RequestRate:        0.8,
+				SlaveWeights:       []int{1},
+				Headless:           false,
+				VisualMode:         "web",
+			},
+		},
+	}
+}
+
+// GetConfigByName returns a copy of the Config for the specified network configuration name
+// Returns nil if the configuration is not found
+func GetConfigByName(name string) *Config {
+	configs := GetPredefinedConfigs()
+	for _, cfg := range configs {
+		if cfg.Name == name {
+			// Create a copy to avoid modifying the original
+			original := cfg.Config
+			cfgCopy := &Config{
+				NumMasters:         original.NumMasters,
+				NumSlaves:          original.NumSlaves,
+				NumRelays:          original.NumRelays,
+				TotalCycles:        original.TotalCycles,
+				MasterRelayLatency: original.MasterRelayLatency,
+				RelayMasterLatency: original.RelayMasterLatency,
+				RelaySlaveLatency:  original.RelaySlaveLatency,
+				SlaveRelayLatency:  original.SlaveRelayLatency,
+				SlaveProcessRate:   original.SlaveProcessRate,
+				RequestRate:        original.RequestRate,
+				SlaveWeights:       make([]int, len(original.SlaveWeights)),
+				Headless:           original.Headless,
+				VisualMode:         original.VisualMode,
+			}
+			copy(cfgCopy.SlaveWeights, original.SlaveWeights)
+			return cfgCopy
+		}
+	}
+	return nil
+}
+

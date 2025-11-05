@@ -16,20 +16,50 @@ func main() {
 		return
 	}
 
-	cfg := &Config{
-		NumMasters:         3,
-		NumSlaves:          2,
-		NumRelays:          1,
-		TotalCycles:        1000,
-		MasterRelayLatency: 2,
-		RelayMasterLatency: 2,
-		RelaySlaveLatency:  1,
-		SlaveRelayLatency:  1,
-		SlaveProcessRate:   1,   // Reduced to create higher load
-		RequestRate:        0.8, // Increased to generate more requests
-		SlaveWeights:       []int{1, 1},
-		Headless:           *headless,
-		VisualMode:         "web",
+	// Use first predefined configuration as default
+	configs := GetPredefinedConfigs()
+	var cfg *Config
+	if len(configs) > 0 {
+		cfg = GetConfigByName(configs[0].Name)
+		if cfg == nil {
+			// Fallback to default if GetConfigByName fails
+			cfg = &Config{
+				NumMasters:         3,
+				NumSlaves:          2,
+				NumRelays:          1,
+				TotalCycles:        1000,
+				MasterRelayLatency: 2,
+				RelayMasterLatency: 2,
+				RelaySlaveLatency:  1,
+				SlaveRelayLatency:  1,
+				SlaveProcessRate:   1,
+				RequestRate:        0.8,
+				SlaveWeights:       []int{1, 1},
+				Headless:           *headless,
+				VisualMode:         "web",
+			}
+		} else {
+			// Override Headless and VisualMode based on flag
+			cfg.Headless = *headless
+			cfg.VisualMode = "web"
+		}
+	} else {
+		// Fallback if no predefined configs
+		cfg = &Config{
+			NumMasters:         3,
+			NumSlaves:          2,
+			NumRelays:          1,
+			TotalCycles:        1000,
+			MasterRelayLatency: 2,
+			RelayMasterLatency: 2,
+			RelaySlaveLatency:  1,
+			SlaveRelayLatency:  1,
+			SlaveProcessRate:   1,
+			RequestRate:        0.8,
+			SlaveWeights:       []int{1, 1},
+			Headless:           *headless,
+			VisualMode:         "web",
+		}
 	}
 
 	sim := NewSimulator(cfg)
