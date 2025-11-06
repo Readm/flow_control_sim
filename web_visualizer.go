@@ -1,5 +1,9 @@
 package main
 
+import (
+	"fmt"
+)
+
 // WebVisualizer bridges the simulator with the web server.
 type WebVisualizer struct {
 	headless bool
@@ -11,6 +15,8 @@ func NewWebVisualizer() *WebVisualizer {
 	addr := "127.0.0.1:8080"
 	server := NewWebServer(addr)
 	server.Start()
+
+	fmt.Printf("[DEBUG] Web server started at http://%s\n", addr)
 
 	return &WebVisualizer{
 		headless: false,

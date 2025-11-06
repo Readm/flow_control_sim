@@ -13,10 +13,11 @@ const (
 	DefaultVisualizationDelay = 50 * time.Millisecond
 
 	// Queue capacity constants
-	DefaultSlaveQueueCapacity   = 20 // Limited capacity for high load visualization
-	UnlimitedQueueCapacity      = -1 // Unlimited queue capacity
-	DefaultRequestQueueCapacity = -1 // Unlimited for pending requests
-	DefaultForwardQueueCapacity = -1 // Unlimited for forward queue
+	DefaultSlaveQueueCapacity     = 20  // Limited capacity for high load visualization
+	UnlimitedQueueCapacity        = -1  // Unlimited queue capacity
+	DefaultRequestQueueCapacity   = 1024 // Default capacity for dispatch queue (changed from -1)
+	DefaultForwardQueueCapacity   = -1   // Unlimited for forward queue
+	DefaultDispatchQueueCapacity  = 1024 // Default capacity for dispatch queue
 
 	// Link and bandwidth constants
 	DefaultBandwidthLimit = 1 // Default maximum packets per slot in pipeline
@@ -125,6 +126,9 @@ type Config struct {
 
 	// channel bandwidth limit
 	BandwidthLimit int // maximum packets per slot in pipeline (per edge per cycle)
+
+	// dispatch queue capacity for RequestNode
+	DispatchQueueCapacity int // dispatch_queue capacity (default: 1024, -1 is invalid)
 
 	// weighting for choosing destination slave (length == NumSlaves)
 	SlaveWeights []int

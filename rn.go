@@ -11,7 +11,12 @@ type RequestNode struct {
 	generator   RequestGenerator
 	masterIndex int  // index of this master in the masters array (for generator)
 
-	// track request generation times by request id
+	// queues for request management
+	stimulusQueue        []*Packet  // stimulus_queue: infinite capacity, stores generated requests
+	dispatchQueue        []*Packet  // dispatch_queue: limited capacity, stores requests ready to send
+	dispatchQueueCapacity int       // dispatch_queue capacity
+
+	// track request generation times by request id (for statistics)
 	generatedAtByReq map[int64]int
 
 	// stats
@@ -31,13 +36,19 @@ func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *Reques
 			ID:   id,
 			Type: NodeTypeRN,
 		},
-		generator:        generator,
-		masterIndex:     masterIndex,
-		generatedAtByReq: make(map[int64]int),
-		MinDelay:         int(^uint(0) >> 1), // max int
-		nextAddress:      DefaultAddressBase,
+		generator:            generator,
+		masterIndex:         masterIndex,
+		stimulusQueue:       make([]*Packet, 0),
+		dispatchQueue:       make([]*Packet, 0),
+		generatedAtByReq:    make(map[int64]int),
+		MinDelay:            int(^uint(0) >> 1), // max int
+		nextAddress:         DefaultAddressBase,
 	}
-	rn.AddQueue("pending_requests", 0, DefaultRequestQueueCapacity)
+	// Queue capacity will be set in Tick() based on cfg
+	// For now, use default value
+	rn.dispatchQueueCapacity = DefaultDispatchQueueCapacity
+	rn.AddQueue("stimulus_queue", 0, UnlimitedQueueCapacity)
+	rn.AddQueue("dispatch_queue", 0, DefaultDispatchQueueCapacity)
 	return rn
 }
 
@@ -65,81 +76,139 @@ func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID 
 
 // Tick may generate request(s) per cycle based on the configured RequestGenerator.
 // Supports generating multiple requests in the same cycle.
+// Implements three-phase logic: generate -> send -> release
 func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, packetIDs *PacketIDAllocator, slaves []*SlaveNode) {
 	if homeNodeID < 0 {
 		return
 	}
-	if rn.generator == nil {
-		return
+	
+	// Initialize dispatch queue capacity from config (first time or if config changed)
+	capacity := cfg.DispatchQueueCapacity
+	if capacity <= 0 || capacity == -1 {
+		capacity = DefaultDispatchQueueCapacity
+	}
+	if rn.dispatchQueueCapacity != capacity {
+		rn.dispatchQueueCapacity = capacity
+		rn.UpdateQueue("dispatch_queue", len(rn.dispatchQueue))
+		// Update queue capacity in visualization
+		for i := range rn.Queues {
+			if rn.Queues[i].Name == "dispatch_queue" {
+				rn.Queues[i].Capacity = capacity
+			}
+		}
 	}
 	
-	// Query generator for requests to generate
-	results := rn.generator.ShouldGenerate(cycle, rn.masterIndex, len(slaves))
-	if len(results) == 0 {
-		return
+	// Phase 1: Generate requests and add to stimulus_queue
+	if rn.generator != nil {
+		results := rn.generator.ShouldGenerate(cycle, rn.masterIndex, len(slaves))
+		for _, result := range results {
+			if !result.ShouldGenerate {
+				continue
+			}
+			if result.SlaveIndex < 0 || result.SlaveIndex >= len(slaves) {
+				continue
+			}
+			
+			// Get actual slave node ID from the slaves array
+			dstSNID := slaves[result.SlaveIndex].ID
+			
+			reqID := packetIDs.Allocate()
+			
+			// Determine address and data size
+			address := result.Address
+			if address == 0 {
+				address = rn.nextAddress
+				rn.nextAddress += DefaultCacheLineSize
+			}
+			
+			dataSize := result.DataSize
+			if dataSize == 0 {
+				dataSize = DefaultCacheLineSize
+			}
+			
+			// Determine transaction type
+			txnType := result.TransactionType
+			if txnType == "" {
+				txnType = CHITxnReadNoSnp
+			}
+			
+			// Generate request packet
+			// SentAt is initially 0, will be set when actually sent to Link
+			p := &Packet{
+				ID:              reqID,
+				Type:            "request", // legacy field
+				SrcID:           rn.ID,
+				DstID:           dstSNID,
+				GeneratedAt:     cycle,
+				SentAt:          0, // Will be set when sent to Link
+				MasterID:        rn.ID,
+				RequestID:       reqID,
+				TransactionType: txnType,
+				MessageType:     CHIMsgReq,
+				Address:         address,
+				DataSize:        dataSize,
+			}
+			
+			rn.TotalRequests++
+			rn.generatedAtByReq[reqID] = cycle
+			
+			// Add to stimulus_queue
+			rn.stimulusQueue = append(rn.stimulusQueue, p)
+		}
 	}
 	
-	// Generate all requested packets
-	for _, result := range results {
-		if !result.ShouldGenerate {
-			continue
+	// Phase 2: Send requests from dispatch_queue to Link (max BandwidthLimit per cycle)
+	// Only send packets that haven't been sent yet (SentAt == 0)
+	bandwidth := cfg.BandwidthLimit
+	if bandwidth <= 0 {
+		bandwidth = 1
+	}
+	sentThisCycle := 0
+	for i := 0; i < len(rn.dispatchQueue) && sentThisCycle < bandwidth; i++ {
+		p := rn.dispatchQueue[i]
+		// Check if packet has already been sent (SentAt > 0)
+		if p.SentAt > 0 {
+			continue // Already sent, skip
 		}
-		if result.SlaveIndex < 0 || result.SlaveIndex >= len(slaves) {
-			continue
-		}
-		
-		// Get actual slave node ID from the slaves array
-		dstSNID := slaves[result.SlaveIndex].ID
-		
-		reqID := packetIDs.Allocate()
-		
-		// Determine address and data size
-		address := result.Address
-		if address == 0 {
-			address = rn.nextAddress
-			rn.nextAddress += DefaultCacheLineSize
-		}
-		
-		dataSize := result.DataSize
-		if dataSize == 0 {
-			dataSize = DefaultCacheLineSize
-		}
-		
-		// Determine transaction type
-		txnType := result.TransactionType
-		if txnType == "" {
-			txnType = CHITxnReadNoSnp
-		}
-		
-		// Generate request packet
-		p := &Packet{
-			ID:              reqID,
-			Type:            "request", // legacy field
-			SrcID:           rn.ID,
-			DstID:           dstSNID,
-			GeneratedAt:     cycle,
-			SentAt:          cycle,
-			MasterID:        rn.ID,
-			RequestID:       reqID,
-			TransactionType: txnType,
-			MessageType:     CHIMsgReq,
-			Address:         address,
-			DataSize:        dataSize,
-		}
-		
-		rn.TotalRequests++
-		rn.generatedAtByReq[reqID] = cycle
-		rn.UpdateQueue("pending_requests", len(rn.generatedAtByReq))
-		
-		// Send request to Home Node
+		// Send packet
 		ch.Send(p, rn.ID, homeNodeID, cycle, cfg.MasterRelayLatency)
+		p.SentAt = cycle
+		sentThisCycle++
+		// Packet remains in dispatchQueue, will be removed when Comp response arrives
 	}
+	
+	// Phase 3: Release requests from stimulus_queue to dispatch_queue (max BandwidthLimit per cycle)
+	// Check dispatch_queue capacity before releasing
+	availableCapacity := rn.dispatchQueueCapacity - len(rn.dispatchQueue)
+	if availableCapacity > 0 {
+		releaseCount := bandwidth
+		if releaseCount > len(rn.stimulusQueue) {
+			releaseCount = len(rn.stimulusQueue)
+		}
+		if releaseCount > availableCapacity {
+			releaseCount = availableCapacity
+		}
+		
+		// Move packets from stimulus_queue to dispatch_queue
+		for i := 0; i < releaseCount; i++ {
+			p := rn.stimulusQueue[i]
+			rn.dispatchQueue = append(rn.dispatchQueue, p)
+		}
+		// Remove transferred packets from stimulus_queue
+		if releaseCount > 0 {
+			rn.stimulusQueue = rn.stimulusQueue[releaseCount:]
+		}
+	}
+	
+	// Update queue lengths for visualization
+	rn.UpdateQueue("stimulus_queue", len(rn.stimulusQueue))
+	rn.UpdateQueue("dispatch_queue", len(rn.dispatchQueue))
 }
 
 // CanReceive checks if the RequestNode can receive packets from the given edge.
-// RequestNode always can receive (unlimited capacity for pending_requests).
+// RequestNode always can receive (unlimited capacity for receiving Comp responses).
 func (rn *RequestNode) CanReceive(edgeKey EdgeKey, packetCount int) bool {
-	// pending_requests queue has unlimited capacity (-1)
+	// RequestNode can always receive Comp responses
 	return true
 }
 
@@ -154,6 +223,7 @@ func (rn *RequestNode) OnPackets(messages []*InFlightMessage, cycle int) {
 
 // OnResponse processes a CHI response arriving to the request node at given cycle.
 // Handles CompData responses for ReadNoSnp transactions.
+// Removes the corresponding request packet from dispatch_queue when Comp response arrives.
 func (rn *RequestNode) OnResponse(p *Packet, cycle int) {
 	if p == nil {
 		return
@@ -164,21 +234,42 @@ func (rn *RequestNode) OnResponse(p *Packet, cycle int) {
 	if !isCHIResponse && !isLegacyResponse {
 		return
 	}
-	gen, ok := rn.generatedAtByReq[p.RequestID]
-	if !ok {
+	
+	// Find and remove the corresponding request packet from dispatch_queue
+	requestID := p.RequestID
+	found := false
+	for i, reqPkt := range rn.dispatchQueue {
+		if reqPkt.RequestID == requestID {
+			// Remove packet from dispatch_queue using slice trick
+			rn.dispatchQueue = append(rn.dispatchQueue[:i], rn.dispatchQueue[i+1:]...)
+			found = true
+			break
+		}
+	}
+	
+	if !found {
+		// Packet not found in dispatch_queue, might have been already removed or never added
+		// This can happen in edge cases, just return
 		return
 	}
-	delay := cycle - gen
-	rn.CompletedCount++
-	rn.TotalDelay += int64(delay)
-	if delay > rn.MaxDelay {
-		rn.MaxDelay = delay
+	
+	// Update statistics
+	gen, ok := rn.generatedAtByReq[requestID]
+	if ok {
+		delay := cycle - gen
+		rn.CompletedCount++
+		rn.TotalDelay += int64(delay)
+		if delay > rn.MaxDelay {
+			rn.MaxDelay = delay
+		}
+		if delay < rn.MinDelay {
+			rn.MinDelay = delay
+		}
+		delete(rn.generatedAtByReq, requestID)
 	}
-	if delay < rn.MinDelay {
-		rn.MinDelay = delay
-	}
-	delete(rn.generatedAtByReq, p.RequestID)
-	rn.UpdateQueue("pending_requests", len(rn.generatedAtByReq))
+	
+	// Update queue lengths for visualization
+	rn.UpdateQueue("dispatch_queue", len(rn.dispatchQueue))
 }
 
 type RequestNodeStats struct {
@@ -207,25 +298,122 @@ func (rn *RequestNode) SnapshotStats() *RequestNodeStats {
 	}
 }
 
-// GetPendingRequests returns packet information for pending requests
-// Since RequestNode doesn't store actual Packet objects, we return simplified info
-// based on generatedAtByReq map
-func (rn *RequestNode) GetPendingRequests() []PacketInfo {
-	packets := make([]PacketInfo, 0, len(rn.generatedAtByReq))
-	for reqID, genCycle := range rn.generatedAtByReq {
+// GetQueuePackets returns packet information for stimulus_queue and dispatch_queue
+// Returns packets from both queues for visualization
+func (rn *RequestNode) GetQueuePackets() []PacketInfo {
+	packets := make([]PacketInfo, 0, len(rn.stimulusQueue)+len(rn.dispatchQueue))
+	
+	// Add packets from stimulus_queue
+	for _, p := range rn.stimulusQueue {
+		if p == nil {
+			continue
+		}
 		packets = append(packets, PacketInfo{
-			ID:              reqID,
-			RequestID:       reqID,
-			Type:            "request",
-			SrcID:           rn.ID,
-			MasterID:        rn.ID,
-			GeneratedAt:     genCycle,
-			TransactionType: CHITxnReadNoSnp,
-			MessageType:     CHIMsgReq,
-			// Other fields are not available since Packet is not stored
+			ID:              p.ID,
+			RequestID:      p.RequestID,
+			Type:           p.Type,
+			SrcID:          p.SrcID,
+			DstID:          p.DstID,
+			GeneratedAt:   p.GeneratedAt,
+			SentAt:         p.SentAt,
+			ReceivedAt:     p.ReceivedAt,
+			CompletedAt:    p.CompletedAt,
+			MasterID:       p.MasterID,
+			TransactionType: p.TransactionType,
+			MessageType:    p.MessageType,
+			ResponseType:   p.ResponseType,
+			Address:        p.Address,
+			DataSize:       p.DataSize,
+		})
+	}
+	
+	// Add packets from dispatch_queue
+	for _, p := range rn.dispatchQueue {
+		if p == nil {
+			continue
+		}
+		packets = append(packets, PacketInfo{
+			ID:              p.ID,
+			RequestID:      p.RequestID,
+			Type:           p.Type,
+			SrcID:          p.SrcID,
+			DstID:          p.DstID,
+			GeneratedAt:   p.GeneratedAt,
+			SentAt:         p.SentAt,
+			ReceivedAt:     p.ReceivedAt,
+			CompletedAt:    p.CompletedAt,
+			MasterID:       p.MasterID,
+			TransactionType: p.TransactionType,
+			MessageType:    p.MessageType,
+			ResponseType:   p.ResponseType,
+			Address:        p.Address,
+			DataSize:       p.DataSize,
+		})
+	}
+	
+	return packets
+}
+
+// GetStimulusQueuePackets returns packet information for stimulus_queue only
+func (rn *RequestNode) GetStimulusQueuePackets() []PacketInfo {
+	packets := make([]PacketInfo, 0, len(rn.stimulusQueue))
+	for _, p := range rn.stimulusQueue {
+		if p == nil {
+			continue
+		}
+		packets = append(packets, PacketInfo{
+			ID:              p.ID,
+			RequestID:      p.RequestID,
+			Type:           p.Type,
+			SrcID:          p.SrcID,
+			DstID:          p.DstID,
+			GeneratedAt:   p.GeneratedAt,
+			SentAt:         p.SentAt,
+			ReceivedAt:     p.ReceivedAt,
+			CompletedAt:    p.CompletedAt,
+			MasterID:       p.MasterID,
+			TransactionType: p.TransactionType,
+			MessageType:    p.MessageType,
+			ResponseType:   p.ResponseType,
+			Address:        p.Address,
+			DataSize:       p.DataSize,
 		})
 	}
 	return packets
+}
+
+// GetDispatchQueuePackets returns packet information for dispatch_queue only
+func (rn *RequestNode) GetDispatchQueuePackets() []PacketInfo {
+	packets := make([]PacketInfo, 0, len(rn.dispatchQueue))
+	for _, p := range rn.dispatchQueue {
+		if p == nil {
+			continue
+		}
+		packets = append(packets, PacketInfo{
+			ID:              p.ID,
+			RequestID:      p.RequestID,
+			Type:           p.Type,
+			SrcID:          p.SrcID,
+			DstID:          p.DstID,
+			GeneratedAt:   p.GeneratedAt,
+			SentAt:         p.SentAt,
+			ReceivedAt:     p.ReceivedAt,
+			CompletedAt:    p.CompletedAt,
+			MasterID:       p.MasterID,
+			TransactionType: p.TransactionType,
+			MessageType:    p.MessageType,
+			ResponseType:   p.ResponseType,
+			Address:        p.Address,
+			DataSize:       p.DataSize,
+		})
+	}
+	return packets
+}
+
+// GetPendingRequests is a legacy method kept for backward compatibility
+// Deprecated: Use GetQueuePackets() instead
+func (rn *RequestNode) GetPendingRequests() []PacketInfo {
+	return rn.GetQueuePackets()
 }
 
 // Legacy type aliases for backward compatibility during transition

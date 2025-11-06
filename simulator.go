@@ -253,6 +253,11 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		nodeCount++
 	}
 	nodes := make([]NodeSnapshot, 0, nodeCount)
+	
+	// Debug: log node counts
+	if cycle == 0 {
+		log.Printf("[DEBUG] buildFrame cycle 0: %d Masters, %d Slaves, Relay=%v", len(s.Masters), len(s.Slaves), s.Relay != nil)
+	}
 
 	for _, m := range s.Masters {
 		stats := m.SnapshotStats()
@@ -265,12 +270,30 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"nodeType":          "RN", // CHI Request Node
 			"chiProtocol":       true,
 		}
-		pendingPackets := m.GetPendingRequests()
+		// Get packet info for both queues separately
+		stimulusPackets := m.GetStimulusQueuePackets()
+		dispatchPackets := m.GetDispatchQueuePackets()
+		// Clone queues and add packet info for both stimulus_queue and dispatch_queue
+		queueInfo := m.GetQueueInfo()
+		clonedQueues := cloneQueues(queueInfo)
+		// Add packets to respective queues
+		for i := range clonedQueues {
+			if clonedQueues[i].Name == "stimulus_queue" {
+				clonedQueues[i].Packets = stimulusPackets
+			} else if clonedQueues[i].Name == "dispatch_queue" {
+				clonedQueues[i].Packets = dispatchPackets
+			}
+		}
+		// Get label with fallback
+		label, ok := s.nodeLabels[m.ID]
+		if !ok {
+			label = fmt.Sprintf("RN %d", m.ID)
+		}
 		nodes = append(nodes, NodeSnapshot{
 			ID:      m.ID,
 			Type:    m.Type,
-			Label:   s.nodeLabels[m.ID],
-			Queues:  cloneQueuesWithPackets(m.GetQueueInfo(), "pending_requests", pendingPackets),
+			Label:   label,
+			Queues:  clonedQueues,
 			Payload: payload,
 		})
 	}
@@ -285,10 +308,15 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"chiProtocol":    true,
 		}
 		queuePackets := sl.GetQueuePackets()
+		// Get label with fallback
+		label, ok := s.nodeLabels[sl.ID]
+		if !ok {
+			label = fmt.Sprintf("SN %d", sl.ID)
+		}
 		nodes = append(nodes, NodeSnapshot{
 			ID:      sl.ID,
 			Type:    sl.Type,
-			Label:   s.nodeLabels[sl.ID],
+			Label:   label,
 			Queues:  cloneQueuesWithPackets(sl.GetQueueInfo(), "request_queue", queuePackets),
 			Payload: payload,
 		})
@@ -310,10 +338,15 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"chiProtocol": true,
 		}
 		queuePackets := s.Relay.GetQueuePackets()
+		// Get label with fallback
+		label, ok := s.nodeLabels[s.Relay.ID]
+		if !ok {
+			label = "HN 0"
+		}
 		nodes = append(nodes, NodeSnapshot{
 			ID:      s.Relay.ID,
 			Type:    s.Relay.Type,
-			Label:   s.nodeLabels[s.Relay.ID],
+			Label:   label,
 			Queues:  cloneQueuesWithPackets(s.Relay.GetQueueInfo(), "forward_queue", queuePackets),
 			Payload: payload,
 		})
