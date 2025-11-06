@@ -59,16 +59,19 @@
 3. **Web 服务器** (`web_server.go`)
    - 维护最新的帧数据和统计信息（线程安全）
    - 处理 HTTP 请求：
-     - `GET /api/frame` - 返回最新帧数据
+     - `GET /api/frame` - 返回最新帧数据（兼容性保留）
      - `GET /api/stats` - 返回统计信息
      - `POST /api/control` - 接收控制命令（pause/resume/reset）
+     - `WS /ws` - WebSocket 连接端点（实时推送）
    - 通过 channel 队列传递控制命令
+   - 支持 WebSocket 实时推送帧数据
 
 4. **前端页面** (`web/static/index.html`)
-   - 每 500ms 轮询 `GET /api/frame` 获取最新数据
+   - 优先使用 WebSocket 连接获取实时数据推送（延迟 < 50ms）
+   - WebSocket 连接失败时自动回退到 HTTP 轮询（500ms 间隔）
    - 首次加载时创建拓扑图（Master 左，Relay 中，Slave 右）
    - 后续更新只更新节点数据，不重新布局
-   - 通过 `POST /api/control` 发送控制命令
+   - 通过 WebSocket 或 `POST /api/control` 发送控制命令
 
 ### 控制流程
 
@@ -93,13 +96,16 @@ Simulator.Run() 检查命令并执行
 #### 后端
 - **语言**: Go 1.21+
 - **Web 框架**: net/http（标准库）
+- **WebSocket**: gorilla/websocket（实时数据传输）
 - **并发模型**: Goroutine + Channel
 - **数据同步**: sync.RWMutex（保护共享状态）
 
 #### 前端
 - **可视化库**: Cytoscape.js（通过 CDN 加载）
 - **技术**: 原生 JavaScript（无需构建工具）
-- **通信方式**: REST API 轮询（500ms 间隔）
+- **通信方式**: 
+  - WebSocket 实时推送（优先，延迟 < 50ms）
+  - HTTP 轮询（500ms 间隔，WebSocket 失败时自动回退）
 - **布局算法**: 自定义固定布局（Master 左、Relay 中、Slave 右）
 
 #### 部署
@@ -207,10 +213,19 @@ flow_control_sim/
 
 ### 开发环境设置
 
-**安装依赖**:
+**首次配置或克隆项目后，需要同步依赖**:
 ```bash
+# 推荐：同步依赖并更新 go.sum（推荐方式）
+go mod tidy
+
+# 或者仅下载依赖（不更新 go.sum）
 go mod download
 ```
+
+**说明**:
+- `go mod tidy`: 下载依赖、更新 `go.sum` 校验和文件、清理无用依赖（推荐）
+- `go mod download`: 仅下载依赖到本地缓存
+- 新环境配置时，建议使用 `go mod tidy` 确保依赖完整性
 
 **运行模拟器（Headless 模式）**:
 ```bash
@@ -357,7 +372,8 @@ docker-compose up -d
 - `404 Not Found`: 模拟尚未开始或没有可用数据
 
 **使用说明**:
-- 前端每 500ms 轮询此端点获取最新数据
+- 前端优先使用 WebSocket 实时接收数据（推荐）
+- WebSocket 不可用时，前端会回退到每 500ms 轮询此端点
 - 首次调用时创建拓扑图，后续调用只更新节点数据
 
 #### GET /api/stats
@@ -424,6 +440,46 @@ Content-Type: application/json
 **使用说明**:
 - 命令通过 channel 队列传递，模拟器在每个 cycle 检查命令
 - 重置操作会重新初始化模拟器，使用新配置（如果提供）
+
+### WebSocket API
+
+#### WS /ws
+
+建立 WebSocket 连接，用于实时接收模拟帧数据。
+
+**连接**: `ws://127.0.0.1:8080/ws` 或 `wss://127.0.0.1:8080/ws`（HTTPS 环境）
+
+**消息格式**:
+
+**客户端 → 服务端**（控制命令）:
+```json
+{
+  "type": "pause" | "resume" | "reset" | "step",
+  "configName": "backpressure_test",
+  "totalCycles": 1000
+}
+```
+
+**服务端 → 客户端**（帧数据推送）:
+```json
+{
+  "cycle": 100,
+  "nodes": [...],
+  "edges": [...],
+  "stats": {...}
+}
+```
+
+**特性**:
+- 连接建立后立即发送最新帧数据
+- 每次模拟器更新帧时自动推送给所有连接的客户端
+- 支持通过 WebSocket 发送控制命令（pause/resume/reset/step）
+- 自动重连机制（连接断开后 2 秒自动重试）
+
+**使用说明**:
+- 前端优先使用 WebSocket 连接，提供更低的延迟（< 50ms）
+- WebSocket 连接失败时自动回退到 HTTP 轮询
+- 支持多客户端同时连接
 
 ### 静态文件服务
 

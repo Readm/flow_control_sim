@@ -445,7 +445,8 @@
 
     <script>
         let cy;
-        let pollInterval;
+        let ws = null; // WebSocket connection
+        let wsReconnectTimeout = null;
         let isPaused = true; // Web mode starts paused at cycle 0
         let currentFrame = null;
         let topologyInitialized = false;
@@ -1357,17 +1358,29 @@
             panel.innerHTML = html;
         }
 
-        // Send control command
+        // Send control command (prefer WebSocket, fallback to HTTP)
         async function sendControl(type, configName, totalCycles) {
-            try {
-                const body = { type: type };
-                if (configName) {
-                    body.configName = configName;
-                }
-                if (totalCycles !== undefined && totalCycles !== null) {
-                    body.totalCycles = totalCycles;
-                }
+            const body = { type: type };
+            if (configName) {
+                body.configName = configName;
+            }
+            if (totalCycles !== undefined && totalCycles !== null) {
+                body.totalCycles = totalCycles;
+            }
 
+            // Try WebSocket first if connected
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                    ws.send(JSON.stringify(body));
+                    hideError();
+                    return true;
+                } catch (error) {
+                    console.warn('[WebSocket] Failed to send via WebSocket, falling back to HTTP:', error);
+                }
+            }
+
+            // Fallback to HTTP
+            try {
                 const response = await fetch('/api/control', {
                     method: 'POST',
                     headers: {
@@ -1464,25 +1477,71 @@
             return frame;
         }
 
-        // Start polling for frames
-        function startPolling() {
-            if (pollInterval) {
-                clearInterval(pollInterval);
+        // Connect to WebSocket for real-time updates
+        function connectWebSocket() {
+            // Close existing connection if any
+            if (ws) {
+                ws.close();
+                ws = null;
             }
-            pollInterval = setInterval(async () => {
-                // Poll regardless of pause state to get updates after step commands
-                const frame = await fetchFrame();
-                if (frame) {
-                    updateVisualization(frame);
-                }
-            }, 500); // Poll every 500ms
+
+            // Clear any pending reconnect
+            if (wsReconnectTimeout) {
+                clearTimeout(wsReconnectTimeout);
+                wsReconnectTimeout = null;
+            }
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            try {
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {
+                    console.log('[WebSocket] Connected');
+                    hideError();
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const frame = JSON.parse(event.data);
+                        if (frame) {
+                            updateVisualization(frame);
+                        }
+                    } catch (error) {
+                        console.error('[WebSocket] Error parsing frame:', error);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    console.error('[WebSocket] Error:', error);
+                    showError('WebSocket connection error. Please refresh the page to reconnect.');
+                };
+
+                ws.onclose = () => {
+                    console.log('[WebSocket] Disconnected');
+                    ws = null;
+                    // Attempt to reconnect after 2 seconds
+                    wsReconnectTimeout = setTimeout(() => {
+                        console.log('[WebSocket] Attempting to reconnect...');
+                        connectWebSocket();
+                    }, 2000);
+                };
+            } catch (error) {
+                console.error('[WebSocket] Failed to connect:', error);
+                showError('WebSocket connection failed. Please refresh the page to reconnect.');
+            }
         }
 
-        // Stop polling
-        function stopPolling() {
-            if (pollInterval) {
-                clearInterval(pollInterval);
-                pollInterval = null;
+        // Disconnect WebSocket
+        function disconnectWebSocket() {
+            if (wsReconnectTimeout) {
+                clearTimeout(wsReconnectTimeout);
+                wsReconnectTimeout = null;
+            }
+            if (ws) {
+                ws.close();
+                ws = null;
             }
         }
 
@@ -1586,7 +1645,12 @@
         loadConfigurations();
         initCytoscape();
         updateButtonStates(); // Set initial button states (paused at cycle 0)
-        startPolling();
+        connectWebSocket(); // Connect to WebSocket for real-time updates
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            disconnectWebSocket();
+        });
 
         // Modal close event listeners (initialize after DOM is ready)
         document.getElementById('modalClose').addEventListener('click', closePacketModal);
