@@ -905,89 +905,7 @@
             modal.classList.remove('show');
         }
 
-        // Calculate a point on the bezier curve at parameter t (0 to 1)
-        function calculateBezierPoint(cyEdge, t) {
-            if (!cyEdge || cyEdge.length === 0) {
-                return null;
-            }
-
-            const source = cyEdge.source();
-            const target = cyEdge.target();
-            const sourcePos = source.renderedPosition();
-            const targetPos = target.renderedPosition();
-
-            // For bezier curves, Cytoscape uses control points
-            // We'll approximate the curve by using a quadratic bezier with a control point
-            const midX = (sourcePos.x + targetPos.x) / 2;
-            const midY = (sourcePos.y + targetPos.y) / 2;
-            
-            // Calculate perpendicular offset for bezier control point
-            const dx = targetPos.x - sourcePos.x;
-            const dy = targetPos.y - sourcePos.y;
-            const length = Math.sqrt(dx * dx + dy * dy);
-            
-            if (length === 0) {
-                return { x: sourcePos.x, y: sourcePos.y };
-            }
-            
-            // Perpendicular vector (rotated 90 degrees)
-            const perpX = -dy / length;
-            const perpY = dx / length;
-            
-            // Control point offset (adjust curve height)
-            const curveOffset = Math.min(length * 0.3, 50);
-            const controlX = midX + perpX * curveOffset;
-            const controlY = midY + perpY * curveOffset;
-
-            // Quadratic bezier formula: (1-t)^2*P0 + 2*(1-t)*t*P1 + t^2*P2
-            const x = (1 - t) * (1 - t) * sourcePos.x + 2 * (1 - t) * t * controlX + t * t * targetPos.x;
-            const y = (1 - t) * (1 - t) * sourcePos.y + 2 * (1 - t) * t * controlY + t * t * targetPos.y;
-            
-            return { x, y };
-        }
-
-        // Calculate points along a bezier curve for an edge (for calculating perpendicular direction)
-        function calculateBezierPoints(cyEdge, numPoints) {
-            const points = [];
-            for (let i = 0; i <= numPoints; i++) {
-                const t = i / numPoints;
-                const point = calculateBezierPoint(cyEdge, t);
-                if (point) {
-                    points.push(point);
-                }
-            }
-            return points;
-        }
-
-        // Calculate perpendicular direction at a point on the curve at parameter t
-        function calculatePerpendicularAtT(cyEdge, t) {
-            const dt = 0.01; // Small delta for calculating tangent
-            const t1 = Math.max(0, t - dt);
-            const t2 = Math.min(1, t + dt);
-            
-            const p1 = calculateBezierPoint(cyEdge, t1);
-            const p2 = calculateBezierPoint(cyEdge, t2);
-            
-            if (!p1 || !p2) {
-                return { x: 0, y: 1 }; // Default vertical
-            }
-            
-            const dx = p2.x - p1.x;
-            const dy = p2.y - p1.y;
-            const length = Math.sqrt(dx * dx + dy * dy);
-            
-            if (length === 0) {
-                return { x: 0, y: 1 };
-            }
-
-            // Perpendicular vector (rotated 90 degrees clockwise)
-            return {
-                x: dy / length,
-                y: -dx / length
-            };
-        }
-
-        // Draw pipeline state points on edges
+        // Draw pipeline state points on edges using Cytoscape's midpoint API
         function drawPipelineStatePoints(frame) {
             if (!frame || !frame.edges || !cy) {
                 return;
@@ -1004,8 +922,6 @@
             // Get container position for coordinate conversion
             const container = document.getElementById('cy');
             const containerRect = container.getBoundingClientRect();
-            const cyPan = cy.pan();
-            const cyZoom = cy.zoom();
 
             frame.edges.forEach(edge => {
                 const edgeId = `e${edge.source}-${edge.target}`;
@@ -1021,79 +937,124 @@
                 const bandwidthLimit = edgeData.bandwidthLimit || edge.bandwidthLimit || 1;
                 const pipelineStages = edgeData.pipelineStages || edge.pipelineStages || [];
 
-                // Calculate points along the bezier curve
-                const curvePoints = calculateBezierPoints(cyEdge, latency);
-                
-                if (curvePoints.length === 0) {
-                    return;
-                }
-
-                // Create a mapping of stageIndex to PacketCount
-                const stageMap = {};
-                pipelineStages.forEach(stage => {
-                    stageMap[stage.stageIndex] = stage.packetCount;
-                });
-
-                // Draw points for each stage
-                for (let stageIdx = 0; stageIdx < latency; stageIdx++) {
-                    // Calculate point position along the curve
-                    // Adjust positions to avoid overlapping with nodes while maintaining semantic meaning
-                    // Slot[0] (first stage, ready to arrive) should be near target, Slot[latency-1] (last stage, entry point) near source
-                    let t;
-                    if (latency === 1) {
-                        t = 0.5; // Single stage in the middle
-                    } else {
-                        // Distribute points from 40% to 60% of the curve to avoid node overlap
-                        // Map stageIdx from [0, latency-1] to [0.6, 0.4] (reversed: Slot[0] near target, Slot[latency-1] near source)
-                        // This ensures no point is at t=0 (source node) or t=1 (target node)
-                        t = 0.6 - (stageIdx / (latency - 1)) * 0.2;
-                    }
-                    
-                    // Directly calculate the point on the curve at parameter t
-                    const curvePoint = calculateBezierPoint(cyEdge, t);
-                    if (!curvePoint) {
-                        continue;
-                    }
-                    
-                    // Calculate perpendicular direction at this point
-                    const perpDir = calculatePerpendicularAtT(cyEdge, t);
-
-                    // renderedPosition() already returns viewport coordinates (with zoom and pan applied)
-                    // Since SVG overlay is positioned absolutely over the Cytoscape container, we can use these coordinates directly
-                    const viewportX = curvePoint.x;
-                    const viewportY = curvePoint.y;
-
-                    const packetCount = stageMap[stageIdx] || 0;
-                    const pointSpacing = 4; // Spacing between points in perpendicular direction
-                    const totalWidth = (bandwidthLimit - 1) * pointSpacing;
-                    const startOffset = -totalWidth / 2;
-
-                    // Draw points for this stage
-                    for (let i = 0; i < bandwidthLimit; i++) {
-                        const offsetX = startOffset + i * pointSpacing;
-                        const pointX = viewportX + perpDir.x * offsetX;
-                        const pointY = viewportY + perpDir.y * offsetX;
-
-                        const isFilled = i < packetCount;
-                        const color = isFilled ? '#ff4d4f' : '#999';
-                        const radius = 3;
-
-                        // Create circle element
-                        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-                        circle.setAttribute('cx', pointX);
-                        circle.setAttribute('cy', pointY);
-                        circle.setAttribute('r', radius);
-                        circle.setAttribute('fill', color);
-                        circle.setAttribute('stroke', '#fff');
-                        circle.setAttribute('stroke-width', '0.5');
-                        overlay.appendChild(circle);
-                    }
-                }
+                // Draw points using Cytoscape's midpoint API
+                drawPointsOnEdge(cyEdge, edge, latency, bandwidthLimit, pipelineStages, overlay);
             });
 
             // Update SVG size to match container
             overlay.setAttribute('width', containerRect.width);
             overlay.setAttribute('height', containerRect.height);
+        }
+
+        // Draw pipeline state points on a single edge using Cytoscape's midpoint API
+        function drawPointsOnEdge(cyEdge, edge, latency, bandwidthLimit, pipelineStages, overlay) {
+            const container = document.getElementById('cy');
+            const containerRect = container.getBoundingClientRect();
+
+            // Create a mapping of stageIndex to PacketCount
+            const stageMap = {};
+            pipelineStages.forEach(stage => {
+                stageMap[stage.stageIndex] = stage.packetCount;
+            });
+
+            // Get source and target positions using Cytoscape API
+            let sourcePos, targetPos;
+            try {
+                // Try to use sourceEndpoint and targetEndpoint if available
+                if (typeof cyEdge.sourceEndpoint === 'function' && typeof cyEdge.targetEndpoint === 'function') {
+                    sourcePos = cyEdge.sourceEndpoint();
+                    targetPos = cyEdge.targetEndpoint();
+                } else {
+                    // Fallback to renderedPosition
+                    sourcePos = cyEdge.source().renderedPosition();
+                    targetPos = cyEdge.target().renderedPosition();
+                }
+            } catch (e) {
+                // If API calls fail, use renderedPosition
+                sourcePos = cyEdge.source().renderedPosition();
+                targetPos = cyEdge.target().renderedPosition();
+            }
+
+            // Get midpoint using Cytoscape API
+            let midPoint;
+            try {
+                midPoint = cyEdge.midpoint();
+            } catch (e) {
+                // Calculate midpoint manually if API fails
+                midPoint = {
+                    x: (sourcePos.x + targetPos.x) / 2,
+                    y: (sourcePos.y + targetPos.y) / 2
+                };
+            }
+
+            // Draw points for each stage using linear interpolation
+            for (let stageIdx = 0; stageIdx < latency; stageIdx++) {
+                // Calculate position along the edge
+                // Slot[0] (first stage, ready to arrive) should be near target
+                // Slot[latency-1] (last stage, entry point) near source
+                let ratio;
+                if (latency === 1) {
+                    ratio = 0.5; // Single stage at midpoint
+                } else {
+                    // Distribute points from 40% to 60% of the edge to avoid node overlap
+                    // Map stageIdx from [0, latency-1] to [0.6, 0.4] (reversed)
+                    ratio = 0.6 - (stageIdx / (latency - 1)) * 0.2;
+                }
+
+                // Interpolate position between source, midpoint, and target
+                let pointX, pointY;
+                if (ratio <= 0.5) {
+                    // Between source and midpoint
+                    const t = ratio * 2; // Map [0, 0.5] to [0, 1]
+                    pointX = sourcePos.x + (midPoint.x - sourcePos.x) * t;
+                    pointY = sourcePos.y + (midPoint.y - sourcePos.y) * t;
+                } else {
+                    // Between midpoint and target
+                    const t = (ratio - 0.5) * 2; // Map [0.5, 1] to [0, 1]
+                    pointX = midPoint.x + (targetPos.x - midPoint.x) * t;
+                    pointY = midPoint.y + (targetPos.y - midPoint.y) * t;
+                }
+
+                // Calculate perpendicular direction
+                // Use the direction from source to target
+                const dx = targetPos.x - sourcePos.x;
+                const dy = targetPos.y - sourcePos.y;
+                const length = Math.sqrt(dx * dx + dy * dy);
+                
+                let perpDir = { x: 0, y: 1 }; // Default vertical
+                if (length > 0) {
+                    // Perpendicular vector (rotated 90 degrees clockwise)
+                    perpDir = {
+                        x: dy / length,
+                        y: -dx / length
+                    };
+                }
+
+                const packetCount = stageMap[stageIdx] || 0;
+                const pointSpacing = 4;
+                const totalWidth = (bandwidthLimit - 1) * pointSpacing;
+                const startOffset = -totalWidth / 2;
+
+                // Draw points for this stage
+                for (let i = 0; i < bandwidthLimit; i++) {
+                    const offsetX = startOffset + i * pointSpacing;
+                    const finalX = pointX + perpDir.x * offsetX;
+                    const finalY = pointY + perpDir.y * offsetX;
+
+                    const isFilled = i < packetCount;
+                    const color = isFilled ? '#ff4d4f' : '#999';
+                    const radius = 3;
+
+                    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    circle.setAttribute('cx', finalX);
+                    circle.setAttribute('cy', finalY);
+                    circle.setAttribute('r', radius);
+                    circle.setAttribute('fill', color);
+                    circle.setAttribute('stroke', '#fff');
+                    circle.setAttribute('stroke-width', '0.5');
+                    overlay.appendChild(circle);
+                }
+            }
         }
 
         // Fetch frame data from API
