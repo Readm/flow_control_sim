@@ -784,6 +784,27 @@
                     drawPipelineStatePoints(currentFrame);
                 }
             });
+            
+            // Recalculate points on pan (translation)
+            cy.on('pan', function() {
+                if (currentFrame) {
+                    drawPipelineStatePoints(currentFrame);
+                }
+            });
+            
+            // Recalculate points on zoom
+            cy.on('zoom', function() {
+                if (currentFrame) {
+                    drawPipelineStatePoints(currentFrame);
+                }
+            });
+            
+            // Recalculate points on panzoom (combined pan and zoom)
+            cy.on('panzoom', function() {
+                if (currentFrame) {
+                    drawPipelineStatePoints(currentFrame);
+                }
+            });
         }
 
         // Format CHI protocol field values for display
