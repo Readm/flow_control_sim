@@ -4,7 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Flow Control Simulator - Visualization</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qtip2@3.0.3/dist/jquery.qtip.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/qtip2@3.0.3/dist/jquery.qtip.min.css">
     <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.27.0/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-qtip@2.8.0/cytoscape-qtip.js"></script>
     <style>
         * {
             margin: 0;
@@ -671,6 +675,11 @@
                 ]
             });
 
+            // Register cytoscape-qtip plugin if available
+            if (typeof cyqtip === 'function') {
+                cyqtip(cytoscape);
+            }
+
             // Add hover tooltip for nodes
             cy.on('mouseover', 'node', function(evt) {
                 const node = evt.target;
@@ -952,14 +961,25 @@
                     return;
                 }
 
+                // Get the first edge element from the collection
+                const cyEdgeElement = cyEdge[0];
+
                 // Get data from both frame edge and Cytoscape edge (Cytoscape edge has the latest data)
-                const edgeData = cyEdge.data();
+                const edgeData = cyEdgeElement.data();
                 const latency = edgeData.latency || edge.latency || 1;
                 const bandwidthLimit = edgeData.bandwidthLimit || edge.bandwidthLimit || 1;
                 const pipelineStages = edgeData.pipelineStages || edge.pipelineStages || [];
 
+                // Validate values before drawing
+                if (!latency || latency <= 0 || !isFinite(latency)) {
+                    return;
+                }
+                if (!bandwidthLimit || bandwidthLimit <= 0 || !isFinite(bandwidthLimit)) {
+                    return;
+                }
+
                 // Draw points using Cytoscape's midpoint API
-                drawPointsOnEdge(cyEdge, edge, latency, bandwidthLimit, pipelineStages, overlay);
+                drawPointsOnEdge(cyEdgeElement, edge, latency, bandwidthLimit, pipelineStages, overlay);
             });
 
             // Update SVG size to match container
@@ -968,49 +988,129 @@
         }
 
         // Draw pipeline state points on a single edge using Cytoscape's midpoint API
+        // Implementation: Use Cytoscape's midpoint() API + linear interpolation
+        // This avoids manual Bezier curve calculation and ensures coordinate alignment
         function drawPointsOnEdge(cyEdge, edge, latency, bandwidthLimit, pipelineStages, overlay) {
             const container = document.getElementById('cy');
+            if (!container) {
+                return;
+            }
             const containerRect = container.getBoundingClientRect();
+
+            // Validate input parameters
+            if (!latency || latency <= 0 || !isFinite(latency)) {
+                return;
+            }
+            if (!bandwidthLimit || bandwidthLimit <= 0 || !isFinite(bandwidthLimit)) {
+                return;
+            }
 
             // Create a mapping of stageIndex to PacketCount
             const stageMap = {};
-            pipelineStages.forEach(stage => {
-                stageMap[stage.stageIndex] = stage.packetCount;
-            });
-
-            // Get source and target positions using Cytoscape API
-            let sourcePos, targetPos;
-            try {
-                // Try to use sourceEndpoint and targetEndpoint if available
-                if (typeof cyEdge.sourceEndpoint === 'function' && typeof cyEdge.targetEndpoint === 'function') {
-                    sourcePos = cyEdge.sourceEndpoint();
-                    targetPos = cyEdge.targetEndpoint();
-                } else {
-                    // Fallback to renderedPosition
-                    sourcePos = cyEdge.source().renderedPosition();
-                    targetPos = cyEdge.target().renderedPosition();
-                }
-            } catch (e) {
-                // If API calls fail, use renderedPosition
-                sourcePos = cyEdge.source().renderedPosition();
-                targetPos = cyEdge.target().renderedPosition();
+            if (pipelineStages && Array.isArray(pipelineStages)) {
+                pipelineStages.forEach(stage => {
+                    if (stage && typeof stage.stageIndex === 'number' && typeof stage.packetCount === 'number') {
+                        stageMap[stage.stageIndex] = stage.packetCount;
+                    }
+                });
             }
 
-            // Get midpoint using Cytoscape API
+            // Get source and target nodes
+            const sourceNode = cyEdge.source();
+            const targetNode = cyEdge.target();
+            
+            if (!sourceNode || !targetNode || sourceNode.length === 0 || targetNode.length === 0) {
+                console.warn('Edge source or target node not found');
+                return;
+            }
+
+            // Get source and target endpoint positions using renderedPosition()
+            // renderedPosition() returns coordinates relative to the Cytoscape container
+            // which matches the SVG overlay coordinate system
+            let sourcePos, targetPos;
+            
+            try {
+                // Use renderedPosition() which already accounts for zoom and pan
+                // and returns coordinates relative to the container
+                sourcePos = sourceNode.renderedPosition();
+                targetPos = targetNode.renderedPosition();
+                
+                // Validate positions
+                if (!sourcePos || !targetPos ||
+                    !isFinite(sourcePos.x) || !isFinite(sourcePos.y) ||
+                    !isFinite(targetPos.x) || !isFinite(targetPos.y)) {
+                    throw new Error('renderedPosition() returned invalid values');
+                }
+            } catch (e) {
+                console.warn('Failed to get edge positions using renderedPosition():', e);
+                // Fallback: try position() and convert manually
+                try {
+                    const srcModelPos = sourceNode.position();
+                    const tgtModelPos = targetNode.position();
+                    const zoom = cy.zoom();
+                    const pan = cy.pan();
+                    
+                    if (isFinite(srcModelPos.x) && isFinite(srcModelPos.y) &&
+                        isFinite(tgtModelPos.x) && isFinite(tgtModelPos.y)) {
+                        sourcePos = {
+                            x: srcModelPos.x * zoom + pan.x,
+                            y: srcModelPos.y * zoom + pan.y
+                        };
+                        targetPos = {
+                            x: tgtModelPos.x * zoom + pan.x,
+                            y: tgtModelPos.y * zoom + pan.y
+                        };
+                    } else {
+                        throw new Error('position() also returned invalid values');
+                    }
+                } catch (e2) {
+                    console.warn('All methods failed to get edge positions:', e2);
+                    return;
+                }
+            }
+
+            // Get midpoint using Cytoscape's midpoint() API
+            // IMPORTANT: midpoint() returns MODEL coordinates, not rendered coordinates
+            // We need to convert them to rendered coordinates using zoom and pan
             let midPoint;
             try {
-                midPoint = cyEdge.midpoint();
+                // Get midpoint in model coordinates
+                const midPointModel = cyEdge.midpoint();
+                
+                // Validate model midpoint
+                if (midPointModel && isFinite(midPointModel.x) && isFinite(midPointModel.y)) {
+                    // Convert model coordinates to rendered coordinates
+                    const zoom = cy.zoom();
+                    const pan = cy.pan();
+                    midPoint = {
+                        x: midPointModel.x * zoom + pan.x,
+                        y: midPointModel.y * zoom + pan.y
+                    };
+                } else {
+                    // Fallback: calculate from rendered source and target positions
+                    midPoint = {
+                        x: (sourcePos.x + targetPos.x) / 2,
+                        y: (sourcePos.y + targetPos.y) / 2
+                    };
+                }
             } catch (e) {
-                // Calculate midpoint manually if API fails
+                // Fallback: calculate midpoint manually from rendered positions
                 midPoint = {
                     x: (sourcePos.x + targetPos.x) / 2,
                     y: (sourcePos.y + targetPos.y) / 2
                 };
             }
+            
+            // Final validation
+            if (!isFinite(midPoint.x) || !isFinite(midPoint.y)) {
+                console.warn('Failed to get valid midpoint');
+                return;
+            }
 
             // Draw points for each stage using linear interpolation
+            // Interpolate between source, midpoint, and target to approximate curve position
             for (let stageIdx = 0; stageIdx < latency; stageIdx++) {
-                // Calculate position along the edge
+                // Calculate position ratio along the edge
                 // Slot[0] (first stage, ready to arrive) should be near target
                 // Slot[latency-1] (last stage, entry point) near source
                 let ratio;
@@ -1022,7 +1122,8 @@
                     ratio = 0.6 - (stageIdx / (latency - 1)) * 0.2;
                 }
 
-                // Interpolate position between source, midpoint, and target
+                // Linear interpolation between source, midpoint, and target
+                // This approximates the curve position for better alignment
                 let pointX, pointY;
                 if (ratio <= 0.5) {
                     // Between source and midpoint
@@ -1036,18 +1137,27 @@
                     pointY = midPoint.y + (targetPos.y - midPoint.y) * t;
                 }
 
-                // Calculate perpendicular direction
-                // Use the direction from source to target
-                const dx = targetPos.x - sourcePos.x;
-                const dy = targetPos.y - sourcePos.y;
-                const length = Math.sqrt(dx * dx + dy * dy);
+                // Calculate perpendicular direction at the interpolated point
+                // For linear interpolation, use the local direction vector
+                // This is the direction from the previous point to the next point along the edge
+                let dirX, dirY;
+                if (ratio <= 0.5) {
+                    // Direction from source to midpoint
+                    dirX = midPoint.x - sourcePos.x;
+                    dirY = midPoint.y - sourcePos.y;
+                } else {
+                    // Direction from midpoint to target
+                    dirX = targetPos.x - midPoint.x;
+                    dirY = targetPos.y - midPoint.y;
+                }
                 
+                const length = Math.sqrt(dirX * dirX + dirY * dirY);
                 let perpDir = { x: 0, y: 1 }; // Default vertical
                 if (length > 0) {
                     // Perpendicular vector (rotated 90 degrees clockwise)
                     perpDir = {
-                        x: dy / length,
-                        y: -dx / length
+                        x: dirY / length,
+                        y: -dirX / length
                     };
                 }
 
@@ -1056,11 +1166,23 @@
                 const totalWidth = (bandwidthLimit - 1) * pointSpacing;
                 const startOffset = -totalWidth / 2;
 
+                // Validate interpolated point position
+                if (!isFinite(pointX) || !isFinite(pointY)) {
+                    console.warn(`Invalid point position for stage ${stageIdx}:`, { pointX, pointY });
+                    continue;
+                }
+
                 // Draw points for this stage
                 for (let i = 0; i < bandwidthLimit; i++) {
                     const offsetX = startOffset + i * pointSpacing;
                     const finalX = pointX + perpDir.x * offsetX;
                     const finalY = pointY + perpDir.y * offsetX;
+
+                    // Validate final coordinates before drawing
+                    if (!isFinite(finalX) || !isFinite(finalY)) {
+                        console.warn(`Invalid final coordinates for stage ${stageIdx}, point ${i}:`, { finalX, finalY });
+                        continue;
+                    }
 
                     const isFilled = i < packetCount;
                     const color = isFilled ? '#ff4d4f' : '#999';
