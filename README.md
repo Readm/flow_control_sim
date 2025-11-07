@@ -25,6 +25,8 @@
   - 每个 cycle 实时刷新显示
   - 支持 headless 模式（无可视化运行）
 - **可视化控制**: Web 界面提供暂停/继续/重置控制，支持参数调整
+- **配置预设管理**: 支持多个预定义的网络配置，可通过命令行或 Web 界面选择
+- **请求生成模式**: 支持概率生成（ProbabilityGenerator）和调度生成（ScheduleGenerator）两种模式
 
 ## 系统架构
 
@@ -61,7 +63,8 @@
    - 处理 HTTP 请求：
      - `GET /api/frame` - 返回最新帧数据（兼容性保留）
      - `GET /api/stats` - 返回统计信息
-     - `POST /api/control` - 接收控制命令（pause/resume/reset）
+     - `GET /api/configs` - 返回预定义配置列表
+     - `POST /api/control` - 接收控制命令（pause/resume/reset/step）
      - `WS /ws` - WebSocket 连接端点（实时推送）
    - 通过 channel 队列传递控制命令
    - 支持 WebSocket 实时推送帧数据
@@ -115,23 +118,29 @@ Simulator.Run() 检查命令并执行
 
 ```
 flow_control_sim/
-├── node.go           # Node 基类定义（统一节点架构）
-├── visualization.go  # 可视化接口和数据模型
-├── web_visualizer.go # Web 可视化器实现
-├── web_server.go     # Web 服务器和 REST API
-├── master.go         # Master 节点（嵌入 Node）
-├── slave.go          # Slave 节点（嵌入 Node）
-├── relay.go          # Relay 节点（嵌入 Node，支持队列缓冲）
-├── simulator.go      # 模拟器主循环
-├── channel.go        # 通信信道
-├── models.go         # 数据模型定义
-├── stats.go          # 统计功能
-├── main.go           # 程序入口
+├── node.go              # Node 基类定义（统一节点架构）
+├── visualization.go      # 可视化接口和数据模型
+├── web_visualizer.go     # Web 可视化器实现
+├── web_server.go         # Web 服务器和 REST API
+├── rn.go                 # RequestNode (Master) 节点实现
+├── sn.go                 # SlaveNode 节点实现
+├── hn.go                 # HomeNode (Relay) 节点实现
+├── simulator.go          # 模拟器主循环
+├── channel.go            # 通信信道 (Link)
+├── models.go             # 数据模型定义
+├── stats.go              # 统计功能
+├── request_generator.go  # 请求生成器接口和实现
+├── soc_configs.go        # 预定义网络配置
+├── benchmark.go          # 性能基准测试
+├── main.go               # 程序入口
 ├── web/
 │   └── static/
-│       └── index.html # Cytoscape.js 前端页面
-├── go.mod            # Go 模块定义
-└── README.md         # 项目说明
+│       └── index.html    # Cytoscape.js 前端页面
+├── go.mod                # Go 模块定义
+├── README.md             # 项目说明
+├── DEVELOPMENT_PLAN.md   # 开发计划文档
+├── TEST_RESULTS.md       # 测试结果文档
+└── TODO.md               # 待办事项
 
 详细的项目结构请参考开发计划文档。
 
@@ -186,18 +195,18 @@ flow_control_sim/
   - [x] 统一的 Node 基类架构
   - [x] 拓扑图显示 Master/Relay/Slave 节点
   - [x] 实时显示节点 ID、类型、队列长度
-  - [x] 每个 cycle 实时刷新（500ms 轮询）
-  - [x] 控制按钮（暂停/继续/重置）
-  - [x] 参数配置表单（重置时生效）
+  - [x] WebSocket 实时推送（延迟 < 50ms），失败时自动回退到 HTTP 轮询（500ms 间隔）
+  - [x] 控制按钮（暂停/继续/单步执行/重置）
+  - [x] 配置预设选择（从下拉菜单选择预定义网络配置）
+  - [x] 参数配置表单（调整总 cycles 数等参数，重置后生效）
   - [x] 统计信息面板（全局、Master、Slave 统计）
   - [x] Headless 模式支持
 
 ### 配置功能
-- [ ] 动态配置 Master 数量
-- [ ] 配置各 Master 延迟
-- [ ] 配置 Slave 处理速率
-- [ ] 配置请求生成模式
-- [ ] 配置预设管理
+- [x] 配置预设管理（支持多个预定义配置，可通过命令行或 Web 界面选择）
+- [x] 配置请求生成模式（支持概率生成和调度生成）
+- [x] 通过配置预设动态配置 Master/Slave 数量、延迟、处理速率等参数
+- [x] 命令行参数支持（`-config` 指定预设配置，`-headless` 无头模式，`-benchmark` 性能测试）
 
 ## 开发环境要求
 
@@ -229,7 +238,12 @@ go mod download
 
 **运行模拟器（Headless 模式）**:
 ```bash
+# 使用默认配置运行
 go run *.go -headless
+
+# 使用指定预设配置运行
+go run *.go -headless -config backpressure_test
+
 # 或使用测试
 go test -v
 ```
@@ -239,15 +253,31 @@ go test -v
 # 启动模拟器（默认使用 Web 可视化）
 go run *.go
 
+# 使用指定预设配置启动
+go run *.go -config multi_master_multi_slave
+
 # 模拟器启动后，Web 服务器会在 http://127.0.0.1:8080 启动
 # 在浏览器中打开 http://127.0.0.1:8080 即可查看可视化界面
+```
+
+**可用的预设配置**:
+- `multi_master_multi_slave`: 多 Master 多 Slave 网络（3 Masters, 2 Slaves, 1 Home Node）
+- `simple_single_master_slave`: 简单单 Master-Slave 网络（1 Master, 1 Slave, 1 Home Node）
+- `backpressure_test`: 背压测试（高负载、慢处理，触发背压）
+- `single_request_10cycle_latency`: 单请求测试（10-cycle 延迟，确定性调度）
+
+**查看所有可用配置**:
+```bash
+# 通过 API 查看（需要先启动服务器）
+curl http://127.0.0.1:8080/api/configs
 ```
 
 **Web 界面功能**:
 - 实时拓扑图：显示 Master、Slave、Relay 节点及其连接关系
 - 队列信息：鼠标悬停节点查看队列详情
-- 控制按钮：暂停、继续、重置模拟
-- 参数配置：在配置面板调整参数，重置后生效
+- 控制按钮：暂停、继续、单步执行、重置模拟
+- 配置选择：从下拉菜单选择预定义网络配置
+- 参数配置：在配置面板调整参数（如总 cycles 数），重置后生效
 - 统计信息：实时显示全局、Master、Slave 统计信息
 
 **运行性能测试（Benchmark）**:
@@ -387,6 +417,39 @@ docker-compose up -d
 **使用说明**:
 - 用于单独获取统计信息，无需完整帧数据
 
+#### GET /api/configs
+
+获取所有可用的预定义网络配置列表。
+
+**请求**: `GET http://127.0.0.1:8080/api/configs`
+
+**响应** (200 OK):
+```json
+[
+  {
+    "name": "multi_master_multi_slave",
+    "description": "Multi-Master Multi-Slave Network (3 Masters, 2 Slaves, 1 Home Node)"
+  },
+  {
+    "name": "simple_single_master_slave",
+    "description": "Simple Single Master-Slave Network (1 Master, 1 Slave, 1 Home Node)"
+  },
+  {
+    "name": "backpressure_test",
+    "description": "Backpressure Test: High load, slow processing (3 Masters, 1 Slave, triggers backpressure)"
+  },
+  {
+    "name": "single_request_10cycle_latency",
+    "description": "Single Request Test: 1 RN, 1 HN, 1 SN, 10-cycle latency, single ReadNoSnp request"
+  }
+]
+```
+
+**使用说明**:
+- 返回所有预定义配置的名称和描述
+- 前端界面使用此端点加载配置下拉菜单
+- 配置的完整参数在重置时通过 `configName` 字段指定
+
 #### POST /api/control
 
 发送控制指令（暂停、继续、重置）。
@@ -460,6 +523,15 @@ Content-Type: application/json
 }
 ```
 
+**字段说明**:
+- `type` (必需): 控制指令类型
+  - `"pause"`: 暂停模拟
+  - `"resume"`: 继续模拟
+  - `"reset"`: 重置模拟（可带新配置）
+  - `"step"`: 单步执行一个 cycle
+- `configName` (可选): 预设配置名称，仅当 `type` 为 `"reset"` 时有效
+- `totalCycles` (可选): 总模拟 cycles 数，仅当 `type` 为 `"reset"` 时有效
+
 **服务端 → 客户端**（帧数据推送）:
 ```json
 {
@@ -505,4 +577,4 @@ Content-Type: application/json
 
 ---
 
-**项目状态**: 核心功能已完成，Web 可视化界面已实现并可用。
+**项目状态**: 核心功能已完成，Web 可视化界面已实现并可用。支持配置预设管理、多种请求生成模式、性能基准测试等功能。

@@ -680,6 +680,11 @@
                 cyqtip(cytoscape);
             }
 
+            // Hide all active tooltips
+            function hideAllTooltips() {
+                $('.qtip').qtip('hide');
+            }
+
             // Add hover tooltip for nodes
             cy.on('mouseover', 'node', function(evt) {
                 const node = evt.target;
@@ -718,7 +723,11 @@
                     content: tooltip,
                     position: {
                         my: 'top center',
-                        at: 'bottom center'
+                        at: 'bottom center',
+                        viewport: document.getElementById('cy'),
+                        adjust: {
+                            method: 'flip shift'
+                        }
                     },
                     style: {
                         classes: 'qtip-bootstrap',
@@ -768,7 +777,11 @@
                     content: tooltip,
                     position: {
                         my: 'top center',
-                        at: 'bottom center'
+                        at: 'bottom center',
+                        viewport: document.getElementById('cy'),
+                        adjust: {
+                            method: 'flip shift'
+                        }
                     },
                     style: {
                         classes: 'qtip-bootstrap',
@@ -796,6 +809,7 @@
             
             // Recalculate points on pan (translation)
             cy.on('pan', function() {
+                hideAllTooltips();
                 if (currentFrame) {
                     drawPipelineStatePoints(currentFrame);
                 }
@@ -803,6 +817,7 @@
             
             // Recalculate points on zoom
             cy.on('zoom', function() {
+                hideAllTooltips();
                 if (currentFrame) {
                     drawPipelineStatePoints(currentFrame);
                 }
@@ -810,6 +825,7 @@
             
             // Recalculate points on panzoom (combined pan and zoom)
             cy.on('panzoom', function() {
+                hideAllTooltips();
                 if (currentFrame) {
                     drawPipelineStatePoints(currentFrame);
                 }
@@ -937,17 +953,17 @@
 
         // Draw pipeline state points on edges using Cytoscape's midpoint API
         function drawPipelineStatePoints(frame) {
-            if (!frame || !frame.edges || !cy) {
-                return;
-            }
-
             const overlay = document.getElementById('pipelineOverlay');
             if (!overlay) {
                 return;
             }
 
-            // Clear existing points
+            // Clear existing points first, before any validation
             overlay.innerHTML = '';
+
+            if (!frame || !frame.edges || !cy) {
+                return;
+            }
 
             // Get container position for coordinate conversion
             const container = document.getElementById('cy');
