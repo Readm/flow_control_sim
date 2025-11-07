@@ -28,6 +28,9 @@ type RequestNode struct {
 
 	// address generator for CHI transactions
 	nextAddress uint64
+	
+	// Transaction manager reference (set by Simulator)
+	txnMgr *TransactionManager
 }
 
 func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *RequestNode {
@@ -77,7 +80,7 @@ func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID 
 // Tick may generate request(s) per cycle based on the configured RequestGenerator.
 // Supports generating multiple requests in the same cycle.
 // Implements three-phase logic: generate -> send -> release
-func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, packetIDs *PacketIDAllocator, slaves []*SlaveNode) {
+func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, packetIDs *PacketIDAllocator, slaves []*SlaveNode, txnMgr *TransactionManager) {
 	if homeNodeID < 0 {
 		return
 	}
@@ -132,6 +135,13 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 				txnType = CHITxnReadNoSnp
 			}
 			
+			// Create transaction if TransactionManager is available
+			var txnID int64
+			if txnMgr != nil {
+				txn := txnMgr.CreateTransaction(txnType, address, cycle)
+				txnID = txn.Context.TransactionID
+			}
+			
 			// Generate request packet
 			// SentAt is initially 0, will be set when actually sent to Link
 			p := &Packet{
@@ -147,10 +157,16 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 				MessageType:     CHIMsgReq,
 				Address:         address,
 				DataSize:        dataSize,
+				TransactionID:   txnID,
 			}
 			
 			rn.TotalRequests++
 			rn.generatedAtByReq[reqID] = cycle
+			
+			// Mark transaction as in-flight when packet is sent
+			if txnMgr != nil && txnID > 0 {
+				// Will be marked in-flight when actually sent
+			}
 			
 			// Add to stimulus_queue
 			rn.stimulusQueue = append(rn.stimulusQueue, p)
@@ -173,6 +189,10 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 		// Send packet
 		ch.Send(p, rn.ID, homeNodeID, cycle, cfg.MasterRelayLatency)
 		p.SentAt = cycle
+		// Mark transaction as in-flight when packet is sent
+		if txnMgr != nil && p.TransactionID > 0 {
+			txnMgr.MarkTransactionInFlight(p.TransactionID, cycle)
+		}
 		sentThisCycle++
 		// Packet remains in dispatchQueue, will be removed when Comp response arrives
 	}
@@ -216,15 +236,20 @@ func (rn *RequestNode) CanReceive(edgeKey EdgeKey, packetCount int) bool {
 func (rn *RequestNode) OnPackets(messages []*InFlightMessage, cycle int) {
 	for _, msg := range messages {
 		if msg.Packet != nil {
-			rn.OnResponse(msg.Packet, cycle)
+			rn.OnResponse(msg.Packet, cycle, rn.txnMgr)
 		}
 	}
+}
+
+// SetTransactionManager sets the transaction manager for this node
+func (rn *RequestNode) SetTransactionManager(txnMgr *TransactionManager) {
+	rn.txnMgr = txnMgr
 }
 
 // OnResponse processes a CHI response arriving to the request node at given cycle.
 // Handles CompData responses for ReadNoSnp transactions.
 // Removes the corresponding request packet from dispatch_queue when Comp response arrives.
-func (rn *RequestNode) OnResponse(p *Packet, cycle int) {
+func (rn *RequestNode) OnResponse(p *Packet, cycle int, txnMgr *TransactionManager) {
 	if p == nil {
 		return
 	}
@@ -266,6 +291,11 @@ func (rn *RequestNode) OnResponse(p *Packet, cycle int) {
 			rn.MinDelay = delay
 		}
 		delete(rn.generatedAtByReq, requestID)
+	}
+	
+	// Mark transaction as completed
+	if txnMgr != nil && p.TransactionID > 0 {
+		txnMgr.MarkTransactionCompleted(p.TransactionID, cycle)
 	}
 	
 	// Update queue lengths for visualization
@@ -324,6 +354,7 @@ func (rn *RequestNode) GetQueuePackets() []PacketInfo {
 			ResponseType:   p.ResponseType,
 			Address:        p.Address,
 			DataSize:       p.DataSize,
+			TransactionID:  p.TransactionID,
 		})
 	}
 	
@@ -348,6 +379,7 @@ func (rn *RequestNode) GetQueuePackets() []PacketInfo {
 			ResponseType:   p.ResponseType,
 			Address:        p.Address,
 			DataSize:       p.DataSize,
+			TransactionID:  p.TransactionID,
 		})
 	}
 	
@@ -377,6 +409,7 @@ func (rn *RequestNode) GetStimulusQueuePackets() []PacketInfo {
 			ResponseType:   p.ResponseType,
 			Address:        p.Address,
 			DataSize:       p.DataSize,
+			TransactionID:  p.TransactionID,
 		})
 	}
 	return packets
@@ -405,6 +438,7 @@ func (rn *RequestNode) GetDispatchQueuePackets() []PacketInfo {
 			ResponseType:   p.ResponseType,
 			Address:        p.Address,
 			DataSize:       p.DataSize,
+			TransactionID:  p.TransactionID,
 		})
 	}
 	return packets

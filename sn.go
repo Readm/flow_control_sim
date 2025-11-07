@@ -87,15 +87,16 @@ func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 // For ReadNoSnp transactions, returns CompData response.
 func (sn *SlaveNode) generateCHIResponse(req *Packet, cycle int, packetIDs *PacketIDAllocator) *Packet {
 	resp := &Packet{
-		ID:        packetIDs.Allocate(),
-		Type:      "response", // legacy field
-		SrcID:     sn.ID,
-		DstID:     req.MasterID, // return to Request Node via Home Node
-		SentAt:    cycle,
-		RequestID: req.RequestID,
-		MasterID:  req.MasterID,
-		Address:   req.Address,  // preserve address from request
-		DataSize:  req.DataSize, // preserve data size from request
+		ID:            packetIDs.Allocate(),
+		Type:          "response", // legacy field
+		SrcID:         sn.ID,
+		DstID:         req.MasterID, // return to Request Node via Home Node
+		SentAt:        cycle,
+		RequestID:     req.RequestID,
+		MasterID:      req.MasterID,
+		Address:       req.Address,  // preserve address from request
+		DataSize:      req.DataSize, // preserve data size from request
+		TransactionID: req.TransactionID, // preserve transaction ID from request
 	}
 
 	// Set CHI protocol fields based on transaction type
@@ -141,6 +142,7 @@ func (sn *SlaveNode) GetQueuePackets() []PacketInfo {
 			ResponseType:    p.ResponseType,
 			Address:         p.Address,
 			DataSize:        p.DataSize,
+			TransactionID:   p.TransactionID,
 		})
 	}
 	return packets

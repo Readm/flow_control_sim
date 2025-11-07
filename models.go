@@ -90,6 +90,9 @@ type Packet struct {
 	ResponseType    CHIResponseType    // CHI response type (CompData, CompAck, etc.)
 	Address         uint64             // memory address for the transaction
 	DataSize        int                // data size in bytes (default: DefaultCacheLineSize)
+	
+	// Transaction tracking
+	TransactionID   int64  // ID of the transaction this packet belongs to (0 if not associated)
 }
 
 // Config holds simulation configuration values.

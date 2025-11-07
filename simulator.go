@@ -21,6 +21,7 @@ type Simulator struct {
 	cfg        *Config
 	rng        *rand.Rand
 	pktIDs     *PacketIDAllocator
+	txnMgr     *TransactionManager // Transaction manager for tracking transaction relationships
 	current    int
 	visualizer Visualizer
 
@@ -102,6 +103,7 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 
 	masters = make([]*RequestNode, cfg.NumMasters)
 	masterByID = make(map[int]*RequestNode, cfg.NumMasters)
+	// Note: TransactionManager will be set after Simulator creation
 	for i := 0; i < cfg.NumMasters; i++ {
 		id := idAlloc.Allocate()
 		m := NewRequestNode(id, i, generators[i])
@@ -156,6 +158,7 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 
 func NewSimulator(cfg *Config) *Simulator {
 	pktAlloc := NewPacketIDAllocator()
+	txnMgr := NewTransactionManager()
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(cfg, rng)
 
@@ -170,11 +173,17 @@ func NewSimulator(cfg *Config) *Simulator {
 		cfg:        cfg,
 		rng:        rng,
 		pktIDs:     pktAlloc,
+		txnMgr:     txnMgr,
 		current:    0,
 	}
 
 	sim.edges = sim.buildEdges()
 	sim.visualizer = sim.initVisualizer()
+	
+	// Set TransactionManager for all RequestNodes
+	for _, m := range sim.Masters {
+		m.SetTransactionManager(sim.txnMgr)
+	}
 
 	return sim
 }
@@ -368,6 +377,13 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 
 	stats := s.CollectStats()
 	configHash := computeConfigHash(s.cfg)
+	
+	// Build transaction graph (state providers are nil for now, will be implemented by other modules)
+	var txnGraph *TransactionGraph
+	if s.txnMgr != nil {
+		txnGraph = s.txnMgr.GetTransactionGraph(nil, nil, nil)
+	}
+	
 	frame := &SimulationFrame{
 		Cycle:         cycle,
 		Nodes:         nodes,
@@ -375,6 +391,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		InFlightCount: s.Chan.InFlightCount(),
 		Stats:         stats,
 		ConfigHash:    configHash,
+		TransactionGraph: txnGraph,
 	}
 	return frame
 }
@@ -453,7 +470,7 @@ func (s *Simulator) Run() {
 			if relayID < 0 {
 				continue
 			}
-			m.Tick(cycle, s.cfg, relayID, s.Chan, s.pktIDs, s.Slaves)
+			m.Tick(cycle, s.cfg, relayID, s.Chan, s.pktIDs, s.Slaves, s.txnMgr)
 		}
 
 		if s.Relay != nil {
@@ -495,6 +512,7 @@ func (s *Simulator) reset(newCfg *Config) {
 
 	// Reinitialize simulator with new config
 	pktAlloc := NewPacketIDAllocator()
+	txnMgr := NewTransactionManager()
 	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(s.cfg, s.rng)
 
 	s.Masters = masters
@@ -506,8 +524,14 @@ func (s *Simulator) reset(newCfg *Config) {
 	s.nodeLabels = labels
 	s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	s.pktIDs = pktAlloc
+	s.txnMgr = txnMgr
 	s.current = 0
 	s.edges = s.buildEdges()
+	
+	// Set TransactionManager for all RequestNodes
+	for _, m := range s.Masters {
+		m.SetTransactionManager(s.txnMgr)
+	}
 
 	// If web frontend is available, pause at cycle 0 after reset
 	// Otherwise (headless mode), continue running

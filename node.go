@@ -26,6 +26,7 @@ type PacketInfo struct {
 	ResponseType    CHIResponseType    `json:"responseType"`
 	Address         uint64            `json:"address"`
 	DataSize        int               `json:"dataSize"`
+	TransactionID   int64             `json:"transactionID"` // Transaction ID this packet belongs to
 }
 
 // QueueInfo represents queue information for visualization

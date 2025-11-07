@@ -122,6 +122,7 @@ func (hn *HomeNode) GetQueuePackets() []PacketInfo {
 			ResponseType:    p.ResponseType,
 			Address:         p.Address,
 			DataSize:        p.DataSize,
+			TransactionID:   p.TransactionID,
 		})
 	}
 	return packets

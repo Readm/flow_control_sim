@@ -50,6 +50,7 @@ type SimulationFrame struct {
 	InFlightCount int              `json:"inFlightCount"`
 	Stats         *SimulationStats `json:"stats,omitempty"`
 	ConfigHash    string           `json:"configHash,omitempty"` // Hash of current config to detect config changes
+	TransactionGraph *TransactionGraph `json:"transactionGraph,omitempty"` // Transaction relationship graph
 }
 
 // Visualizer defines methods for visualization implementations.
