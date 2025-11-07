@@ -72,7 +72,7 @@ func TestBackpressure(t *testing.T) {
 		// Generate requests
 		for _, m := range sim.Masters {
 			if sim.Relay != nil {
-				m.Tick(cycle, sim.cfg, sim.Relay.ID, sim.Chan, sim.pktIDs, sim.Slaves)
+				m.Tick(cycle, sim.cfg, sim.Relay.ID, sim.Chan, sim.pktIDs, sim.Slaves, sim.txnMgr)
 			}
 		}
 		
@@ -165,7 +165,7 @@ func TestBackpressureDetailed(t *testing.T) {
 		// Generate requests
 		for _, m := range sim.Masters {
 			if sim.Relay != nil {
-				m.Tick(cycle, sim.cfg, sim.Relay.ID, sim.Chan, sim.pktIDs, sim.Slaves)
+				m.Tick(cycle, sim.cfg, sim.Relay.ID, sim.Chan, sim.pktIDs, sim.Slaves, sim.txnMgr)
 			}
 		}
 		

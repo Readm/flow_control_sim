@@ -4,8 +4,9 @@ package main
 // It receives requests from Request Nodes and forwards them to Slave Nodes,
 // then routes responses back to the originating Request Node.
 type HomeNode struct {
-	Node  // embedded Node base class
-	queue []*Packet
+	Node   // embedded Node base class
+	queue  []*Packet
+	txnMgr *TransactionManager // for recording packet events
 }
 
 func NewHomeNode(id int) *HomeNode {
@@ -14,10 +15,16 @@ func NewHomeNode(id int) *HomeNode {
 			ID:   id,
 			Type: NodeTypeHN,
 		},
-		queue: make([]*Packet, 0),
+		queue:  make([]*Packet, 0),
+		txnMgr: nil, // will be set by simulator
 	}
 	hn.AddQueue("forward_queue", 0, DefaultForwardQueueCapacity)
 	return hn
+}
+
+// SetTransactionManager sets the transaction manager for event recording
+func (hn *HomeNode) SetTransactionManager(txnMgr *TransactionManager) {
+	hn.txnMgr = txnMgr
 }
 
 // CanReceive checks if the HomeNode can receive packets from the given edge.
@@ -32,6 +39,35 @@ func (hn *HomeNode) OnPackets(messages []*InFlightMessage, cycle int) {
 	for _, msg := range messages {
 		if msg.Packet != nil {
 			msg.Packet.ReceivedAt = cycle
+			
+			// Record PacketReceived event
+			if hn.txnMgr != nil && msg.Packet.TransactionID > 0 {
+				event := &PacketEvent{
+					TransactionID: msg.Packet.TransactionID,
+					PacketID:      msg.Packet.ID,
+					ParentPacketID: msg.Packet.ParentPacketID,
+					NodeID:        hn.ID,
+					EventType:     PacketReceived,
+					Cycle:         cycle,
+					EdgeKey:       nil, // in-node event
+				}
+				hn.txnMgr.RecordPacketEvent(event)
+			}
+			
+			// Record PacketEnqueued event
+			if hn.txnMgr != nil && msg.Packet.TransactionID > 0 {
+				event := &PacketEvent{
+					TransactionID: msg.Packet.TransactionID,
+					PacketID:      msg.Packet.ID,
+					ParentPacketID: msg.Packet.ParentPacketID,
+					NodeID:        hn.ID,
+					EventType:     PacketEnqueued,
+					Cycle:         cycle,
+					EdgeKey:       nil, // in-node event
+				}
+				hn.txnMgr.RecordPacketEvent(event)
+			}
+			
 			hn.queue = append(hn.queue, msg.Packet)
 		}
 	}
@@ -86,6 +122,20 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 			latency = cfg.RelayMasterLatency
 		} else {
 			continue
+		}
+
+		// Record PacketDequeued event
+		if hn.txnMgr != nil && p.TransactionID > 0 {
+			event := &PacketEvent{
+				TransactionID: p.TransactionID,
+				PacketID:      p.ID,
+				ParentPacketID: p.ParentPacketID,
+				NodeID:        hn.ID,
+				EventType:     PacketDequeued,
+				Cycle:         cycle,
+				EdgeKey:       nil, // in-node event
+			}
+			hn.txnMgr.RecordPacketEvent(event)
 		}
 
 		p.SentAt = cycle

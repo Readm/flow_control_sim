@@ -7,7 +7,7 @@ const (
 	TxStateInitiated TransactionState = "Initiated" // Transaction created
 	TxStateInFlight  TransactionState = "InFlight"  // Transaction in progress
 	TxStateCompleted TransactionState = "Completed" // Transaction completed successfully
-	TxStateAborted   TransactionState = "Aborted"    // Transaction aborted
+	TxStateAborted   TransactionState = "Aborted"   // Transaction aborted
 )
 
 // DependencyType represents the type of dependency between transactions
@@ -18,17 +18,17 @@ const (
 	DepCausal DependencyType = "Causal"
 
 	// Cache dependencies: Transaction B triggered due to Transaction A's cache operations
-	DepCacheMiss        DependencyType = "CacheMiss"
-	DepCacheEvict       DependencyType = "CacheEvict"
-	DepCacheInvalidate  DependencyType = "CacheInvalidate"
+	DepCacheMiss       DependencyType = "CacheMiss"
+	DepCacheEvict      DependencyType = "CacheEvict"
+	DepCacheInvalidate DependencyType = "CacheInvalidate"
 
 	// Ordering dependencies: Transaction B must wait for Transaction A to complete
 	DepSameAddrOrdering DependencyType = "SameAddrOrdering"
-	DepGlobalOrdering    DependencyType = "GlobalOrdering"
+	DepGlobalOrdering   DependencyType = "GlobalOrdering"
 
 	// Directory dependencies: Transaction B needs to wait for Transaction A's directory operation
-	DepDirectoryQuery   DependencyType = "DirectoryQuery"
-	DepDirectoryUpdate   DependencyType = "DirectoryUpdate"
+	DepDirectoryQuery  DependencyType = "DirectoryQuery"
+	DepDirectoryUpdate DependencyType = "DirectoryUpdate"
 
 	// Resource contention: Transaction B competes with Transaction A for the same resource
 	DepResourceContention DependencyType = "ResourceContention"
@@ -36,26 +36,26 @@ const (
 
 // StateTransition represents a key state transition in a transaction's lifecycle
 type StateTransition struct {
-	Cycle       int                 // Cycle when transition occurred
-	FromState   TransactionState    // Previous state
-	ToState     TransactionState    // New state
-	Reason      string              // Reason for transition (brief description)
-	RelatedTxnID *int64             // Related transaction ID (if any)
+	Cycle        int              // Cycle when transition occurred
+	FromState    TransactionState // Previous state
+	ToState      TransactionState // New state
+	Reason       string           // Reason for transition (brief description)
+	RelatedTxnID *int64           // Related transaction ID (if any)
 }
 
 // TransactionContext represents the context of a CHI transaction
 // Design principle: Only store essential information, detailed state queried via interfaces
 type TransactionContext struct {
 	// Basic information (must store)
-	TransactionID    int64
-	TransactionType   CHITransactionType
-	Address           uint64
+	TransactionID   int64
+	TransactionType CHITransactionType
+	Address         uint64
 
 	// State information (simplified)
-	State            TransactionState
-	StateHistory     []StateTransition // Only record key state transition points
-	InitiatedAt      int
-	CompletedAt      int
+	State        TransactionState
+	StateHistory []StateTransition // Only record key state transition points
+	InitiatedAt  int
+	CompletedAt  int
 
 	// Dependency relationships (must store, for graph construction)
 	SameAddrOrdering      []int64 // Transaction IDs with same-address ordering dependency
@@ -76,8 +76,8 @@ type TransactionDependency struct {
 	FromTransactionID int64          // Source transaction ID
 	ToTransactionID   int64          // Target transaction ID
 	DependencyType    DependencyType // Type of dependency
-	Reason            string          // Reason for dependency (CacheMiss, SameAddrOrdering, etc.)
-	Cycle             int             // Cycle when dependency was created
+	Reason            string         // Reason for dependency (CacheMiss, SameAddrOrdering, etc.)
+	Cycle             int            // Cycle when dependency was created
 }
 
 // CacheStateProvider interface: implemented by Cache module
@@ -152,3 +152,29 @@ type OrderingDecision struct {
 	RelatedTxns []int64
 }
 
+// PacketEventType represents the type of packet event
+type PacketEventType string
+
+const (
+	PacketEnqueued        PacketEventType = "PacketEnqueued"
+	PacketDequeued        PacketEventType = "PacketDequeued"
+	PacketProcessingStart PacketEventType = "PacketProcessingStart"
+	PacketProcessingEnd   PacketEventType = "PacketProcessingEnd"
+	PacketSent            PacketEventType = "PacketSent"
+	PacketInTransitEnd    PacketEventType = "PacketInTransitEnd"
+	PacketReceived        PacketEventType = "PacketReceived"
+	PacketGenerated       PacketEventType = "PacketGenerated"
+)
+
+// PacketEvent represents a packet event in the transaction timeline
+type PacketEvent struct {
+	TransactionID  int64             `json:"transactionID"`
+	PacketID       int64             `json:"packetID"`
+	ParentPacketID int64             `json:"parentPacketID"` // 0 means no parent packet
+	NodeID         int               `json:"nodeID"`
+	NodeLabel      string            `json:"nodeLabel"` // "RN 0", "SN 1", etc.
+	EventType      PacketEventType   `json:"eventType"`
+	Cycle          int               `json:"cycle"`
+	EdgeKey        *EdgeKey          `json:"edgeKey,omitempty"` // nil for in-node events
+	Metadata       map[string]string `json:"metadata,omitempty"`
+}

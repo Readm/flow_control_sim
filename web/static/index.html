@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/qtip2@3.0.3/dist/jquery.qtip.min.css">
     <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.27.0/dist/cytoscape.min.js"></script>
     <script src="https://unpkg.com/cytoscape-qtip@2.8.0/cytoscape-qtip.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -183,6 +184,49 @@
         #cy {
             width: 100%;
             height: 100%;
+        }
+
+        #timelineChart {
+            width: 100%;
+            height: 100%;
+            display: none;
+        }
+
+        .timeline-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            min-width: 250px;
+        }
+
+        .selected-transactions {
+            margin-top: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .transaction-tag {
+            display: inline-block;
+            padding: 4px 8px;
+            margin: 4px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .transaction-tag .remove {
+            margin-left: 6px;
+            cursor: pointer;
+            color: #999;
+        }
+
+        .transaction-tag .remove:hover {
+            color: #333;
         }
 
         .loading {
@@ -389,6 +433,9 @@
                 <button id="btnStep" class="primary">Step</button>
                 <button id="btnReset" class="danger">Reset</button>
             </div>
+            <div class="control-buttons" style="margin-top: 10px;">
+                <button id="btnToggleView" class="primary">Switch to Timeline</button>
+            </div>
             <div class="status-info">
                 <div>Cycle: <strong id="currentCycle">-</strong></div>
                 <div>In-Flight: <strong id="inFlightCount">-</strong></div>
@@ -428,9 +475,32 @@
 
     <div class="visualization-area">
         <div id="cy"></div>
+        <div id="timelineChart"></div>
         <svg id="pipelineOverlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10;"></svg>
         <div id="loading" class="loading" style="display: none;">
             <div>Loading simulation data...</div>
+        </div>
+        <div class="timeline-controls" id="timelineControls" style="display: none;">
+            <div style="margin-bottom: 10px;">
+                <label style="font-size: 12px; font-weight: 600;">Transaction Timeline</label>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <div style="font-size: 11px; color: #666; margin-bottom: 4px;">Available Transactions:</div>
+                <div id="transactionList" style="max-height: 150px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 4px; background: #fafafa;">
+                    <div style="font-size: 11px; color: #999; text-align: center; padding: 8px;">Loading transactions...</div>
+                </div>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <input type="number" id="txnIdInput" placeholder="Or enter Transaction ID" style="width: 140px; padding: 4px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+                <button id="addTxnBtn" style="padding: 4px 12px; margin-left: 8px; border: 1px solid #ccc; background: white; border-radius: 4px; cursor: pointer; font-size: 12px;">Add</button>
+                <button id="clearTxnBtn" style="padding: 4px 12px; margin-left: 8px; border: 1px solid #ccc; background: white; border-radius: 4px; cursor: pointer; font-size: 12px;">Clear</button>
+            </div>
+            <div class="selected-transactions" id="selectedTransactions">
+                <div style="font-size: 11px; color: #999; margin-top: 8px;">No transactions selected</div>
+            </div>
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd; font-size: 10px; color: #666;">
+                <div><strong>Note:</strong> A Transaction may contain multiple Packets. Each Packet has a ParentPacketID showing generation relationship.</div>
+            </div>
         </div>
     </div>
 
@@ -458,6 +528,11 @@
         let lastConfigHash = null; // Track last config hash from frame to detect config changes
         let expectingReset = false; // Track if we're waiting for a reset frame (cycle 0)
         let isStepProcessing = false; // Track if a step command is being processed
+        
+        // Timeline view state
+        let currentView = 'topology'; // 'topology' or 'timeline'
+        let selectedTransactions = []; // Array of transaction IDs
+        let timelineDataCache = {}; // Cache for timeline data
 
         // Calculate load percentage for a queue
         function calculateQueueLoad(queue) {
@@ -1797,6 +1872,619 @@
                 updateVisualization(frame);
             }
         });
+
+        // ===== Timeline View Functions =====
+
+        // Toggle between topology and timeline view
+        document.getElementById('btnToggleView').addEventListener('click', () => {
+            if (currentView === 'topology') {
+                switchToTimelineView();
+            } else {
+                switchToTopologyView();
+            }
+        });
+
+        function switchToTimelineView() {
+            currentView = 'timeline';
+            document.getElementById('cy').style.display = 'none';
+            document.getElementById('pipelineOverlay').style.display = 'none';
+            document.getElementById('timelineChart').style.display = 'block';
+            document.getElementById('timelineControls').style.display = 'block';
+            document.getElementById('btnToggleView').textContent = 'Switch to Topology';
+            
+            // Load transaction list
+            loadTransactionList();
+            
+            // Load and render timeline if we have selected transactions
+            if (selectedTransactions.length > 0) {
+                loadAndRenderTimeline();
+            }
+        }
+
+        function switchToTopologyView() {
+            currentView = 'topology';
+            document.getElementById('cy').style.display = 'block';
+            document.getElementById('pipelineOverlay').style.display = 'block';
+            document.getElementById('timelineChart').style.display = 'none';
+            document.getElementById('timelineControls').style.display = 'none';
+            document.getElementById('btnToggleView').textContent = 'Switch to Timeline';
+        }
+
+        // Add transaction to timeline
+        document.getElementById('addTxnBtn').addEventListener('click', async () => {
+            const txnIdInput = document.getElementById('txnIdInput');
+            const txnID = parseInt(txnIdInput.value);
+            if (isNaN(txnID) || txnID <= 0) {
+                alert('Please enter a valid transaction ID');
+                return;
+            }
+            if (selectedTransactions.includes(txnID)) {
+                alert('Transaction already added');
+                return;
+            }
+            selectedTransactions.push(txnID);
+            updateSelectedTransactionsUI();
+            txnIdInput.value = '';
+            await loadAndRenderTimeline();
+        });
+
+        // Clear all transactions
+        document.getElementById('clearTxnBtn').addEventListener('click', () => {
+            selectedTransactions = [];
+            timelineDataCache = {};
+            updateSelectedTransactionsUI();
+            document.getElementById('timelineChart').innerHTML = '';
+        });
+
+        // Update selected transactions UI
+        function updateSelectedTransactionsUI() {
+            const container = document.getElementById('selectedTransactions');
+            if (selectedTransactions.length === 0) {
+                container.innerHTML = '<div style="font-size: 11px; color: #999; margin-top: 8px;">No transactions selected</div>';
+                return;
+            }
+            let html = '';
+            selectedTransactions.forEach(txnID => {
+                html += `<span class="transaction-tag">Txn ${txnID}<span class="remove" onclick="removeTransaction(${txnID})">×</span></span>`;
+            });
+            container.innerHTML = html;
+        }
+
+        // Remove a transaction (global function for onclick handler)
+        window.removeTransaction = function(txnID) {
+            selectedTransactions = selectedTransactions.filter(id => id !== txnID);
+            delete timelineDataCache[txnID];
+            updateSelectedTransactionsUI();
+            loadAndRenderTimeline();
+        };
+
+        // Load timeline data for a transaction
+        async function loadTransactionTimeline(txnID) {
+            if (timelineDataCache[txnID]) {
+                return timelineDataCache[txnID];
+            }
+            try {
+                const response = await fetch(`/api/transaction/${txnID}/timeline`);
+                if (!response.ok) {
+                    throw new Error(`Failed to load timeline: ${response.statusText}`);
+                }
+                const data = await response.json();
+                timelineDataCache[txnID] = data;
+                return data;
+            } catch (error) {
+                console.error(`Error loading timeline for transaction ${txnID}:`, error);
+                return null;
+            }
+        }
+
+        // Load multiple timelines
+        async function loadMultipleTimelines(txnIDs) {
+            try {
+                const response = await fetch('/api/transactions/timelines', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ transactionIDs: txnIDs }),
+                });
+                if (!response.ok) {
+                    throw new Error(`Failed to load timelines: ${response.statusText}`);
+                }
+                const data = await response.json();
+                // Update cache
+                data.forEach(timeline => {
+                    if (timeline) {
+                        timelineDataCache[timeline.transactionID] = timeline;
+                    }
+                });
+                return data;
+            } catch (error) {
+                console.error('Error loading multiple timelines:', error);
+                // Fallback to individual requests
+                const timelines = [];
+                for (const txnID of txnIDs) {
+                    const timeline = await loadTransactionTimeline(txnID);
+                    if (timeline) {
+                        timelines.push(timeline);
+                    }
+                }
+                return timelines;
+            }
+        }
+
+        // Load and render timeline
+        async function loadAndRenderTimeline() {
+            if (selectedTransactions.length === 0) {
+                document.getElementById('timelineChart').innerHTML = '';
+                return;
+            }
+            const timelines = await loadMultipleTimelines(selectedTransactions);
+            if (timelines.length > 0) {
+                renderTimelineChart(timelines);
+            }
+        }
+
+        // Load transaction list from API
+        async function loadTransactionList() {
+            try {
+                const response = await fetch('/api/transactions');
+                if (!response.ok) {
+                    throw new Error(`Failed to load transactions: ${response.statusText}`);
+                }
+                const transactions = await response.json();
+                displayTransactionList(transactions);
+            } catch (error) {
+                console.error('Error loading transaction list:', error);
+                document.getElementById('transactionList').innerHTML = 
+                    '<div style="font-size: 11px; color: #999; text-align: center; padding: 8px;">Failed to load transactions</div>';
+            }
+        }
+
+        // Display transaction list
+        function displayTransactionList(transactions) {
+            const container = document.getElementById('transactionList');
+            if (!transactions || transactions.length === 0) {
+                container.innerHTML = '<div style="font-size: 11px; color: #999; text-align: center; padding: 8px;">No transactions available</div>';
+                return;
+            }
+            
+            let html = '';
+            transactions.forEach(txn => {
+                const stateColor = {
+                    'Initiated': '#999',
+                    'InFlight': '#007bff',
+                    'Completed': '#28a745',
+                    'Aborted': '#dc3545'
+                }[txn.state] || '#999';
+                
+                const isSelected = selectedTransactions.includes(txn.id);
+                const bgColor = isSelected ? '#e3f2fd' : 'transparent';
+                const cursor = isSelected ? 'default' : 'pointer';
+                
+                html += `<div onclick="toggleTransaction(${txn.id})" style="padding: 4px 8px; margin: 2px 0; border-radius: 3px; background: ${bgColor}; cursor: ${cursor}; font-size: 11px; display: flex; justify-content: space-between; align-items: center;">
+                    <span><strong>#${txn.id}</strong> ${txn.type}</span>
+                    <span style="color: ${stateColor}; font-size: 10px;">${txn.state}</span>
+                </div>`;
+            });
+            container.innerHTML = html;
+        }
+
+        // Toggle transaction selection
+        window.toggleTransaction = function(txnID) {
+            const index = selectedTransactions.indexOf(txnID);
+            if (index >= 0) {
+                // Remove if already selected
+                selectedTransactions.splice(index, 1);
+                delete timelineDataCache[txnID];
+            } else {
+                // Add if not selected
+                selectedTransactions.push(txnID);
+            }
+            updateSelectedTransactionsUI();
+            loadTransactionList(); // Refresh list to update selection highlight
+            loadAndRenderTimeline();
+        };
+
+        // Generate channel color from edgeKey
+        function getChannelColor(edgeKey) {
+            if (!edgeKey) {
+                return 'hsl(0, 0%, 60%)'; // Gray for in-node events
+            }
+            // Handle both camelCase (fromID, toID) and lowercase (fromid, toid) formats
+            const fromID = edgeKey.fromID !== undefined ? edgeKey.fromID : (edgeKey.fromid !== undefined ? edgeKey.fromid : null);
+            const toID = edgeKey.toID !== undefined ? edgeKey.toID : (edgeKey.toid !== undefined ? edgeKey.toid : null);
+            if (fromID === null || toID === null) {
+                return 'hsl(0, 0%, 60%)'; // Gray for in-node events
+            }
+            const hash = (fromID * 31 + toID) % 360;
+            return `hsl(${hash}, 70%, 50%)`;
+        }
+
+        // Sort nodes by type (RN -> HN -> SN) and then by ID
+        function sortNodesByType(nodes) {
+            const typeOrder = { 'RN': 0, 'HN': 1, 'SN': 2 };
+            return nodes.sort((a, b) => {
+                const aOrder = typeOrder[a.type] !== undefined ? typeOrder[a.type] : 999;
+                const bOrder = typeOrder[b.type] !== undefined ? typeOrder[b.type] : 999;
+                if (aOrder !== bOrder) {
+                    return aOrder - bOrder;
+                }
+                return a.id - b.id;
+            });
+        }
+
+        // Infer message type from event and node information
+        function inferMessageType(event, nodeMap) {
+            // If it's a generated packet, it's likely a response
+            if (event.eventType === 'PacketGenerated') {
+                return 'Comp';
+            }
+            // If it's sent/received with edgeKey, infer from node types
+            if (event.edgeKey) {
+                const fromNode = nodeMap.get(event.edgeKey.fromID);
+                const toNode = nodeMap.get(event.edgeKey.toID);
+                
+                if (fromNode && toNode) {
+                    // Request: RN -> HN -> SN (or RN -> SN directly)
+                    if ((fromNode.type === 'RN' || fromNode.type === 'HN') && 
+                        (toNode.type === 'SN' || toNode.type === 'HN')) {
+                        return 'Req';
+                    }
+                    // Response: SN -> HN -> RN (or SN -> RN directly)
+                    if ((fromNode.type === 'SN' || fromNode.type === 'HN') && 
+                        (toNode.type === 'RN' || toNode.type === 'HN')) {
+                        return 'Comp';
+                    }
+                }
+                
+                // Fallback: use node labels
+                const fromLabel = fromNode ? fromNode.label : '';
+                const toLabel = toNode ? toNode.label : '';
+                if (fromLabel.startsWith('RN') && (toLabel.startsWith('SN') || toLabel.startsWith('HN'))) {
+                    return 'Req';
+                } else if ((fromLabel.startsWith('SN') || fromLabel.startsWith('HN')) && toLabel.startsWith('RN')) {
+                    return 'Comp';
+                }
+            }
+            return null;
+        }
+
+        // Get message color based on message type (CHI document style)
+        function getMessageColor(messageType, eventType, edgeKey) {
+            if (messageType === 'Req' || (eventType === 'PacketSent' && !messageType)) {
+                return 'rgb(0, 100, 200)'; // Blue for requests
+            } else if (messageType === 'Comp' || eventType === 'PacketGenerated' || 
+                      (eventType === 'PacketInTransitEnd' && edgeKey)) {
+                return 'rgb(255, 100, 0)'; // Orange/red for responses
+            }
+            return 'rgb(50, 50, 50)'; // Black for other messages
+        }
+
+        // Render timeline chart in CHI document style (UML sequence diagram)
+        function renderTimelineChart(timelineDataArray) {
+            if (!timelineDataArray || timelineDataArray.length === 0) {
+                return;
+            }
+
+            // Merge all events from all transactions
+            const allEvents = [];
+            const allNodesMap = new Map();
+            let minCycle = Infinity;
+            let maxCycle = -Infinity;
+
+            timelineDataArray.forEach(timeline => {
+                if (!timeline || !timeline.events) return;
+                
+                timeline.events.forEach(event => {
+                    allEvents.push({
+                        ...event,
+                        transactionID: timeline.transactionID,
+                    });
+                    
+                    // Track nodes
+                    if (timeline.nodes) {
+                        timeline.nodes.forEach(node => {
+                            if (!allNodesMap.has(node.id)) {
+                                allNodesMap.set(node.id, node);
+                            }
+                        });
+                    }
+                    
+                    // Track time range
+                    if (event.cycle < minCycle) minCycle = event.cycle;
+                    if (event.cycle > maxCycle) maxCycle = event.cycle;
+                });
+            });
+
+            if (allEvents.length === 0) {
+                return;
+            }
+
+            // Convert nodes map to sorted array
+            const allNodes = Array.from(allNodesMap.values());
+            const sortedNodes = sortNodesByType(allNodes);
+            const nodeLabelMap = new Map();
+            const nodeIndexMap = new Map(); // nodeID -> x position index
+            sortedNodes.forEach((node, index) => {
+                const label = node.label || `Node ${node.id}`;
+                nodeLabelMap.set(node.id, label);
+                nodeIndexMap.set(node.id, index);
+            });
+
+            // Add padding to time range
+            const timePadding = Math.max(10, Math.floor((maxCycle - minCycle) * 0.1));
+            const yMin = Math.max(0, minCycle - timePadding);
+            const yMax = maxCycle + timePadding;
+
+            const traces = [];
+            const annotations = [];
+            const shapes = [];
+
+            // 1. Draw lifelines (vertical dashed lines) for each node
+            sortedNodes.forEach((node, nodeIndex) => {
+                const xPos = nodeIndex;
+                // Lifeline trace (vertical dashed line)
+                traces.push({
+                    x: [xPos, xPos],
+                    y: [yMin, yMax],
+                    type: 'scatter',
+                    mode: 'lines',
+                    line: {
+                        color: 'rgb(150, 150, 150)',
+                        width: 1,
+                        dash: 'dash',
+                    },
+                    showlegend: false,
+                    hoverinfo: 'skip',
+                });
+
+                // Node box (participant box) at top
+                const nodeLabel = nodeLabelMap.get(node.id);
+                annotations.push({
+                    x: xPos,
+                    y: yMax,
+                    text: nodeLabel,
+                    showarrow: false,
+                    xref: 'x',
+                    yref: 'y',
+                    xanchor: 'center',
+                    yanchor: 'bottom',
+                    bgcolor: 'rgba(240, 240, 240, 0.9)',
+                    bordercolor: 'rgb(100, 100, 100)',
+                    borderwidth: 1,
+                    borderpad: 4,
+                    font: { size: 11, color: 'rgb(0, 0, 0)' },
+                });
+            });
+
+            // 2. Group events by packet flow (to draw arrows between nodes)
+            // Use a map to avoid duplicate arrows (same packet sent/received)
+            const messageFlowMap = new Map(); // key: "fromNode-toNode-cycle", value: flow object
+            const nodeMapForInference = new Map(); // nodeID -> node object for inference
+            sortedNodes.forEach(node => {
+                nodeMapForInference.set(node.id, node);
+            });
+            
+            allEvents.forEach(event => {
+                const messageType = inferMessageType(event, nodeMapForInference);
+                let label = '';
+                
+                if (event.eventType === 'PacketSent' && event.edgeKey) {
+                    // Outgoing message - use PacketSent for the arrow
+                    const fromNode = event.nodeID;
+                    const toNode = event.edgeKey.toID;
+                    label = messageType || 'Req';
+                    const key = `${fromNode}-${toNode}-${event.cycle}`;
+                    if (!messageFlowMap.has(key)) {
+                        messageFlowMap.set(key, {
+                            fromNode: fromNode,
+                            toNode: toNode,
+                            cycle: event.cycle,
+                            messageType: messageType || 'Req',
+                            eventType: event.eventType,
+                            label: label,
+                            color: getMessageColor(messageType || 'Req', event.eventType, event.edgeKey),
+                            event: event,
+                        });
+                    }
+                } else if (event.eventType === 'PacketInTransitEnd' && event.edgeKey) {
+                    // Message arriving at destination - use this for response arrows
+                    const fromNode = event.edgeKey.fromID;
+                    const toNode = event.nodeID;
+                    label = messageType || 'Comp';
+                    const key = `${fromNode}-${toNode}-${event.cycle}`;
+                    if (!messageFlowMap.has(key)) {
+                        messageFlowMap.set(key, {
+                            fromNode: fromNode,
+                            toNode: toNode,
+                            cycle: event.cycle,
+                            messageType: messageType || 'Comp',
+                            eventType: event.eventType,
+                            label: label,
+                            color: getMessageColor(messageType || 'Comp', event.eventType, event.edgeKey),
+                            event: event,
+                        });
+                    }
+                } else if (event.eventType === 'PacketGenerated') {
+                    // Generated packet (response), show as arrow from same node
+                    label = 'Comp';
+                    const key = `gen-${event.nodeID}-${event.cycle}`;
+                    if (!messageFlowMap.has(key)) {
+                        messageFlowMap.set(key, {
+                            fromNode: event.nodeID,
+                            toNode: event.nodeID, // Self-loop for generation
+                            cycle: event.cycle,
+                            messageType: 'Comp',
+                            eventType: event.eventType,
+                            label: label,
+                            color: 'rgb(255, 100, 0)',
+                            event: event,
+                        });
+                    }
+                }
+            });
+            
+            const messageFlows = Array.from(messageFlowMap.values());
+
+            // 3. Draw message arrows
+            messageFlows.forEach(flow => {
+                const fromIndex = nodeIndexMap.get(flow.fromNode);
+                const toIndex = nodeIndexMap.get(flow.toNode);
+                
+                if (fromIndex === undefined || toIndex === undefined) {
+                    return;
+                }
+
+                const x0 = fromIndex;
+                const x1 = toIndex;
+                const y = flow.cycle;
+
+                // Draw arrow using shape
+                if (x0 !== x1) {
+                    // Horizontal arrow between different nodes
+                    shapes.push({
+                        type: 'line',
+                        x0: x0,
+                        y0: y,
+                        x1: x1,
+                        y1: y,
+                        line: {
+                            color: flow.color,
+                            width: 2,
+                        },
+                    });
+                    
+                    // Arrowhead (triangle)
+                    const arrowSize = (yMax - yMin) * 0.01;
+                    const arrowDirection = x1 > x0 ? 1 : -1;
+                    shapes.push({
+                        type: 'path',
+                        path: `M ${x1} ${y} L ${x1 - arrowSize * arrowDirection} ${y - arrowSize} L ${x1 - arrowSize * arrowDirection} ${y + arrowSize} Z`,
+                        fillcolor: flow.color,
+                        line: { color: flow.color },
+                    });
+
+                    // Message label above arrow
+                    annotations.push({
+                        x: (x0 + x1) / 2,
+                        y: y,
+                        text: flow.label,
+                        showarrow: false,
+                        xref: 'x',
+                        yref: 'y',
+                        xanchor: 'center',
+                        yanchor: 'bottom',
+                        font: { size: 10, color: flow.color },
+                        bgcolor: 'rgba(255, 255, 255, 0.8)',
+                        bordercolor: flow.color,
+                        borderwidth: 1,
+                        borderpad: 2,
+                    });
+                } else {
+                    // Self-loop (packet generation)
+                    const loopRadius = 0.3;
+                    const loopY = y - loopRadius;
+                    shapes.push({
+                        type: 'path',
+                        path: `M ${x0} ${y} Q ${x0 + loopRadius} ${loopY} ${x0} ${loopY} Q ${x0 - loopRadius} ${loopY} ${x0} ${y}`,
+                        line: {
+                            color: flow.color,
+                            width: 2,
+                        },
+                        fillcolor: 'none',
+                    });
+                    
+                    annotations.push({
+                        x: x0 + loopRadius,
+                        y: loopY,
+                        text: flow.label,
+                        showarrow: false,
+                        xref: 'x',
+                        yref: 'y',
+                        xanchor: 'left',
+                        yanchor: 'middle',
+                        font: { size: 10, color: flow.color },
+                        bgcolor: 'rgba(255, 255, 255, 0.8)',
+                        bordercolor: flow.color,
+                        borderwidth: 1,
+                        borderpad: 2,
+                    });
+                }
+            });
+
+            // 4. Draw event markers (small dots) for in-node events
+            const inNodeEvents = allEvents.filter(e => 
+                e.eventType === 'PacketEnqueued' || 
+                e.eventType === 'PacketDequeued' || 
+                e.eventType === 'PacketProcessingStart' || 
+                e.eventType === 'PacketProcessingEnd'
+            );
+
+            if (inNodeEvents.length > 0) {
+                const eventX = [];
+                const eventY = [];
+                const eventTexts = [];
+                
+                inNodeEvents.forEach(event => {
+                    const nodeIndex = nodeIndexMap.get(event.nodeID);
+                    if (nodeIndex !== undefined) {
+                        eventX.push(nodeIndex);
+                        eventY.push(event.cycle);
+                        eventTexts.push(`${event.eventType}`);
+                    }
+                });
+
+                traces.push({
+                    x: eventX,
+                    y: eventY,
+                    type: 'scatter',
+                    mode: 'markers',
+                    marker: {
+                        color: 'rgb(100, 100, 100)',
+                        size: 6,
+                        symbol: 'circle',
+                    },
+                    text: eventTexts,
+                    hovertemplate: '<b>%{text}</b><br>Cycle: %{y}<br><extra></extra>',
+                    showlegend: false,
+                });
+            }
+
+            const layout = {
+                title: {
+                    text: 'Transaction Timeline (CHI Document Style)',
+                    font: { size: 16 },
+                },
+                xaxis: {
+                    type: 'linear',
+                    title: '',
+                    showgrid: false,
+                    showticklabels: false,
+                    range: [-0.5, sortedNodes.length - 0.5],
+                },
+                yaxis: {
+                    title: 'Cycle',
+                    autorange: 'reversed', // Reverse Y axis (top to bottom)
+                    range: [yMax, yMin],
+                    showgrid: true,
+                    gridcolor: 'rgba(200, 200, 200, 0.3)',
+                },
+                height: window.innerHeight - 100,
+                margin: { l: 80, r: 50, t: 50, b: 50 },
+                showlegend: false,
+                annotations: annotations,
+                shapes: shapes,
+                plot_bgcolor: 'white',
+                paper_bgcolor: 'white',
+            };
+
+            const config = {
+                displayModeBar: true,
+                responsive: true,
+            };
+
+            Plotly.newPlot('timelineChart', traces, layout, config);
+        }
     </script>
 </body>
 </html>

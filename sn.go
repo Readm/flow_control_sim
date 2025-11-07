@@ -6,6 +6,7 @@ type SlaveNode struct {
 	Node        // embedded Node base class
 	ProcessRate int
 	queue       []*Packet
+	txnMgr      *TransactionManager // for recording packet events
 
 	// stats
 	ProcessedCount int
@@ -22,9 +23,15 @@ func NewSlaveNode(id int, rate int) *SlaveNode {
 		},
 		ProcessRate: rate,
 		queue:       make([]*Packet, 0),
+		txnMgr:      nil, // will be set by simulator
 	}
 	sn.AddQueue("request_queue", 0, DefaultSlaveQueueCapacity)
 	return sn
+}
+
+// SetTransactionManager sets the transaction manager for event recording
+func (sn *SlaveNode) SetTransactionManager(txnMgr *TransactionManager) {
+	sn.txnMgr = txnMgr
 }
 
 // CanReceive checks if the SlaveNode can receive packets from the given edge.
@@ -38,6 +45,21 @@ func (sn *SlaveNode) OnPackets(messages []*InFlightMessage, cycle int) {
 	for _, msg := range messages {
 		if msg.Packet != nil {
 			msg.Packet.ReceivedAt = cycle
+			
+			// Record PacketReceived event
+			if sn.txnMgr != nil && msg.Packet.TransactionID > 0 {
+				event := &PacketEvent{
+					TransactionID: msg.Packet.TransactionID,
+					PacketID:      msg.Packet.ID,
+					ParentPacketID: msg.Packet.ParentPacketID,
+					NodeID:        sn.ID,
+					EventType:     PacketReceived,
+					Cycle:         cycle,
+					EdgeKey:       nil, // in-node event
+				}
+				sn.txnMgr.RecordPacketEvent(event)
+			}
+			
 			sn.EnqueueRequest(msg.Packet)
 		}
 	}
@@ -50,6 +72,20 @@ func (sn *SlaveNode) EnqueueRequest(p *Packet) {
 		sn.MaxQueueLength = len(sn.queue)
 	}
 	sn.UpdateQueue("request_queue", len(sn.queue))
+	
+	// Record PacketEnqueued event
+	if sn.txnMgr != nil && p != nil && p.TransactionID > 0 {
+		event := &PacketEvent{
+			TransactionID: p.TransactionID,
+			PacketID:      p.ID,
+			ParentPacketID: p.ParentPacketID,
+			NodeID:        sn.ID,
+			EventType:     PacketEnqueued,
+			Cycle:         p.ReceivedAt,
+			EdgeKey:       nil, // in-node event
+		}
+		sn.txnMgr.RecordPacketEvent(event)
+	}
 }
 
 // Tick processes up to ProcessRate requests from the head of queue and returns generated CHI responses.
@@ -71,12 +107,69 @@ func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 
 	responses := make([]*Packet, 0, n)
 	for _, req := range processed {
+		// Record PacketDequeued event
+		if sn.txnMgr != nil && req.TransactionID > 0 {
+			event := &PacketEvent{
+				TransactionID: req.TransactionID,
+				PacketID:      req.ID,
+				ParentPacketID: req.ParentPacketID,
+				NodeID:        sn.ID,
+				EventType:     PacketDequeued,
+				Cycle:         cycle,
+				EdgeKey:       nil, // in-node event
+			}
+			sn.txnMgr.RecordPacketEvent(event)
+		}
+		
+		// Record PacketProcessingStart event
+		if sn.txnMgr != nil && req.TransactionID > 0 {
+			event := &PacketEvent{
+				TransactionID: req.TransactionID,
+				PacketID:      req.ID,
+				ParentPacketID: req.ParentPacketID,
+				NodeID:        sn.ID,
+				EventType:     PacketProcessingStart,
+				Cycle:         cycle,
+				EdgeKey:       nil, // in-node event
+			}
+			sn.txnMgr.RecordPacketEvent(event)
+		}
+		
 		req.CompletedAt = cycle
 		sn.ProcessedCount++
 
 		// Generate CHI protocol response
 		// For ReadNoSnp, generate CompData (Completion with Data)
 		resp := sn.generateCHIResponse(req, cycle, packetIDs)
+		
+		// Record PacketProcessingEnd event
+		if sn.txnMgr != nil && req.TransactionID > 0 {
+			event := &PacketEvent{
+				TransactionID: req.TransactionID,
+				PacketID:      req.ID,
+				ParentPacketID: req.ParentPacketID,
+				NodeID:        sn.ID,
+				EventType:     PacketProcessingEnd,
+				Cycle:         cycle,
+				EdgeKey:       nil, // in-node event
+			}
+			sn.txnMgr.RecordPacketEvent(event)
+		}
+		
+		// Record PacketGenerated event for the response
+		if sn.txnMgr != nil && resp.TransactionID > 0 {
+			event := &PacketEvent{
+				TransactionID: resp.TransactionID,
+				PacketID:      resp.ID,
+				ParentPacketID: req.ID, // parent is the request packet
+				NodeID:        sn.ID,
+				EventType:     PacketGenerated,
+				Cycle:         cycle,
+				EdgeKey:       nil, // in-node event
+			}
+			sn.txnMgr.RecordPacketEvent(event)
+		}
+		
 		responses = append(responses, resp)
 	}
 	sn.UpdateQueue("request_queue", len(sn.queue))
@@ -97,6 +190,7 @@ func (sn *SlaveNode) generateCHIResponse(req *Packet, cycle int, packetIDs *Pack
 		Address:       req.Address,  // preserve address from request
 		DataSize:      req.DataSize, // preserve data size from request
 		TransactionID: req.TransactionID, // preserve transaction ID from request
+		ParentPacketID: req.ID, // parent is the request packet
 	}
 
 	// Set CHI protocol fields based on transaction type

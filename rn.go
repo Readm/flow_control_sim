@@ -158,6 +158,7 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 				Address:         address,
 				DataSize:        dataSize,
 				TransactionID:   txnID,
+				ParentPacketID:  0, // Initial request has no parent packet
 			}
 			
 			rn.TotalRequests++
@@ -213,6 +214,20 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 		for i := 0; i < releaseCount; i++ {
 			p := rn.stimulusQueue[i]
 			rn.dispatchQueue = append(rn.dispatchQueue, p)
+			
+			// Record PacketEnqueued event (entering dispatch_queue)
+			if rn.txnMgr != nil && p != nil && p.TransactionID > 0 {
+				event := &PacketEvent{
+					TransactionID: p.TransactionID,
+					PacketID:      p.ID,
+					ParentPacketID: p.ParentPacketID,
+					NodeID:        rn.ID,
+					EventType:     PacketEnqueued,
+					Cycle:         cycle,
+					EdgeKey:       nil, // in-node event
+				}
+				rn.txnMgr.RecordPacketEvent(event)
+			}
 		}
 		// Remove transferred packets from stimulus_queue
 		if releaseCount > 0 {
@@ -236,6 +251,22 @@ func (rn *RequestNode) CanReceive(edgeKey EdgeKey, packetCount int) bool {
 func (rn *RequestNode) OnPackets(messages []*InFlightMessage, cycle int) {
 	for _, msg := range messages {
 		if msg.Packet != nil {
+			msg.Packet.ReceivedAt = cycle
+			
+			// Record PacketReceived event
+			if rn.txnMgr != nil && msg.Packet.TransactionID > 0 {
+				event := &PacketEvent{
+					TransactionID: msg.Packet.TransactionID,
+					PacketID:      msg.Packet.ID,
+					ParentPacketID: msg.Packet.ParentPacketID,
+					NodeID:        rn.ID,
+					EventType:     PacketReceived,
+					Cycle:         cycle,
+					EdgeKey:       nil, // in-node event
+				}
+				rn.txnMgr.RecordPacketEvent(event)
+			}
+			
 			rn.OnResponse(msg.Packet, cycle, rn.txnMgr)
 		}
 	}
@@ -265,6 +296,20 @@ func (rn *RequestNode) OnResponse(p *Packet, cycle int, txnMgr *TransactionManag
 	found := false
 	for i, reqPkt := range rn.dispatchQueue {
 		if reqPkt.RequestID == requestID {
+			// Record PacketDequeued event (leaving dispatch_queue)
+			if rn.txnMgr != nil && reqPkt.TransactionID > 0 {
+				event := &PacketEvent{
+					TransactionID: reqPkt.TransactionID,
+					PacketID:      reqPkt.ID,
+					ParentPacketID: reqPkt.ParentPacketID,
+					NodeID:        rn.ID,
+					EventType:     PacketDequeued,
+					Cycle:         cycle,
+					EdgeKey:       nil, // in-node event
+				}
+				rn.txnMgr.RecordPacketEvent(event)
+			}
+			
 			// Remove packet from dispatch_queue using slice trick
 			rn.dispatchQueue = append(rn.dispatchQueue[:i], rn.dispatchQueue[i+1:]...)
 			found = true

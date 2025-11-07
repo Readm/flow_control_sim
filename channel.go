@@ -2,8 +2,8 @@ package main
 
 // EdgeKey represents a unique edge in the network (fromID -> toID)
 type EdgeKey struct {
-    FromID int
-    ToID   int
+    FromID int `json:"fromID"`
+    ToID   int `json:"toID"`
 }
 
 // InFlightMessage represents a CHI protocol packet that is currently in transit.
@@ -46,6 +46,7 @@ type Link struct {
     bandwidthLimit int
     pipelines      map[EdgeKey]*Pipeline
     nodeRegistry    map[int]NodeReceiver // maps node ID to receiver interface
+    txnMgr         *TransactionManager   // for recording packet events
 }
 
 // NewLink creates a new link with the given bandwidth limit and node registry
@@ -54,7 +55,13 @@ func NewLink(bandwidthLimit int, nodeRegistry map[int]NodeReceiver) *Link {
         bandwidthLimit: bandwidthLimit,
         pipelines:      make(map[EdgeKey]*Pipeline),
         nodeRegistry:    nodeRegistry,
+        txnMgr:         nil, // will be set by simulator
     }
+}
+
+// SetTransactionManager sets the transaction manager for event recording
+func (c *Link) SetTransactionManager(txnMgr *TransactionManager) {
+    c.txnMgr = txnMgr
 }
 
 // getOrCreatePipeline gets or creates a pipeline for the given edge key
@@ -132,6 +139,20 @@ func (c *Link) Send(packet *Packet, fromID, toID, currentCycle, latency int) {
         ArrivalCycle: currentCycle + latency,
     }
     
+    // Record PacketSent event
+    if c.txnMgr != nil && packet != nil && packet.TransactionID > 0 {
+        event := &PacketEvent{
+            TransactionID: packet.TransactionID,
+            PacketID:      packet.ID,
+            ParentPacketID: packet.ParentPacketID,
+            NodeID:        fromID,
+            EventType:     PacketSent,
+            Cycle:         currentCycle,
+            EdgeKey:       &edgeKey,
+        }
+        c.txnMgr.RecordPacketEvent(event)
+    }
+    
     // Try to add to last slot (Slot[latency-1])
     lastSlot := pipeline.slots[len(pipeline.slots)-1]
     if len(lastSlot.packets) < lastSlot.capacity {
@@ -156,6 +177,25 @@ func (c *Link) Tick(cycle int) {
             if exists && receiver.CanReceive(edgeKey, len(pipeline.slots[0].packets)) {
                 // Successfully received: move slots and fill from queue
                 arrivals := pipeline.slots[0].packets
+                
+                // Record PacketInTransitEnd events (packet leaving pipeline)
+                if c.txnMgr != nil {
+                    for _, msg := range arrivals {
+                        if msg.Packet != nil && msg.Packet.TransactionID > 0 {
+                            event := &PacketEvent{
+                                TransactionID: msg.Packet.TransactionID,
+                                PacketID:      msg.Packet.ID,
+                                ParentPacketID: msg.Packet.ParentPacketID,
+                                NodeID:        edgeKey.ToID,
+                                EventType:     PacketInTransitEnd,
+                                Cycle:         cycle,
+                                EdgeKey:       &edgeKey,
+                            }
+                            c.txnMgr.RecordPacketEvent(event)
+                        }
+                    }
+                }
+                
                 pipeline.slots[0].packets = nil
                 receiver.OnPackets(arrivals, cycle)
                 pipeline.advanceSlots()

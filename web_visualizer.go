@@ -8,12 +8,13 @@ import (
 type WebVisualizer struct {
 	headless bool
 	server   *WebServer
+	txnMgr   *TransactionManager
 }
 
 // NewWebVisualizer creates a new web visualizer instance and starts the server.
-func NewWebVisualizer() *WebVisualizer {
+func NewWebVisualizer(txnMgr *TransactionManager) *WebVisualizer {
 	addr := "127.0.0.1:8080"
-	server := NewWebServer(addr)
+	server := NewWebServer(addr, txnMgr)
 	server.Start()
 
 	fmt.Printf("[DEBUG] Web server started at http://%s\n", addr)
@@ -21,6 +22,7 @@ func NewWebVisualizer() *WebVisualizer {
 	return &WebVisualizer{
 		headless: false,
 		server:   server,
+		txnMgr:   txnMgr,
 	}
 }
 

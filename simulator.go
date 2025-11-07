@@ -180,10 +180,54 @@ func NewSimulator(cfg *Config) *Simulator {
 	sim.edges = sim.buildEdges()
 	sim.visualizer = sim.initVisualizer()
 	
-	// Set TransactionManager for all RequestNodes
+	// Set TransactionManager for all components
 	for _, m := range sim.Masters {
 		m.SetTransactionManager(sim.txnMgr)
 	}
+	for _, s := range sim.Slaves {
+		s.SetTransactionManager(sim.txnMgr)
+	}
+	if sim.Relay != nil {
+		sim.Relay.SetTransactionManager(sim.txnMgr)
+	}
+	if sim.Chan != nil {
+		sim.Chan.SetTransactionManager(sim.txnMgr)
+	}
+	
+	// Set node labels in TransactionManager
+	sim.txnMgr.SetNodeLabels(sim.nodeLabels)
+	
+	// Configure packet history tracking
+	// Default: enabled (true) if not explicitly disabled
+	// Since bool zero value is false, we check if any history config is set
+	// If MaxPacketHistorySize, HistoryOverflowMode, or MaxTransactionHistory are set,
+	// we assume user wants to configure history, so we respect EnablePacketHistory
+	// Otherwise, we default to enabled
+	enableHistory := true
+	if cfg.EnablePacketHistory == false {
+		// Check if user explicitly configured history (any non-zero config)
+		if cfg.MaxPacketHistorySize != 0 || cfg.HistoryOverflowMode != "" || cfg.MaxTransactionHistory != 0 {
+			// User explicitly configured, respect the false setting
+			enableHistory = false
+		} else {
+			// No explicit config, default to enabled
+			enableHistory = true
+		}
+	}
+	
+	historyConfig := &PacketHistoryConfig{
+		EnablePacketHistory:  enableHistory,
+		MaxPacketHistorySize:  cfg.MaxPacketHistorySize,
+		HistoryOverflowMode:   cfg.HistoryOverflowMode,
+		MaxTransactionHistory: cfg.MaxTransactionHistory,
+	}
+	if historyConfig.HistoryOverflowMode == "" {
+		historyConfig.HistoryOverflowMode = "circular"
+	}
+	if historyConfig.MaxTransactionHistory == 0 {
+		historyConfig.MaxTransactionHistory = 1000
+	}
+	sim.txnMgr.SetHistoryConfig(historyConfig)
 
 	return sim
 }
@@ -198,7 +242,7 @@ func (s *Simulator) initVisualizer() Visualizer {
 		viz.SetHeadless(true)
 		return viz
 	}
-	viz := NewWebVisualizer()
+	viz := NewWebVisualizer(s.txnMgr)
 	viz.SetHeadless(false)
 	return viz
 }
@@ -492,6 +536,11 @@ func (s *Simulator) Run() {
 			s.visualizer.PublishFrame(frame)
 		}
 
+		// Periodic history cleanup (every 100 cycles)
+		if cycle%100 == 0 && s.txnMgr != nil {
+			s.txnMgr.CleanupHistory()
+		}
+
 		// Small delay to allow visualization updates
 		if s.visualizer != nil && !s.visualizer.IsHeadless() {
 			time.Sleep(DefaultVisualizationDelay)
@@ -528,10 +577,54 @@ func (s *Simulator) reset(newCfg *Config) {
 	s.current = 0
 	s.edges = s.buildEdges()
 	
-	// Set TransactionManager for all RequestNodes
+	// Set TransactionManager for all components
 	for _, m := range s.Masters {
 		m.SetTransactionManager(s.txnMgr)
 	}
+	for _, s := range s.Slaves {
+		s.SetTransactionManager(s.txnMgr)
+	}
+	if s.Relay != nil {
+		s.Relay.SetTransactionManager(s.txnMgr)
+	}
+	if s.Chan != nil {
+		s.Chan.SetTransactionManager(s.txnMgr)
+	}
+	
+	// Set node labels in TransactionManager
+	s.txnMgr.SetNodeLabels(s.nodeLabels)
+	
+	// Configure packet history tracking
+	// Default: enabled (true) if not explicitly disabled
+	// Since bool zero value is false, we check if any history config is set
+	// If MaxPacketHistorySize, HistoryOverflowMode, or MaxTransactionHistory are set,
+	// we assume user wants to configure history, so we respect EnablePacketHistory
+	// Otherwise, we default to enabled
+	enableHistory := true
+	if s.cfg.EnablePacketHistory == false {
+		// Check if user explicitly configured history (any non-zero config)
+		if s.cfg.MaxPacketHistorySize != 0 || s.cfg.HistoryOverflowMode != "" || s.cfg.MaxTransactionHistory != 0 {
+			// User explicitly configured, respect the false setting
+			enableHistory = false
+		} else {
+			// No explicit config, default to enabled
+			enableHistory = true
+		}
+	}
+	
+	historyConfig := &PacketHistoryConfig{
+		EnablePacketHistory:  enableHistory,
+		MaxPacketHistorySize:  s.cfg.MaxPacketHistorySize,
+		HistoryOverflowMode:   s.cfg.HistoryOverflowMode,
+		MaxTransactionHistory: s.cfg.MaxTransactionHistory,
+	}
+	if historyConfig.HistoryOverflowMode == "" {
+		historyConfig.HistoryOverflowMode = "circular"
+	}
+	if historyConfig.MaxTransactionHistory == 0 {
+		historyConfig.MaxTransactionHistory = 1000
+	}
+	s.txnMgr.SetHistoryConfig(historyConfig)
 
 	// If web frontend is available, pause at cycle 0 after reset
 	// Otherwise (headless mode), continue running

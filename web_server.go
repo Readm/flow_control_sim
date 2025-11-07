@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -25,13 +27,15 @@ type WebServer struct {
 	server      *http.Server
 	clients     map[*websocket.Conn]bool
 	clientsMu   sync.Mutex
+	txnMgr      *TransactionManager // for transaction timeline API
 }
 
 // NewWebServer creates a new web server instance.
-func NewWebServer(addr string) *WebServer {
+func NewWebServer(addr string, txnMgr *TransactionManager) *WebServer {
 	ws := &WebServer{
 		commands: make(chan ControlCommand, 10),
 		clients:  make(map[*websocket.Conn]bool),
+		txnMgr:   txnMgr,
 	}
 
 	mux := http.NewServeMux()
@@ -39,6 +43,9 @@ func NewWebServer(addr string) *WebServer {
 	mux.HandleFunc("/api/stats", ws.handleStats)
 	mux.HandleFunc("/api/control", ws.handleControl)
 	mux.HandleFunc("/api/configs", ws.handleConfigs)
+	mux.HandleFunc("/api/transactions", ws.handleTransactions)
+	mux.HandleFunc("/api/transaction/", ws.handleTransactionTimeline)
+	mux.HandleFunc("/api/transactions/timelines", ws.handleTransactionTimelines)
 	mux.HandleFunc("/ws", ws.handleWebSocket)
 	mux.Handle("/", http.FileServer(http.Dir("web/static")))
 
@@ -365,5 +372,118 @@ func (ws *WebServer) handleConfigs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(configList); err != nil {
 		http.Error(w, "Failed to encode configs", http.StatusInternalServerError)
+	}
+}
+
+// handleTransactions handles GET /api/transactions
+func (ws *WebServer) handleTransactions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if ws.txnMgr == nil {
+		http.Error(w, "Transaction manager not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get state filter from query parameter
+	stateFilter := r.URL.Query().Get("state")
+
+	summaries := ws.txnMgr.GetAllTransactionSummaries()
+
+	// Filter by state if provided
+	if stateFilter != "" {
+		filtered := make([]*TransactionSummary, 0)
+		for _, s := range summaries {
+			if string(s.State) == stateFilter {
+				filtered = append(filtered, s)
+			}
+		}
+		summaries = filtered
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(summaries); err != nil {
+		http.Error(w, "Failed to encode transactions", http.StatusInternalServerError)
+	}
+}
+
+// handleTransactionTimeline handles GET /api/transaction/{txnID}/timeline
+func (ws *WebServer) handleTransactionTimeline(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if ws.txnMgr == nil {
+		http.Error(w, "Transaction manager not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Extract transaction ID from path: /api/transaction/{txnID}/timeline
+	path := r.URL.Path
+	// Remove /api/transaction/ prefix
+	prefix := "/api/transaction/"
+	if !strings.HasPrefix(path, prefix) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	path = path[len(prefix):]
+	// Remove /timeline suffix if present
+	if strings.HasSuffix(path, "/timeline") {
+		path = path[:len(path)-len("/timeline")]
+	}
+
+	var txnID int64
+	if _, err := fmt.Sscanf(path, "%d", &txnID); err != nil {
+		http.Error(w, "Invalid transaction ID", http.StatusBadRequest)
+		return
+	}
+
+	timeline := ws.txnMgr.GetTransactionTimeline(txnID)
+	if timeline == nil {
+		http.Error(w, "Transaction not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(timeline); err != nil {
+		http.Error(w, "Failed to encode timeline", http.StatusInternalServerError)
+	}
+}
+
+// handleTransactionTimelines handles POST /api/transactions/timelines
+func (ws *WebServer) handleTransactionTimelines(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if ws.txnMgr == nil {
+		http.Error(w, "Transaction manager not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		TransactionIDs []int64 `json:"transactionIDs"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	timelines := make([]*TransactionTimeline, 0, len(req.TransactionIDs))
+	for _, txnID := range req.TransactionIDs {
+		timeline := ws.txnMgr.GetTransactionTimeline(txnID)
+		if timeline != nil {
+			timelines = append(timelines, timeline)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(timelines); err != nil {
+		http.Error(w, "Failed to encode timelines", http.StatusInternalServerError)
 	}
 }

@@ -9,7 +9,7 @@ import (
 )
 
 func TestWebServer_FrameEndpoint(t *testing.T) {
-	server := NewWebServer("127.0.0.1:0")
+	server := NewWebServer("127.0.0.1:0", nil)
 	
 	// Test empty frame
 	req := httptest.NewRequest("GET", "/api/frame", nil)
@@ -57,7 +57,7 @@ func TestWebServer_FrameEndpoint(t *testing.T) {
 }
 
 func TestWebServer_StatsEndpoint(t *testing.T) {
-	server := NewWebServer("127.0.0.1:0")
+	server := NewWebServer("127.0.0.1:0", nil)
 
 	// Test empty stats
 	req := httptest.NewRequest("GET", "/api/stats", nil)
@@ -97,7 +97,7 @@ func TestWebServer_StatsEndpoint(t *testing.T) {
 }
 
 func TestWebServer_ControlEndpoint(t *testing.T) {
-	server := NewWebServer("127.0.0.1:0")
+	server := NewWebServer("127.0.0.1:0", nil)
 
 	// Test pause command
 	cmdJSON := `{"type":"pause"}`
@@ -214,7 +214,7 @@ func TestWebServer_ControlEndpoint(t *testing.T) {
 }
 
 func TestWebServer_NextCommand_NonBlocking(t *testing.T) {
-	server := NewWebServer("127.0.0.1:0")
+	server := NewWebServer("127.0.0.1:0", nil)
 
 	// Test empty queue
 	cmd, ok := server.NextCommand()

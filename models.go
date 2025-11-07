@@ -102,6 +102,9 @@ type Packet struct {
 	// Snoop-related fields
 	OriginalTxnID   int64  // For Snoop responses: the original transaction ID that triggered this snoop
 	SnoopTargetID   int    // For Snoop requests: the target Request Node ID to snoop
+
+	// Packet generation tracking
+	ParentPacketID  int64  // ID of the parent packet that generated this packet (0 if no parent)
 }
 
 // Config holds simulation configuration values.
@@ -152,6 +155,12 @@ type Config struct {
 	// Initial cache state (for test scenarios)
 	// Format: map[nodeID]map[address]CacheState
 	InitialCacheState map[int]map[uint64]CacheState
+
+	// Packet history tracking configuration
+	EnablePacketHistory  bool   // Enable packet history tracking (default: true)
+	MaxPacketHistorySize int    // Maximum packet history size (0 = unlimited, default: 0)
+	HistoryOverflowMode  string // "circular" or "initial" (default: "circular")
+	MaxTransactionHistory int   // Maximum number of transactions to keep history for (default: 1000)
 }
 
 // NodeIDAllocator provides simple incremental ids for nodes.

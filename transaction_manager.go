@@ -1,27 +1,52 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 )
+
+// PacketHistoryConfig holds configuration for packet history tracking
+type PacketHistoryConfig struct {
+	EnablePacketHistory   bool
+	MaxPacketHistorySize  int
+	HistoryOverflowMode   string // "circular" or "initial"
+	MaxTransactionHistory int
+}
 
 // TransactionManager is the core component responsible for:
 // - Creating and managing Transaction objects
 // - Recording dependencies between transactions
 // - Maintaining Transaction Graph
 // - Providing query interfaces
+// - Tracking packet history for timeline visualization
 type TransactionManager struct {
 	mu           sync.RWMutex
 	transactions map[int64]*Transaction
 	dependencies map[int64][]*TransactionDependency // fromID -> dependencies
 	nextTxnID    int64
+
+	// Packet history tracking
+	packetHistory    map[int64][]*PacketEvent // transaction ID -> events
+	allPacketHistory []*PacketEvent           // all events (for full history mode)
+	historyConfig    *PacketHistoryConfig
+	nodeLabels       map[int]string // node ID -> label (set by simulator)
 }
 
 // NewTransactionManager creates a new TransactionManager
 func NewTransactionManager() *TransactionManager {
 	return &TransactionManager{
-		transactions: make(map[int64]*Transaction),
-		dependencies: make(map[int64][]*TransactionDependency),
-		nextTxnID:    1,
+		transactions:     make(map[int64]*Transaction),
+		dependencies:     make(map[int64][]*TransactionDependency),
+		nextTxnID:        1,
+		packetHistory:    make(map[int64][]*PacketEvent),
+		allPacketHistory: make([]*PacketEvent, 0),
+		historyConfig: &PacketHistoryConfig{
+			EnablePacketHistory:   true,
+			MaxPacketHistorySize:  0, // unlimited
+			HistoryOverflowMode:   "circular",
+			MaxTransactionHistory: 1000,
+		},
+		nodeLabels: make(map[int]string),
 	}
 }
 
@@ -38,17 +63,17 @@ func (tm *TransactionManager) CreateTransaction(
 	tm.nextTxnID++
 
 	ctx := &TransactionContext{
-		TransactionID:    txnID,
-		TransactionType:   transactionType,
-		Address:           address,
-		State:             TxStateInitiated,
-		StateHistory:      make([]StateTransition, 0),
-		InitiatedAt:       initiatedAt,
-		CompletedAt:       0,
-		SameAddrOrdering:  make([]int64, 0),
-		GlobalOrdering:    make([]int64, 0),
+		TransactionID:         txnID,
+		TransactionType:       transactionType,
+		Address:               address,
+		State:                 TxStateInitiated,
+		StateHistory:          make([]StateTransition, 0),
+		InitiatedAt:           initiatedAt,
+		CompletedAt:           0,
+		SameAddrOrdering:      make([]int64, 0),
+		GlobalOrdering:        make([]int64, 0),
 		GeneratedTransactions: make([]int64, 0),
-		Metadata:          make(map[string]string),
+		Metadata:              make(map[string]string),
 	}
 
 	// Record initial state transition
@@ -142,10 +167,10 @@ func (tm *TransactionManager) UpdateTransactionState(
 
 	// Record state transition
 	txn.Context.StateHistory = append(txn.Context.StateHistory, StateTransition{
-		Cycle:       cycle,
-		FromState:   oldState,
-		ToState:     newState,
-		Reason:      reason,
+		Cycle:        cycle,
+		FromState:    oldState,
+		ToState:      newState,
+		Reason:       reason,
 		RelatedTxnID: relatedTxnID,
 	})
 
@@ -222,5 +247,267 @@ func (tm *TransactionManager) Reset() {
 	tm.transactions = make(map[int64]*Transaction)
 	tm.dependencies = make(map[int64][]*TransactionDependency)
 	tm.nextTxnID = 1
+	tm.packetHistory = make(map[int64][]*PacketEvent)
+	tm.allPacketHistory = make([]*PacketEvent, 0)
 }
 
+// SetHistoryConfig sets the packet history tracking configuration
+func (tm *TransactionManager) SetHistoryConfig(cfg *PacketHistoryConfig) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if cfg != nil {
+		tm.historyConfig = cfg
+	}
+}
+
+// SetNodeLabels sets the node ID to label mapping
+func (tm *TransactionManager) SetNodeLabels(labels map[int]string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.nodeLabels = labels
+}
+
+// RecordPacketEvent records a packet event for timeline visualization
+func (tm *TransactionManager) RecordPacketEvent(event *PacketEvent) {
+	if event == nil {
+		return
+	}
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	// Check if history tracking is enabled
+	if !tm.historyConfig.EnablePacketHistory {
+		return
+	}
+
+	// Set node label if not set
+	if event.NodeLabel == "" && tm.nodeLabels != nil {
+		if label, ok := tm.nodeLabels[event.NodeID]; ok {
+			event.NodeLabel = label
+		}
+	}
+
+	// Add to transaction-specific history
+	if event.TransactionID > 0 {
+		tm.packetHistory[event.TransactionID] = append(tm.packetHistory[event.TransactionID], event)
+	}
+
+	// Add to all history (for full history mode)
+	tm.allPacketHistory = append(tm.allPacketHistory, event)
+
+	// Check if we need to cleanup
+	if tm.historyConfig.MaxPacketHistorySize > 0 && len(tm.allPacketHistory) > tm.historyConfig.MaxPacketHistorySize {
+		tm.cleanupHistoryLocked()
+	}
+}
+
+// cleanupHistoryLocked performs history cleanup (must be called with lock held)
+func (tm *TransactionManager) cleanupHistoryLocked() {
+	if tm.historyConfig.HistoryOverflowMode == "initial" {
+		// Keep only the first N transactions
+		if len(tm.packetHistory) > tm.historyConfig.MaxTransactionHistory {
+			// Find oldest transactions and remove them
+			// This is a simplified version - in practice, we'd track transaction creation order
+			count := 0
+			for txnID := range tm.packetHistory {
+				if count >= len(tm.packetHistory)-tm.historyConfig.MaxTransactionHistory {
+					break
+				}
+				delete(tm.packetHistory, txnID)
+				count++
+			}
+			// Rebuild allPacketHistory
+			tm.allPacketHistory = make([]*PacketEvent, 0)
+			for _, events := range tm.packetHistory {
+				tm.allPacketHistory = append(tm.allPacketHistory, events...)
+			}
+		}
+	} else {
+		// Circular mode: remove oldest events
+		excess := len(tm.allPacketHistory) - tm.historyConfig.MaxPacketHistorySize
+		if excess > 0 {
+			// Remove oldest events
+			tm.allPacketHistory = tm.allPacketHistory[excess:]
+			// Rebuild packetHistory map
+			tm.packetHistory = make(map[int64][]*PacketEvent)
+			for _, event := range tm.allPacketHistory {
+				if event.TransactionID > 0 {
+					tm.packetHistory[event.TransactionID] = append(tm.packetHistory[event.TransactionID], event)
+				}
+			}
+		}
+	}
+}
+
+// CleanupHistory performs history cleanup based on configuration
+func (tm *TransactionManager) CleanupHistory() {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.cleanupHistoryLocked()
+}
+
+// TransactionSummary represents a summary of a transaction for listing
+type TransactionSummary struct {
+	ID          int64              `json:"id"`
+	Type        CHITransactionType `json:"type"`
+	Address     uint64             `json:"address"`
+	InitiatedAt int                `json:"initiatedAt"`
+	CompletedAt int                `json:"completedAt"`
+	State       TransactionState   `json:"state"`
+}
+
+// GetAllTransactionSummaries returns summaries of all transactions
+func (tm *TransactionManager) GetAllTransactionSummaries() []*TransactionSummary {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+
+	summaries := make([]*TransactionSummary, 0, len(tm.transactions))
+	for _, txn := range tm.transactions {
+		if txn != nil && txn.Context != nil {
+			summaries = append(summaries, &TransactionSummary{
+				ID:          txn.Context.TransactionID,
+				Type:        txn.Context.TransactionType,
+				Address:     txn.Context.Address,
+				InitiatedAt: txn.Context.InitiatedAt,
+				CompletedAt: txn.Context.CompletedAt,
+				State:       txn.Context.State,
+			})
+		}
+	}
+	return summaries
+}
+
+// NodeInfo represents node information for timeline
+type NodeInfo struct {
+	ID    int      `json:"id"`
+	Label string   `json:"label"`
+	Type  NodeType `json:"type"`
+}
+
+// TimeRange represents a time range
+type TimeRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// TransactionTimeline represents the timeline data for a transaction
+type TransactionTimeline struct {
+	TransactionID int64          `json:"transactionID"`
+	Events        []*PacketEvent `json:"events"`
+	Nodes         []NodeInfo     `json:"nodes"`
+	TimeRange     TimeRange      `json:"timeRange"`
+	Packets       []PacketInfo   `json:"packets"`
+}
+
+// GetTransactionTimeline retrieves the timeline for a specific transaction
+func (tm *TransactionManager) GetTransactionTimeline(txnID int64) *TransactionTimeline {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+
+	txn := tm.transactions[txnID]
+	if txn == nil {
+		return nil
+	}
+
+	events := tm.packetHistory[txnID]
+	if events == nil {
+		events = make([]*PacketEvent, 0)
+	}
+
+	// Collect unique nodes
+	nodeMap := make(map[int]NodeInfo)
+	minCycle := int(^uint(0) >> 1) // max int
+	maxCycle := 0
+
+	for _, event := range events {
+		if _, exists := nodeMap[event.NodeID]; !exists {
+			nodeType := NodeTypeRN // default
+			label := event.NodeLabel
+			if label == "" {
+				if tm.nodeLabels != nil {
+					label = tm.nodeLabels[event.NodeID]
+				}
+				if label == "" {
+					label = fmt.Sprintf("Node %d", event.NodeID)
+				}
+			}
+			// Try to infer node type from label
+			if len(label) >= 2 {
+				prefix := label[:2]
+				switch prefix {
+				case "RN":
+					nodeType = NodeTypeRN
+				case "HN":
+					nodeType = NodeTypeHN
+				case "SN":
+					nodeType = NodeTypeSN
+				}
+			}
+			nodeMap[event.NodeID] = NodeInfo{
+				ID:    event.NodeID,
+				Label: label,
+				Type:  nodeType,
+			}
+		}
+		if event.Cycle < minCycle {
+			minCycle = event.Cycle
+		}
+		if event.Cycle > maxCycle {
+			maxCycle = event.Cycle
+		}
+	}
+
+	// Convert node map to slice and sort
+	nodes := make([]NodeInfo, 0, len(nodeMap))
+	for _, node := range nodeMap {
+		nodes = append(nodes, node)
+	}
+
+	// Sort nodes by type (RN -> HN -> SN) and then by ID
+	for i := 0; i < len(nodes)-1; i++ {
+		for j := i + 1; j < len(nodes); j++ {
+			typeOrder := map[NodeType]int{
+				NodeTypeRN: 0,
+				NodeTypeHN: 1,
+				NodeTypeSN: 2,
+			}
+			if typeOrder[nodes[i].Type] > typeOrder[nodes[j].Type] ||
+				(typeOrder[nodes[i].Type] == typeOrder[nodes[j].Type] && nodes[i].ID > nodes[j].ID) {
+				nodes[i], nodes[j] = nodes[j], nodes[i]
+			}
+		}
+	}
+
+	// Collect unique packet IDs
+	packetMap := make(map[int64]bool)
+	for _, event := range events {
+		if event.PacketID > 0 {
+			packetMap[event.PacketID] = true
+		}
+	}
+
+	// Create packet info list (simplified - in practice, we'd need to query packet details)
+	packets := make([]PacketInfo, 0, len(packetMap))
+	for packetID := range packetMap {
+		packets = append(packets, PacketInfo{
+			ID: packetID,
+		})
+	}
+
+	if minCycle > maxCycle {
+		minCycle = 0
+		maxCycle = 0
+	}
+
+	return &TransactionTimeline{
+		TransactionID: txnID,
+		Events:        events,
+		Nodes:         nodes,
+		TimeRange: TimeRange{
+			Start: minCycle,
+			End:   maxCycle,
+		},
+		Packets: packets,
+	}
+}
