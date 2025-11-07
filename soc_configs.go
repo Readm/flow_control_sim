@@ -11,6 +11,47 @@ type SOCNetworkConfig struct {
 func GetPredefinedConfigs() []SOCNetworkConfig {
 	return []SOCNetworkConfig{
 		{
+			Name:        "readonce_snoop_test",
+			Description: "ReadOnce Snoop Test: 2 RNs, 1 HN, 1 SN. RN0 pre-loads cache, RN1 issues ReadOnce to trigger snoop",
+			Config: &Config{
+				NumMasters:         2,
+				NumSlaves:          1,
+				NumRelays:          1,
+				TotalCycles:        100,
+				MasterRelayLatency: 2,
+				RelayMasterLatency: 2,
+				RelaySlaveLatency:  1,
+				SlaveRelayLatency:  1,
+				SlaveProcessRate:   1,
+				BandwidthLimit:     1,
+				SlaveWeights:       []int{1},
+				Headless:           false,
+				VisualMode:         "web",
+				// Schedule: RN0 reads at cycle 0 (pre-load cache), RN1 reads same address at cycle 5 (triggers snoop)
+				ScheduleConfig: map[int]map[int][]ScheduleItem{
+					0: {
+						0: {
+							{
+								SlaveIndex:      0,
+								TransactionType: CHITxnReadNoSnp,
+								Address:         DefaultAddressBase, // 0x1000
+							},
+						},
+					},
+					5: {
+						1: {
+							{
+								SlaveIndex:      0,
+								TransactionType: CHITxnReadOnce,
+								Address:         DefaultAddressBase, // Same address to trigger snoop
+							},
+						},
+					},
+				},
+				InitialCacheState: nil,
+			},
+		},
+		{
 			Name:        "multi_master_multi_slave",
 			Description: "Multi-Master Multi-Slave Network (3 Masters, 2 Slaves, 1 Home Node)",
 			Config: &Config{

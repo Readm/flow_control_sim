@@ -44,18 +44,23 @@ const (
 type CHIMessageType string
 
 const (
-	CHIMsgReq  CHIMessageType = "Req"  // Request message
-	CHIMsgResp CHIMessageType = "Resp" // Response message
-	CHIMsgData CHIMessageType = "Data" // Data message
-	CHIMsgComp CHIMessageType = "Comp" // Completion message
+	CHIMsgReq     CHIMessageType = "Req"     // Request message
+	CHIMsgResp    CHIMessageType = "Resp"    // Response message
+	CHIMsgData    CHIMessageType = "Data"    // Data message
+	CHIMsgComp    CHIMessageType = "Comp"    // Completion message
+	CHIMsgSnp     CHIMessageType = "Snp"     // Snoop request message
+	CHIMsgSnpResp CHIMessageType = "SnpResp" // Snoop response message
 )
 
 // CHIResponseType represents CHI response types
 type CHIResponseType string
 
 const (
-	CHIRespCompData CHIResponseType = "CompData" // Completion with data
-	CHIRespCompAck  CHIResponseType = "CompAck"  // Completion acknowledgment
+	CHIRespCompData   CHIResponseType = "CompData"   // Completion with data
+	CHIRespCompAck    CHIResponseType = "CompAck"    // Completion acknowledgment
+	CHIRespSnpData    CHIResponseType = "SnpData"    // Snoop response with data
+	CHIRespSnpInvalid CHIResponseType = "SnpInvalid" // Snoop response invalidating cache
+	CHIRespSnpNoData  CHIResponseType = "SnpNoData"  // Snoop response with no data
 )
 
 // Packet represents a CHI protocol message flowing through the simulator.
@@ -93,6 +98,10 @@ type Packet struct {
 	
 	// Transaction tracking
 	TransactionID   int64  // ID of the transaction this packet belongs to (0 if not associated)
+	
+	// Snoop-related fields
+	OriginalTxnID   int64  // For Snoop responses: the original transaction ID that triggered this snoop
+	SnoopTargetID   int    // For Snoop requests: the target Request Node ID to snoop
 }
 
 // Config holds simulation configuration values.
@@ -139,6 +148,10 @@ type Config struct {
 	// visualization settings
 	Headless   bool   // true to run without visualization
 	VisualMode string // "gui" | "web" | "none" (default: "gui" if Headless is false)
+	
+	// Initial cache state (for test scenarios)
+	// Format: map[nodeID]map[address]CacheState
+	InitialCacheState map[int]map[uint64]CacheState
 }
 
 // NodeIDAllocator provides simple incremental ids for nodes.
