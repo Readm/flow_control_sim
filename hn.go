@@ -1,13 +1,17 @@
 package main
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/example/flow_sim/queue"
+)
 
 // HomeNode (HN) represents a CHI Home Node that manages cache coherence and routes transactions.
 // It receives requests from Request Nodes and forwards them to Slave Nodes,
 // then routes responses back to the originating Request Node.
 type HomeNode struct {
 	Node   // embedded Node base class
-	queue  []*Packet
+	queue  *queue.TrackedQueue[*Packet]
 	txnMgr *TransactionManager // for recording packet events
 
 	mu       sync.Mutex
@@ -20,12 +24,53 @@ func NewHomeNode(id int) *HomeNode {
 			ID:   id,
 			Type: NodeTypeHN,
 		},
-		queue:    make([]*Packet, 0),
 		txnMgr:   nil, // will be set by simulator
 		bindings: NewNodeCycleBindings(),
 	}
 	hn.AddQueue("forward_queue", 0, DefaultForwardQueueCapacity)
+	hn.queue = queue.NewTrackedQueue("forward_queue", DefaultForwardQueueCapacity, hn.makeQueueMutator(), queue.QueueHooks[*Packet]{
+		OnEnqueue: hn.enqueueHook,
+		OnDequeue: hn.dequeueHook,
+	})
 	return hn
+}
+
+func (hn *HomeNode) makeQueueMutator() queue.MutateFunc {
+	return func(length int, capacity int) {
+		hn.UpdateQueueState("forward_queue", length, capacity)
+	}
+}
+
+func (hn *HomeNode) enqueueHook(p *Packet, cycle int) {
+	if hn.txnMgr == nil || p == nil || p.TransactionID == 0 {
+		return
+	}
+	event := &PacketEvent{
+		TransactionID:  p.TransactionID,
+		PacketID:       p.ID,
+		ParentPacketID: p.ParentPacketID,
+		NodeID:         hn.ID,
+		EventType:      PacketEnqueued,
+		Cycle:          cycle,
+		EdgeKey:        nil,
+	}
+	hn.txnMgr.RecordPacketEvent(event)
+}
+
+func (hn *HomeNode) dequeueHook(p *Packet, cycle int) {
+	if hn.txnMgr == nil || p == nil || p.TransactionID == 0 {
+		return
+	}
+	event := &PacketEvent{
+		TransactionID:  p.TransactionID,
+		PacketID:       p.ID,
+		ParentPacketID: p.ParentPacketID,
+		NodeID:         hn.ID,
+		EventType:      PacketDequeued,
+		Cycle:          cycle,
+		EdgeKey:        nil,
+	}
+	hn.txnMgr.RecordPacketEvent(event)
 }
 
 // SetTransactionManager sets the transaction manager for event recording
@@ -82,8 +127,7 @@ func (hn *HomeNode) OnPacket(p *Packet, cycle int, ch *Link, cfg *Config) {
 	}
 	p.ReceivedAt = cycle
 	hn.mu.Lock()
-	hn.queue = append(hn.queue, p)
-	hn.UpdateQueue("forward_queue", len(hn.queue))
+	hn.queue.Enqueue(p, cycle)
 	hn.mu.Unlock()
 }
 
@@ -95,12 +139,16 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 	hn.mu.Lock()
 	defer hn.mu.Unlock()
 
-	if len(hn.queue) == 0 {
+	if hn.queue.Len() == 0 {
 		return 0
 	}
 
 	count := 0
-	for _, p := range hn.queue {
+	for hn.queue.Len() > 0 {
+		p, ok := hn.queue.PopFront(cycle)
+		if !ok {
+			break
+		}
 		var latency int
 		var toID int
 
@@ -127,28 +175,11 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 			continue
 		}
 
-		// Record PacketDequeued event
-		if hn.txnMgr != nil && p.TransactionID > 0 {
-			event := &PacketEvent{
-				TransactionID:  p.TransactionID,
-				PacketID:       p.ID,
-				ParentPacketID: p.ParentPacketID,
-				NodeID:         hn.ID,
-				EventType:      PacketDequeued,
-				Cycle:          cycle,
-				EdgeKey:        nil, // in-node event
-			}
-			hn.txnMgr.RecordPacketEvent(event)
-		}
-
 		p.SentAt = cycle
 		ch.Send(p, hn.ID, toID, cycle, latency)
 		count++
 	}
 
-	// clear the queue after forwarding
-	hn.queue = hn.queue[:0]
-	hn.UpdateQueue("forward_queue", 0)
 	return count
 }
 
@@ -185,8 +216,8 @@ func (hn *HomeNode) RunRuntime(ctx *HomeNodeRuntime) {
 func (hn *HomeNode) GetQueuePackets() []PacketInfo {
 	hn.mu.Lock()
 	defer hn.mu.Unlock()
-	packets := make([]PacketInfo, 0, len(hn.queue))
-	for _, p := range hn.queue {
+	packets := make([]PacketInfo, 0, hn.queue.Len())
+	for _, p := range hn.queue.Items() {
 		if p == nil {
 			continue
 		}
@@ -247,20 +278,5 @@ func (hn *HomeNode) processIncomingMessage(msg *InFlightMessage, cycle int) {
 		hn.txnMgr.RecordPacketEvent(event)
 	}
 
-	// Record PacketEnqueued event
-	if hn.txnMgr != nil && packet.TransactionID > 0 {
-		event := &PacketEvent{
-			TransactionID:  packet.TransactionID,
-			PacketID:       packet.ID,
-			ParentPacketID: packet.ParentPacketID,
-			NodeID:         hn.ID,
-			EventType:      PacketEnqueued,
-			Cycle:          cycle,
-			EdgeKey:        nil, // in-node event
-		}
-		hn.txnMgr.RecordPacketEvent(event)
-	}
-
-	hn.queue = append(hn.queue, packet)
-	hn.UpdateQueue("forward_queue", len(hn.queue))
+	hn.queue.Enqueue(packet, cycle)
 }

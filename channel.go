@@ -282,6 +282,7 @@ func (ep *edgePipeline) processCycle(cycle int) {
 	}
 
 	if backpressure {
+		metrics.RecordBackpressure()
 		ep.mu.Lock()
 		ep.bumpSlotCyclesLocked()
 		ep.backpressure[cycle] = true

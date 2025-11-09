@@ -34,7 +34,7 @@ func DebugBackpressure() {
 
 	fmt.Println("\nFinal State:")
 	if len(sim.Slaves) > 0 {
-		fmt.Printf("  Slave queue: %d/%d\n", len(sim.Slaves[0].queue), DefaultSlaveQueueCapacity)
+		fmt.Printf("  Slave queue: %d/%d\n", sim.Slaves[0].QueueLength(), DefaultSlaveQueueCapacity)
 		fmt.Printf("  Slave MaxQueueLength: %d\n", sim.Slaves[0].MaxQueueLength)
 	}
 

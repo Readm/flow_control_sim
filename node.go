@@ -11,29 +11,29 @@ const (
 
 // PacketInfo represents packet information for visualization
 type PacketInfo struct {
-	ID              int64             `json:"id"`
-	Type            string            `json:"type"`
-	SrcID           int               `json:"srcID"`
-	DstID           int               `json:"dstID"`
-	GeneratedAt     int               `json:"generatedAt"`
-	SentAt          int               `json:"sentAt"`
-	ReceivedAt      int               `json:"receivedAt"`
-	CompletedAt     int               `json:"completedAt"`
-	MasterID        int               `json:"masterID"`
-	RequestID       int64             `json:"requestID"`
+	ID              int64              `json:"id"`
+	Type            string             `json:"type"`
+	SrcID           int                `json:"srcID"`
+	DstID           int                `json:"dstID"`
+	GeneratedAt     int                `json:"generatedAt"`
+	SentAt          int                `json:"sentAt"`
+	ReceivedAt      int                `json:"receivedAt"`
+	CompletedAt     int                `json:"completedAt"`
+	MasterID        int                `json:"masterID"`
+	RequestID       int64              `json:"requestID"`
 	TransactionType CHITransactionType `json:"transactionType"`
 	MessageType     CHIMessageType     `json:"messageType"`
 	ResponseType    CHIResponseType    `json:"responseType"`
-	Address         uint64            `json:"address"`
-	DataSize        int               `json:"dataSize"`
-	TransactionID   int64             `json:"transactionID"` // Transaction ID this packet belongs to
+	Address         uint64             `json:"address"`
+	DataSize        int                `json:"dataSize"`
+	TransactionID   int64              `json:"transactionID"` // Transaction ID this packet belongs to
 }
 
 // QueueInfo represents queue information for visualization
 type QueueInfo struct {
-	Name     string      `json:"name"`
-	Length   int         `json:"length"`
-	Capacity int         `json:"capacity"` // -1 means unlimited capacity
+	Name     string       `json:"name"`
+	Length   int          `json:"length"`
+	Capacity int          `json:"capacity"` // -1 means unlimited capacity
 	Packets  []PacketInfo `json:"packets,omitempty"`
 }
 
@@ -69,9 +69,18 @@ func (n *Node) AddQueue(name string, length, capacity int) {
 
 // UpdateQueue updates the length of an existing queue
 func (n *Node) UpdateQueue(name string, length int) {
+	n.UpdateQueueState(name, length, -1)
+}
+
+// UpdateQueueState updates both length and capacity of an existing queue.
+// Pass capacity < 0 to keep the current capacity unchanged.
+func (n *Node) UpdateQueueState(name string, length, capacity int) {
 	for i := range n.Queues {
 		if n.Queues[i].Name == name {
 			n.Queues[i].Length = length
+			if capacity >= 0 {
+				n.Queues[i].Capacity = capacity
+			}
 			return
 		}
 	}

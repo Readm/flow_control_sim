@@ -3,6 +3,8 @@ package main
 import (
 	"math/rand"
 	"sync"
+
+	"github.com/example/flow_sim/queue"
 )
 
 // RequestNode (RN) represents a CHI Request Node that initiates transactions.
@@ -13,9 +15,8 @@ type RequestNode struct {
 	masterIndex int // index of this master in the masters array (for generator)
 
 	// queues for request management
-	stimulusQueue         []*Packet // stimulus_queue: infinite capacity, stores generated requests
-	dispatchQueue         []*Packet // dispatch_queue: limited capacity, stores requests ready to send
-	dispatchQueueCapacity int       // dispatch_queue capacity
+	stimulusQueue *queue.TrackedQueue[*Packet] // stimulus_queue: infinite capacity, stores generated requests
+	dispatchQueue *queue.TrackedQueue[*Packet] // dispatch_queue: limited capacity, stores requests ready to send
 
 	// track request generation times by request id (for statistics)
 	generatedAtByReq map[int64]int
@@ -45,19 +46,57 @@ func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *Reques
 		},
 		generator:        generator,
 		masterIndex:      masterIndex,
-		stimulusQueue:    make([]*Packet, 0),
-		dispatchQueue:    make([]*Packet, 0),
 		generatedAtByReq: make(map[int64]int),
 		MinDelay:         int(^uint(0) >> 1), // max int
 		nextAddress:      DefaultAddressBase,
 	}
-	// Queue capacity will be set in Tick() based on cfg
-	// For now, use default value
-	rn.dispatchQueueCapacity = DefaultDispatchQueueCapacity
 	rn.AddQueue("stimulus_queue", 0, UnlimitedQueueCapacity)
 	rn.AddQueue("dispatch_queue", 0, DefaultDispatchQueueCapacity)
 	rn.bindings = NewNodeCycleBindings()
+	rn.stimulusQueue = queue.NewTrackedQueue("stimulus_queue", queue.UnlimitedCapacity, rn.makeQueueMutator("stimulus_queue"), queue.QueueHooks[*Packet]{})
+	rn.dispatchQueue = queue.NewTrackedQueue("dispatch_queue", DefaultDispatchQueueCapacity, rn.makeQueueMutator("dispatch_queue"), queue.QueueHooks[*Packet]{
+		OnEnqueue: rn.dispatchEnqueueHook,
+		OnDequeue: rn.dispatchDequeueHook,
+	})
 	return rn
+}
+
+func (rn *RequestNode) makeQueueMutator(queueName string) queue.MutateFunc {
+	return func(length int, capacity int) {
+		rn.UpdateQueueState(queueName, length, capacity)
+	}
+}
+
+func (rn *RequestNode) dispatchEnqueueHook(p *Packet, cycle int) {
+	if rn.txnMgr == nil || p == nil || p.TransactionID == 0 {
+		return
+	}
+	event := &PacketEvent{
+		TransactionID:  p.TransactionID,
+		PacketID:       p.ID,
+		ParentPacketID: p.ParentPacketID,
+		NodeID:         rn.ID,
+		EventType:      PacketEnqueued,
+		Cycle:          cycle,
+		EdgeKey:        nil,
+	}
+	rn.txnMgr.RecordPacketEvent(event)
+}
+
+func (rn *RequestNode) dispatchDequeueHook(p *Packet, cycle int) {
+	if rn.txnMgr == nil || p == nil || p.TransactionID == 0 {
+		return
+	}
+	event := &PacketEvent{
+		TransactionID:  p.TransactionID,
+		PacketID:       p.ID,
+		ParentPacketID: p.ParentPacketID,
+		NodeID:         rn.ID,
+		EventType:      PacketDequeued,
+		Cycle:          cycle,
+		EdgeKey:        nil,
+	}
+	rn.txnMgr.RecordPacketEvent(event)
 }
 
 // GenerateReadNoSnpRequest creates a CHI ReadNoSnp transaction request packet.
@@ -98,16 +137,7 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 	if capacity <= 0 || capacity == -1 {
 		capacity = DefaultDispatchQueueCapacity
 	}
-	if rn.dispatchQueueCapacity != capacity {
-		rn.dispatchQueueCapacity = capacity
-		rn.UpdateQueue("dispatch_queue", len(rn.dispatchQueue))
-		// Update queue capacity in visualization
-		for i := range rn.Queues {
-			if rn.Queues[i].Name == "dispatch_queue" {
-				rn.Queues[i].Capacity = capacity
-			}
-		}
-	}
+	rn.dispatchQueue.SetCapacity(capacity)
 
 	// Phase 1: Generate requests and add to stimulus_queue
 	if rn.generator != nil {
@@ -178,7 +208,7 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 			}
 
 			// Add to stimulus_queue
-			rn.stimulusQueue = append(rn.stimulusQueue, p)
+			rn.stimulusQueue.Enqueue(p, cycle)
 		}
 	}
 
@@ -189,8 +219,9 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 		bandwidth = 1
 	}
 	sentThisCycle := 0
-	for i := 0; i < len(rn.dispatchQueue) && sentThisCycle < bandwidth; i++ {
-		p := rn.dispatchQueue[i]
+	dispatchItems := rn.dispatchQueue.Items()
+	for i := 0; i < len(dispatchItems) && sentThisCycle < bandwidth; i++ {
+		p := dispatchItems[i]
 		// Check if packet has already been sent (SentAt > 0)
 		if p.SentAt > 0 {
 			continue // Already sent, skip
@@ -208,11 +239,19 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 
 	// Phase 3: Release requests from stimulus_queue to dispatch_queue (max BandwidthLimit per cycle)
 	// Check dispatch_queue capacity before releasing
-	availableCapacity := rn.dispatchQueueCapacity - len(rn.dispatchQueue)
+	dispatchLen := rn.dispatchQueue.Len()
+	dispatchCap := rn.dispatchQueue.Capacity()
+	availableCapacity := rn.stimulusQueue.Len()
+	if dispatchCap >= 0 {
+		availableCapacity = dispatchCap - dispatchLen
+		if availableCapacity < 0 {
+			availableCapacity = 0
+		}
+	}
 	if availableCapacity > 0 {
 		releaseCount := bandwidth
-		if releaseCount > len(rn.stimulusQueue) {
-			releaseCount = len(rn.stimulusQueue)
+		if releaseCount > rn.stimulusQueue.Len() {
+			releaseCount = rn.stimulusQueue.Len()
 		}
 		if releaseCount > availableCapacity {
 			releaseCount = availableCapacity
@@ -220,32 +259,15 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 
 		// Move packets from stimulus_queue to dispatch_queue
 		for i := 0; i < releaseCount; i++ {
-			p := rn.stimulusQueue[i]
-			rn.dispatchQueue = append(rn.dispatchQueue, p)
-
-			// Record PacketEnqueued event (entering dispatch_queue)
-			if rn.txnMgr != nil && p != nil && p.TransactionID > 0 {
-				event := &PacketEvent{
-					TransactionID:  p.TransactionID,
-					PacketID:       p.ID,
-					ParentPacketID: p.ParentPacketID,
-					NodeID:         rn.ID,
-					EventType:      PacketEnqueued,
-					Cycle:          cycle,
-					EdgeKey:        nil, // in-node event
-				}
-				rn.txnMgr.RecordPacketEvent(event)
+			p, ok := rn.stimulusQueue.PopFront(cycle)
+			if !ok {
+				break
+			}
+			if !rn.dispatchQueue.Enqueue(p, cycle) {
+				break
 			}
 		}
-		// Remove transferred packets from stimulus_queue
-		if releaseCount > 0 {
-			rn.stimulusQueue = rn.stimulusQueue[releaseCount:]
-		}
 	}
-
-	// Update queue lengths for visualization
-	rn.UpdateQueue("stimulus_queue", len(rn.stimulusQueue))
-	rn.UpdateQueue("dispatch_queue", len(rn.dispatchQueue))
 }
 
 // CanReceive checks if the RequestNode can receive packets from the given edge.
@@ -287,31 +309,10 @@ func (rn *RequestNode) handleResponseLocked(p *Packet, cycle int, txnMgr *Transa
 		return
 	}
 
-	// Find and remove the corresponding request packet from dispatch_queue
 	requestID := p.RequestID
-	found := false
-	for i, reqPkt := range rn.dispatchQueue {
-		if reqPkt.RequestID == requestID {
-			// Record PacketDequeued event (leaving dispatch_queue)
-			if rn.txnMgr != nil && reqPkt.TransactionID > 0 {
-				event := &PacketEvent{
-					TransactionID:  reqPkt.TransactionID,
-					PacketID:       reqPkt.ID,
-					ParentPacketID: reqPkt.ParentPacketID,
-					NodeID:         rn.ID,
-					EventType:      PacketDequeued,
-					Cycle:          cycle,
-					EdgeKey:        nil, // in-node event
-				}
-				rn.txnMgr.RecordPacketEvent(event)
-			}
-
-			// Remove packet from dispatch_queue using slice trick
-			rn.dispatchQueue = append(rn.dispatchQueue[:i], rn.dispatchQueue[i+1:]...)
-			found = true
-			break
-		}
-	}
+	_, found := rn.dispatchQueue.RemoveMatch(func(reqPkt *Packet) bool {
+		return reqPkt != nil && reqPkt.RequestID == requestID
+	}, cycle)
 
 	if !found {
 		// Packet not found in dispatch_queue, might have been already removed or never added
@@ -339,8 +340,6 @@ func (rn *RequestNode) handleResponseLocked(p *Packet, cycle int, txnMgr *Transa
 		txnMgr.MarkTransactionCompleted(p.TransactionID, cycle)
 	}
 
-	// Update queue lengths for visualization
-	rn.UpdateQueue("dispatch_queue", len(rn.dispatchQueue))
 }
 
 type RequestNodeStats struct {
@@ -376,10 +375,10 @@ func (rn *RequestNode) SnapshotStats() *RequestNodeStats {
 func (rn *RequestNode) GetQueuePackets() []PacketInfo {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
-	packets := make([]PacketInfo, 0, len(rn.stimulusQueue)+len(rn.dispatchQueue))
+	packets := make([]PacketInfo, 0, rn.stimulusQueue.Len()+rn.dispatchQueue.Len())
 
 	// Add packets from stimulus_queue
-	for _, p := range rn.stimulusQueue {
+	for _, p := range rn.stimulusQueue.Items() {
 		if p == nil {
 			continue
 		}
@@ -404,7 +403,7 @@ func (rn *RequestNode) GetQueuePackets() []PacketInfo {
 	}
 
 	// Add packets from dispatch_queue
-	for _, p := range rn.dispatchQueue {
+	for _, p := range rn.dispatchQueue.Items() {
 		if p == nil {
 			continue
 		}
@@ -435,8 +434,8 @@ func (rn *RequestNode) GetQueuePackets() []PacketInfo {
 func (rn *RequestNode) GetStimulusQueuePackets() []PacketInfo {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
-	packets := make([]PacketInfo, 0, len(rn.stimulusQueue))
-	for _, p := range rn.stimulusQueue {
+	packets := make([]PacketInfo, 0, rn.stimulusQueue.Len())
+	for _, p := range rn.stimulusQueue.Items() {
 		if p == nil {
 			continue
 		}
@@ -466,8 +465,8 @@ func (rn *RequestNode) GetStimulusQueuePackets() []PacketInfo {
 func (rn *RequestNode) GetDispatchQueuePackets() []PacketInfo {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
-	packets := make([]PacketInfo, 0, len(rn.dispatchQueue))
-	for _, p := range rn.dispatchQueue {
+	packets := make([]PacketInfo, 0, rn.dispatchQueue.Len())
+	for _, p := range rn.dispatchQueue.Items() {
 		if p == nil {
 			continue
 		}

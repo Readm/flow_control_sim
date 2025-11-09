@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 )
@@ -293,7 +292,7 @@ func (tm *TransactionManager) RecordPacketEvent(event *PacketEvent) {
 	select {
 	case tm.eventCh <- event:
 	default:
-		log.Printf("[WARN] transaction manager event channel full; processing event %d inline", seq)
+		GetLogger().Warnf("transaction manager event channel full; processing event %d inline", seq)
 		tm.handlePacketEvent(event)
 	}
 }

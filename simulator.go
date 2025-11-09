@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"math/rand"
 	"sync"
 	"time"
+
+	simruntime "github.com/example/flow_sim/simulator"
 )
 
 type Simulator struct {
@@ -20,12 +21,14 @@ type Simulator struct {
 	nodeLabels map[int]string
 	edges      []EdgeSnapshot
 
-	cfg        *Config
-	rng        *rand.Rand
-	pktIDs     *PacketIDAllocator
-	txnMgr     *TransactionManager // Transaction manager for tracking transaction relationships
-	current    int
-	visualizer Visualizer
+	cfg         *Config
+	rng         *rand.Rand
+	pktIDs      *PacketIDAllocator
+	txnMgr      *TransactionManager // Transaction manager for tracking transaction relationships
+	current     int
+	visualizer  Visualizer
+	commandLoop *simruntime.CommandLoop[ControlCommand]
+	runner      *simruntime.Runner[ControlCommand, *SimulationFrame]
 
 	isPaused  bool
 	isRunning bool
@@ -41,6 +44,24 @@ type Simulator struct {
 type cycleSignaler interface {
 	RegisterIncomingSignal(edge EdgeKey, signal *CycleSignal)
 	RegisterOutgoingSignal(edge EdgeKey, signal *CycleSignal)
+}
+
+type visualizerCommandSource struct {
+	visualizer Visualizer
+}
+
+func (s *visualizerCommandSource) NextCommand() (ControlCommand, bool) {
+	if s == nil || s.visualizer == nil {
+		return ControlCommand{Type: CommandNone}, false
+	}
+	return s.visualizer.NextCommand()
+}
+
+func (s *visualizerCommandSource) WaitCommand(ctx context.Context) (ControlCommand, bool) {
+	if s == nil || s.visualizer == nil {
+		return ControlCommand{Type: CommandNone}, false
+	}
+	return s.visualizer.WaitCommand(ctx)
 }
 
 // initializeSimulatorComponents creates and initializes all simulator components from config
@@ -71,7 +92,7 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 
 	// Create default generator if needed
 	if cfg.RequestGenerator == nil {
-		if cfg.ScheduleConfig != nil && len(cfg.ScheduleConfig) > 0 {
+		if len(cfg.ScheduleConfig) > 0 {
 			// Create ScheduleGenerator from ScheduleConfig
 			cfg.RequestGenerator = NewScheduleGenerator(cfg.ScheduleConfig)
 		} else if cfg.RequestRateConfig > 0 {
@@ -80,7 +101,7 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 		}
 	}
 
-	if cfg.RequestGenerators != nil && len(cfg.RequestGenerators) > 0 {
+	if len(cfg.RequestGenerators) > 0 {
 		// Use per-master generators
 		for i := 0; i < cfg.NumMasters; i++ {
 			if i < len(cfg.RequestGenerators) && cfg.RequestGenerators[i] != nil {
@@ -170,7 +191,47 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 	return masters, slaves, relay, ch, masterByID, slaveByID, labels
 }
 
+func (s *Simulator) rebuildRuntimeHelpers() {
+	var visualBridge *simruntime.VisualBridge[*SimulationFrame]
+	if s.visualizer != nil {
+		visualBridge = simruntime.NewVisualBridge[*SimulationFrame](s.visualizer.IsHeadless(), func(frame *SimulationFrame) {
+			s.visualizer.PublishFrame(frame)
+		})
+	}
+
+	var commandLoop *simruntime.CommandLoop[ControlCommand]
+	if s.visualizer != nil {
+		commandLoop = simruntime.NewCommandLoop[ControlCommand](
+			&visualizerCommandSource{visualizer: s.visualizer},
+			simruntime.CommandHandlerFunc[ControlCommand](s.handleCommand),
+		)
+	} else {
+		commandLoop = simruntime.NewCommandLoop[ControlCommand](nil, simruntime.CommandHandlerFunc[ControlCommand](s.handleCommand))
+	}
+
+	s.commandLoop = commandLoop
+	if s.runner == nil {
+		s.runner = simruntime.NewRunner[ControlCommand, *SimulationFrame](commandLoop, visualBridge)
+	} else {
+		s.runner.UpdateCommandLoop(commandLoop)
+		s.runner.UpdateVisualBridge(visualBridge)
+	}
+}
+
+func (s *Simulator) visualEnabled() bool {
+	return s.runner != nil && s.runner.VisualEnabled()
+}
+
 func NewSimulator(cfg *Config) *Simulator {
+	if err := ValidateConfig(cfg); err != nil {
+		GetLogger().Errorf("NewSimulator: invalid config: %v", err)
+		return nil
+	}
+	factory := NewConfigGeneratorFactory()
+	defaultGen := factory.BuildDefault(cfg)
+	cfg.RequestGenerator = defaultGen
+	cfg.RequestGenerators = factory.BuildPerMaster(cfg, defaultGen)
+
 	pktAlloc := NewPacketIDAllocator()
 	txnMgr := NewTransactionManager()
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -197,10 +258,12 @@ func NewSimulator(cfg *Config) *Simulator {
 		viz.SetTransactionManager(sim.txnMgr)
 	}
 
-	if sim.visualizer != nil && !sim.visualizer.IsHeadless() {
+	sim.rebuildRuntimeHelpers()
+
+	if sim.visualEnabled() {
 		sim.isPaused = true
 		frame := sim.buildFrame(0)
-		sim.visualizer.PublishFrame(frame)
+		sim.runner.PublishFrame(frame)
 	} else {
 		sim.isPaused = false
 	}
@@ -469,7 +532,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 
 	// Debug: log node counts
 	if cycle == 0 {
-		log.Printf("[DEBUG] buildFrame cycle 0: %d Masters, %d Slaves, Relay=%v", len(s.Masters), len(s.Slaves), s.Relay != nil)
+		GetLogger().Debugf("buildFrame cycle 0: %d Masters, %d Slaves, Relay=%v", len(s.Masters), len(s.Slaves), s.Relay != nil)
 	}
 
 	for _, m := range s.Masters {
@@ -619,7 +682,7 @@ func (s *Simulator) Run() {
 			continue
 		}
 
-		if s.visualizer != nil && !s.visualizer.IsHeadless() {
+		if s.visualEnabled() {
 			cfg := s.waitForResetCommand()
 			s.isPaused = false
 			s.reset(cfg)
@@ -632,12 +695,25 @@ func (s *Simulator) Run() {
 
 func (s *Simulator) reset(newCfg *Config) {
 	if newCfg != nil {
-		log.Printf("[DEBUG] Simulator.reset: Applying new config: NumMasters=%d, NumSlaves=%d, TotalCycles=%d",
+		if err := ValidateConfig(newCfg); err != nil {
+			GetLogger().Errorf("Simulator.reset: invalid config: %v", err)
+			newCfg = nil
+		}
+	}
+
+	if newCfg != nil {
+		GetLogger().Debugf("Simulator.reset: Applying new config: NumMasters=%d, NumSlaves=%d, TotalCycles=%d",
 			newCfg.NumMasters, newCfg.NumSlaves, newCfg.TotalCycles)
 		s.cfg = newCfg
 	} else {
-		log.Printf("[DEBUG] Simulator.reset: No new config provided, using existing config")
+		GetLogger().Debugf("Simulator.reset: No new config provided, using existing config")
 	}
+
+	// Prepare generators based on new config
+	factory := NewConfigGeneratorFactory()
+	defaultGen := factory.BuildDefault(s.cfg)
+	s.cfg.RequestGenerator = defaultGen
+	s.cfg.RequestGenerators = factory.BuildPerMaster(s.cfg, defaultGen)
 
 	// Reinitialize simulator with new config
 	pktAlloc := NewPacketIDAllocator()
@@ -710,13 +786,15 @@ func (s *Simulator) reset(newCfg *Config) {
 		viz.SetTransactionManager(s.txnMgr)
 	}
 
+	s.rebuildRuntimeHelpers()
+
 	// If web frontend is available, pause at cycle 0 after reset
 	// Otherwise (headless mode), continue running
-	if s.visualizer != nil && !s.visualizer.IsHeadless() {
+	if s.visualEnabled() {
 		s.isPaused = true
 		// Publish frame at cycle 0 after reset
 		frame := s.buildFrame(0)
-		s.visualizer.PublishFrame(frame)
+		s.runner.PublishFrame(frame)
 	} else {
 		s.isPaused = false
 	}
@@ -771,33 +849,24 @@ func (s *Simulator) handleCommand(cmd ControlCommand) bool {
 }
 
 func (s *Simulator) processCommands() bool {
-	if s.visualizer == nil {
+	if s.runner == nil {
 		return true
 	}
-
-	for {
-		cmd, ok := s.visualizer.NextCommand()
-		if !ok || cmd.Type == CommandNone {
-			break
-		}
-		if !s.handleCommand(cmd) {
-			return false
-		}
-	}
-
-	return true
+	return s.runner.DrainPendingCommands()
 }
 
 func (s *Simulator) runCycles() bool {
+	s.rebuildRuntimeHelpers()
+
 	totalCycles := s.cfg.TotalCycles
 	if totalCycles < 0 {
 		totalCycles = 0
 	}
 
 	if totalCycles == 0 {
-		if s.visualizer != nil && !s.visualizer.IsHeadless() {
+		if s.visualEnabled() {
 			frame := s.buildFrame(0)
-			s.visualizer.PublishFrame(frame)
+			s.runner.PublishFrame(frame)
 		}
 		return false
 	}
@@ -814,13 +883,12 @@ func (s *Simulator) runCycles() bool {
 		}
 
 		if s.isPaused {
-			if s.visualizer != nil && !s.visualizer.IsHeadless() {
-				cmd, ok := s.visualizer.WaitCommand(context.Background())
-				if ok && cmd.Type != CommandNone {
-					if !s.handleCommand(cmd) {
-						return true
-					}
+			if s.runner != nil {
+				if !s.runner.WaitForCommand(context.Background()) {
+					return true
 				}
+			} else {
+				time.Sleep(1 * time.Millisecond)
 			}
 			if s.isPaused {
 				continue
@@ -837,9 +905,9 @@ func (s *Simulator) runCycles() bool {
 			time.Sleep(1 * time.Millisecond)
 		}
 
-		if s.visualizer != nil && !s.visualizer.IsHeadless() {
+		if s.visualEnabled() {
 			frame := s.buildFrame(cycle)
-			s.visualizer.PublishFrame(frame)
+			s.runner.PublishFrame(frame)
 		}
 
 		if s.txnMgr != nil && cycle%100 == 0 {
@@ -848,10 +916,11 @@ func (s *Simulator) runCycles() bool {
 
 		cycle++
 		s.current = cycle
+		metrics.RecordCycles(1)
 
-		if s.visualizer != nil && !s.visualizer.IsHeadless() {
+		if s.visualEnabled() {
 			frame := s.buildFrame(s.current)
-			s.visualizer.PublishFrame(frame)
+			s.runner.PublishFrame(frame)
 		}
 
 		if s.stepOnce {
@@ -869,12 +938,19 @@ func (s *Simulator) runCycles() bool {
 func (s *Simulator) waitForResetCommand() *Config {
 	for {
 		if !s.processCommands() {
-			cfg := s.pendingReset
-			s.pendingReset = nil
-			return cfg
+			break
+		}
+		if s.runner != nil {
+			if !s.runner.WaitForCommand(context.Background()) {
+				break
+			}
+			continue
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	cfg := s.pendingReset
+	s.pendingReset = nil
+	return cfg
 }
 
 type GlobalStats struct {
