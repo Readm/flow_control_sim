@@ -774,31 +774,43 @@
                     }
                 }
 
-                node.qtip({
-                    content: tooltip,
-                    position: {
-                        my: 'top center',
-                        at: 'bottom center',
-                        viewport: document.getElementById('cy'),
-                        adjust: {
-                            method: 'flip shift'
+                let api = node.qtip('api');
+                if (!api) {
+                    node.qtip({
+                        content: {
+                            text: tooltip
+                        },
+                        position: {
+                            my: 'top center',
+                            at: 'bottom center',
+                            viewport: document.getElementById('cy'),
+                            adjust: {
+                                method: 'flip shift'
+                            }
+                        },
+                        style: {
+                            classes: 'qtip-bootstrap',
+                            tip: {
+                                width: 16,
+                                height: 8
+                            }
+                        },
+                        show: {
+                            event: 'mouseover',
+                            solo: true
+                        },
+                        hide: {
+                            event: 'mouseout',
+                            fixed: true,
+                            delay: 200
                         }
-                    },
-                    style: {
-                        classes: 'qtip-bootstrap',
-                        tip: {
-                            width: 16,
-                            height: 8
-                        }
-                    },
-                    show: {
-                        event: 'mouseover',
-                        ready: true
-                    },
-                    hide: {
-                        event: 'mouseout'
-                    }
-                }, evt);
+                    });
+                    api = node.qtip('api');
+                }
+
+                if (api && typeof api.set === 'function') {
+                    api.set('content.text', tooltip);
+                }
             });
 
             // Add click event for nodes to show packet information
@@ -828,31 +840,43 @@
                     tooltip += '\n\nNo pipeline data available';
                 }
 
-                edge.qtip({
-                    content: tooltip,
-                    position: {
-                        my: 'top center',
-                        at: 'bottom center',
-                        viewport: document.getElementById('cy'),
-                        adjust: {
-                            method: 'flip shift'
+                let api = edge.qtip('api');
+                if (!api) {
+                    edge.qtip({
+                        content: {
+                            text: tooltip
+                        },
+                        position: {
+                            my: 'top center',
+                            at: 'bottom center',
+                            viewport: document.getElementById('cy'),
+                            adjust: {
+                                method: 'flip shift'
+                            }
+                        },
+                        style: {
+                            classes: 'qtip-bootstrap',
+                            tip: {
+                                width: 16,
+                                height: 8
+                            }
+                        },
+                        show: {
+                            event: 'mouseover',
+                            solo: true
+                        },
+                        hide: {
+                            event: 'mouseout',
+                            fixed: true,
+                            delay: 200
                         }
-                    },
-                    style: {
-                        classes: 'qtip-bootstrap',
-                        tip: {
-                            width: 16,
-                            height: 8
-                        }
-                    },
-                    show: {
-                        event: 'mouseover',
-                        ready: true
-                    },
-                    hide: {
-                        event: 'mouseout'
-                    }
-                }, evt);
+                    });
+                    api = edge.qtip('api');
+                }
+
+                if (api && typeof api.set === 'function') {
+                    api.set('content.text', tooltip);
+                }
             });
 
             // Update pipeline state points when view changes (pan, zoom, render)
