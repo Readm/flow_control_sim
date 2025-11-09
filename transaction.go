@@ -168,6 +168,7 @@ const (
 
 // PacketEvent represents a packet event in the transaction timeline
 type PacketEvent struct {
+	Sequence       int64             `json:"sequence"`
 	TransactionID  int64             `json:"transactionID"`
 	PacketID       int64             `json:"packetID"`
 	ParentPacketID int64             `json:"parentPacketID"` // 0 means no parent packet

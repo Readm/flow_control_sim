@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -163,14 +164,10 @@ func (ws *WebServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// queueCommand queues a control command. Returns true if queued successfully, false if queue is full.
+// queueCommand queues a control command. Returns true if queued successfully.
 func (ws *WebServer) queueCommand(cmd ControlCommand) bool {
-	select {
-	case ws.commands <- cmd:
-		return true
-	default:
-		return false
-	}
+	ws.commands <- cmd
+	return true
 }
 
 // NextCommand returns the next control command if available, non-blocking.
@@ -179,6 +176,16 @@ func (ws *WebServer) NextCommand() (ControlCommand, bool) {
 	case cmd := <-ws.commands:
 		return cmd, true
 	default:
+		return ControlCommand{Type: CommandNone}, false
+	}
+}
+
+// WaitCommand blocks until a control command is available or the context is cancelled.
+func (ws *WebServer) WaitCommand(ctx context.Context) (ControlCommand, bool) {
+	select {
+	case cmd := <-ws.commands:
+		return cmd, true
+	case <-ctx.Done():
 		return ControlCommand{Type: CommandNone}, false
 	}
 }
@@ -447,6 +454,16 @@ func (ws *WebServer) handleTransactionTimeline(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	ws.mu.RLock()
+	if ws.txnMgr != nil {
+		if events := ws.txnMgr.packetHistory[txnID]; events != nil {
+			log.Printf("[DEBUG] timeline request txn=%d events=%d", txnID, len(events))
+		} else {
+			log.Printf("[DEBUG] timeline request txn=%d events=nil", txnID)
+		}
+	}
+	ws.mu.RUnlock()
+
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(timeline); err != nil {
 		http.Error(w, "Failed to encode timeline", http.StatusInternalServerError)
@@ -486,4 +503,11 @@ func (ws *WebServer) handleTransactionTimelines(w http.ResponseWriter, r *http.R
 	if err := json.NewEncoder(w).Encode(timelines); err != nil {
 		http.Error(w, "Failed to encode timelines", http.StatusInternalServerError)
 	}
+}
+
+// SetTransactionManager updates the transaction manager reference used by APIs.
+func (ws *WebServer) SetTransactionManager(txnMgr *TransactionManager) {
+	ws.mu.Lock()
+	ws.txnMgr = txnMgr
+	ws.mu.Unlock()
 }

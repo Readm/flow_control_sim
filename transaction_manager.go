@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"sync"
+	"sync/atomic"
 )
 
 // PacketHistoryConfig holds configuration for packet history tracking
@@ -30,11 +32,14 @@ type TransactionManager struct {
 	allPacketHistory []*PacketEvent           // all events (for full history mode)
 	historyConfig    *PacketHistoryConfig
 	nodeLabels       map[int]string // node ID -> label (set by simulator)
+
+	eventCh  chan *PacketEvent
+	eventSeq int64
 }
 
 // NewTransactionManager creates a new TransactionManager
 func NewTransactionManager() *TransactionManager {
-	return &TransactionManager{
+	tm := &TransactionManager{
 		transactions:     make(map[int64]*Transaction),
 		dependencies:     make(map[int64][]*TransactionDependency),
 		nextTxnID:        1,
@@ -47,7 +52,10 @@ func NewTransactionManager() *TransactionManager {
 			MaxTransactionHistory: 1000,
 		},
 		nodeLabels: make(map[int]string),
+		eventCh:    make(chan *PacketEvent, 1024),
 	}
+	go tm.runEventLoop()
+	return tm
 }
 
 // CreateTransaction creates a new transaction and returns it
@@ -267,8 +275,30 @@ func (tm *TransactionManager) SetNodeLabels(labels map[int]string) {
 	tm.nodeLabels = labels
 }
 
+func (tm *TransactionManager) runEventLoop() {
+	for event := range tm.eventCh {
+		tm.handlePacketEvent(event)
+	}
+}
+
 // RecordPacketEvent records a packet event for timeline visualization
 func (tm *TransactionManager) RecordPacketEvent(event *PacketEvent) {
+	if event == nil {
+		return
+	}
+
+	seq := atomic.AddInt64(&tm.eventSeq, 1)
+	event.Sequence = seq
+
+	select {
+	case tm.eventCh <- event:
+	default:
+		log.Printf("[WARN] transaction manager event channel full; processing event %d inline", seq)
+		tm.handlePacketEvent(event)
+	}
+}
+
+func (tm *TransactionManager) handlePacketEvent(event *PacketEvent) {
 	if event == nil {
 		return
 	}

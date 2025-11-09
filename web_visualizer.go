@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 )
 
@@ -23,6 +24,14 @@ func NewWebVisualizer(txnMgr *TransactionManager) *WebVisualizer {
 		headless: false,
 		server:   server,
 		txnMgr:   txnMgr,
+	}
+}
+
+// SetTransactionManager updates the transaction manager used by the visualizer APIs.
+func (w *WebVisualizer) SetTransactionManager(txnMgr *TransactionManager) {
+	w.txnMgr = txnMgr
+	if w.server != nil {
+		w.server.SetTransactionManager(txnMgr)
 	}
 }
 
@@ -53,4 +62,12 @@ func (w *WebVisualizer) NextCommand() (ControlCommand, bool) {
 		return ControlCommand{Type: CommandNone}, false
 	}
 	return cmd, true
+}
+
+// WaitCommand blocks until a command is available or the context is cancelled.
+func (w *WebVisualizer) WaitCommand(ctx context.Context) (ControlCommand, bool) {
+	if w.server == nil {
+		return ControlCommand{Type: CommandNone}, false
+	}
+	return w.server.WaitCommand(ctx)
 }

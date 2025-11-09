@@ -528,6 +528,7 @@
         let lastConfigHash = null; // Track last config hash from frame to detect config changes
         let expectingReset = false; // Track if we're waiting for a reset frame (cycle 0)
         let isStepProcessing = false; // Track if a step command is being processed
+        let configsLoaded = false; // Track when configuration list has been loaded
         
         // Timeline view state
         let currentView = 'topology'; // 'topology' or 'timeline'
@@ -1624,6 +1625,8 @@
                     }
                     select.appendChild(option);
                 });
+                currentConfigName = select.value;
+                configsLoaded = true;
             } catch (error) {
                 console.error('Error loading configurations:', error);
                 const select = document.getElementById('networkConfig');
@@ -1810,30 +1813,38 @@
             }
         });
 
-        document.getElementById('btnReset').addEventListener('click', async () => {
-            const configName = getConfigFromForm();
+        async function requestReset(configName, totalCycles) {
             const error = validateConfig(configName);
             if (error) {
                 showError(error);
-                return;
+                return false;
             }
-            const totalCycles = parseInt(document.getElementById('totalCycles').value);
+            if (expectingReset) {
+                return false;
+            }
+
             const success = await sendControl('reset', configName, totalCycles);
             if (success) {
                 isPaused = true; // Reset pauses at cycle 0
                 updateButtonStates();
-                // Clear visualization and reset topology
                 cy.elements().remove();
                 topologyInitialized = false;
-                // Update current config name to track the new configuration
                 currentConfigName = configName;
-                // Set flag to wait for reset frame (cycle 0)
                 expectingReset = true;
-                console.log('[DEBUG] Reset clicked, waiting for cycle 0 frame');
+                console.log('[DEBUG] Reset requested for config', configName, 'waiting for cycle 0 frame');
                 document.getElementById('currentCycle').textContent = '-';
                 document.getElementById('inFlightCount').textContent = '-';
                 document.getElementById('simStatus').innerHTML = 'Status: <strong>Resetting...</strong>';
+                hideError();
+                return true;
             }
+            return false;
+        }
+
+        document.getElementById('btnReset').addEventListener('click', async () => {
+            const configName = getConfigFromForm();
+            const totalCycles = parseInt(document.getElementById('totalCycles').value);
+            await requestReset(configName, totalCycles);
         });
 
         // Initialize
@@ -1882,6 +1893,18 @@
             } else {
                 switchToTopologyView();
             }
+        });
+
+        document.getElementById('networkConfig').addEventListener('change', async () => {
+            if (!configsLoaded) {
+                return;
+            }
+            const configName = getConfigFromForm();
+            if (!configName || configName === currentConfigName) {
+                return;
+            }
+            const totalCycles = parseInt(document.getElementById('totalCycles').value);
+            await requestReset(configName, totalCycles);
         });
 
         function switchToTimelineView() {

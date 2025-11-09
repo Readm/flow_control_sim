@@ -1,5 +1,7 @@
 package main
 
+import "context"
+
 // ControlCommandType represents types of control instructions from UI.
 type ControlCommandType string
 
@@ -28,28 +30,29 @@ type NodeSnapshot struct {
 
 // PipelineStageInfo represents the state of a single stage in a pipeline
 type PipelineStageInfo struct {
-	StageIndex  int `json:"stageIndex"`  // 0 to latency-1
+	StageIndex  int `json:"stageIndex"` // 0 to latency-1
 	PacketCount int `json:"packetCount"`
+	LogicCycle  int `json:"logicCycle"`
 }
 
 // EdgeSnapshot describes a logical connection between nodes.
 type EdgeSnapshot struct {
-	Source        int                 `json:"source"`
-	Target        int                 `json:"target"`
-	Label         string              `json:"label"`
-	Latency       int                 `json:"latency"`
+	Source         int                 `json:"source"`
+	Target         int                 `json:"target"`
+	Label          string              `json:"label"`
+	Latency        int                 `json:"latency"`
 	PipelineStages []PipelineStageInfo `json:"pipelineStages,omitempty"`
-	BandwidthLimit int                `json:"bandwidthLimit"`
+	BandwidthLimit int                 `json:"bandwidthLimit"`
 }
 
 // SimulationFrame aggregates information required by frontends for a cycle.
 type SimulationFrame struct {
-	Cycle         int              `json:"cycle"`
-	Nodes         []NodeSnapshot   `json:"nodes"`
-	Edges         []EdgeSnapshot   `json:"edges"`
-	InFlightCount int              `json:"inFlightCount"`
-	Stats         *SimulationStats `json:"stats,omitempty"`
-	ConfigHash    string           `json:"configHash,omitempty"` // Hash of current config to detect config changes
+	Cycle            int               `json:"cycle"`
+	Nodes            []NodeSnapshot    `json:"nodes"`
+	Edges            []EdgeSnapshot    `json:"edges"`
+	InFlightCount    int               `json:"inFlightCount"`
+	Stats            *SimulationStats  `json:"stats,omitempty"`
+	ConfigHash       string            `json:"configHash,omitempty"`       // Hash of current config to detect config changes
 	TransactionGraph *TransactionGraph `json:"transactionGraph,omitempty"` // Transaction relationship graph
 }
 
@@ -59,6 +62,7 @@ type Visualizer interface {
 	IsHeadless() bool
 	PublishFrame(frame *SimulationFrame)
 	NextCommand() (ControlCommand, bool)
+	WaitCommand(ctx context.Context) (ControlCommand, bool)
 }
 
 // NullVisualizer is a no-op implementation used for headless mode.
@@ -83,4 +87,13 @@ func (n *NullVisualizer) PublishFrame(frame *SimulationFrame) {}
 
 func (n *NullVisualizer) NextCommand() (ControlCommand, bool) {
 	return ControlCommand{Type: CommandNone}, false
+}
+
+func (n *NullVisualizer) WaitCommand(ctx context.Context) (ControlCommand, bool) {
+	select {
+	case <-ctx.Done():
+		return ControlCommand{Type: CommandNone}, false
+	default:
+		return ControlCommand{Type: CommandNone}, false
+	}
 }

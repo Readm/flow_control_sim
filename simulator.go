@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -27,6 +29,18 @@ type Simulator struct {
 
 	isPaused  bool
 	isRunning bool
+
+	coordinator  *CycleCoordinator
+	componentIDs []string
+	runtimeWG    sync.WaitGroup
+
+	pendingReset *Config
+	stepOnce     bool
+}
+
+type cycleSignaler interface {
+	RegisterIncomingSignal(edge EdgeKey, signal *CycleSignal)
+	RegisterOutgoingSignal(edge EdgeKey, signal *CycleSignal)
 }
 
 // initializeSimulatorComponents creates and initializes all simulator components from config
@@ -179,7 +193,18 @@ func NewSimulator(cfg *Config) *Simulator {
 
 	sim.edges = sim.buildEdges()
 	sim.visualizer = sim.initVisualizer()
-	
+	if viz, ok := sim.visualizer.(*WebVisualizer); ok {
+		viz.SetTransactionManager(sim.txnMgr)
+	}
+
+	if sim.visualizer != nil && !sim.visualizer.IsHeadless() {
+		sim.isPaused = true
+		frame := sim.buildFrame(0)
+		sim.visualizer.PublishFrame(frame)
+	} else {
+		sim.isPaused = false
+	}
+
 	// Set TransactionManager for all components
 	for _, m := range sim.Masters {
 		m.SetTransactionManager(sim.txnMgr)
@@ -193,10 +218,10 @@ func NewSimulator(cfg *Config) *Simulator {
 	if sim.Chan != nil {
 		sim.Chan.SetTransactionManager(sim.txnMgr)
 	}
-	
+
 	// Set node labels in TransactionManager
 	sim.txnMgr.SetNodeLabels(sim.nodeLabels)
-	
+
 	// Configure packet history tracking
 	// Default: enabled (true) if not explicitly disabled
 	// Since bool zero value is false, we check if any history config is set
@@ -214,9 +239,9 @@ func NewSimulator(cfg *Config) *Simulator {
 			enableHistory = true
 		}
 	}
-	
+
 	historyConfig := &PacketHistoryConfig{
-		EnablePacketHistory:  enableHistory,
+		EnablePacketHistory:   enableHistory,
 		MaxPacketHistorySize:  cfg.MaxPacketHistorySize,
 		HistoryOverflowMode:   cfg.HistoryOverflowMode,
 		MaxTransactionHistory: cfg.MaxTransactionHistory,
@@ -229,7 +254,142 @@ func NewSimulator(cfg *Config) *Simulator {
 	}
 	sim.txnMgr.SetHistoryConfig(historyConfig)
 
+	sim.initializeCycleRuntime()
+
 	return sim
+}
+
+func (s *Simulator) initializeCycleRuntime() {
+	componentIDs := make([]string, 0, len(s.Masters)+len(s.Slaves)+len(s.edges)+1)
+	for _, m := range s.Masters {
+		componentIDs = append(componentIDs, fmt.Sprintf("node-%d", m.ID))
+	}
+	if s.Relay != nil {
+		componentIDs = append(componentIDs, fmt.Sprintf("node-%d", s.Relay.ID))
+	}
+	for _, sl := range s.Slaves {
+		componentIDs = append(componentIDs, fmt.Sprintf("node-%d", sl.ID))
+	}
+	for _, edge := range s.edges {
+		componentIDs = append(componentIDs, fmt.Sprintf("link-%d-%d", edge.Source, edge.Target))
+	}
+
+	s.componentIDs = componentIDs
+	s.coordinator = NewCycleCoordinator(componentIDs)
+
+	for _, m := range s.Masters {
+		m.ConfigureCycleRuntime(fmt.Sprintf("node-%d", m.ID), s.coordinator)
+	}
+	if s.Relay != nil {
+		s.Relay.ConfigureCycleRuntime(fmt.Sprintf("node-%d", s.Relay.ID), s.coordinator)
+	}
+	for _, sl := range s.Slaves {
+		sl.ConfigureCycleRuntime(fmt.Sprintf("node-%d", sl.ID), s.coordinator)
+	}
+
+	s.Chan.ConfigureCoordinator(s.coordinator)
+	for _, edge := range s.edges {
+		edgeKey := EdgeKey{FromID: edge.Source, ToID: edge.Target}
+		componentID := fmt.Sprintf("link-%d-%d", edge.Source, edge.Target)
+		endpoint := s.Chan.EnsureEdge(edgeKey, edge.Latency, componentID)
+		s.bindEdgeSignals(edgeKey, endpoint)
+	}
+
+	s.updateCoordinatorLimit()
+}
+
+func (s *Simulator) bindEdgeSignals(edgeKey EdgeKey, endpoint *LinkEndpoint) {
+	if endpoint == nil {
+		return
+	}
+	if sender := s.getCycleSignaler(edgeKey.FromID); sender != nil {
+		sender.RegisterOutgoingSignal(edgeKey, endpoint.SendFinished)
+	}
+	if receiver := s.getCycleSignaler(edgeKey.ToID); receiver != nil {
+		receiver.RegisterIncomingSignal(edgeKey, endpoint.ReceiveFinished)
+	}
+}
+
+func (s *Simulator) getCycleSignaler(id int) cycleSignaler {
+	if node, ok := s.masterByID[id]; ok {
+		return node
+	}
+	if node, ok := s.slaveByID[id]; ok {
+		return node
+	}
+	if s.Relay != nil && s.Relay.ID == id {
+		return s.Relay
+	}
+	return nil
+}
+
+func (s *Simulator) startRuntimes() {
+	s.runtimeWG = sync.WaitGroup{}
+
+	relayID := -1
+	if s.Relay != nil {
+		relayID = s.Relay.ID
+		ctx := &HomeNodeRuntime{
+			Config: s.cfg,
+			Link:   s.Chan,
+		}
+		s.runtimeWG.Add(1)
+		go func(hn *HomeNode) {
+			defer s.runtimeWG.Done()
+			hn.RunRuntime(ctx)
+		}(s.Relay)
+	}
+
+	for _, rn := range s.Masters {
+		ctx := &RequestNodeRuntime{
+			Config:             s.cfg,
+			Link:               s.Chan,
+			PacketAllocator:    s.pktIDs,
+			Slaves:             s.Slaves,
+			TransactionManager: s.txnMgr,
+			HomeNodeID:         relayID,
+		}
+		s.runtimeWG.Add(1)
+		go func(node *RequestNode) {
+			defer s.runtimeWG.Done()
+			node.RunRuntime(ctx)
+		}(rn)
+	}
+
+	for _, sl := range s.Slaves {
+		ctx := &SlaveNodeRuntime{
+			PacketAllocator: s.pktIDs,
+			Link:            s.Chan,
+			RelayID:         relayID,
+			RelayLatency:    s.cfg.SlaveRelayLatency,
+		}
+		s.runtimeWG.Add(1)
+		go func(node *SlaveNode) {
+			defer s.runtimeWG.Done()
+			node.RunRuntime(ctx)
+		}(sl)
+	}
+
+	s.updateCoordinatorLimit()
+}
+
+func (s *Simulator) updateCoordinatorLimit() {
+	if s.coordinator == nil {
+		return
+	}
+
+	limit := s.cfg.TotalCycles - 1
+	if s.stepOnce {
+		limit = s.current
+	} else if s.isPaused {
+		limit = s.current
+	}
+
+	if limit < -1 {
+		limit = -1
+	}
+
+	s.coordinator.SetMaxTarget(limit)
 }
 
 func (s *Simulator) initVisualizer() Visualizer {
@@ -306,7 +466,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		nodeCount++
 	}
 	nodes := make([]NodeSnapshot, 0, nodeCount)
-	
+
 	// Debug: log node counts
 	if cycle == 0 {
 		log.Printf("[DEBUG] buildFrame cycle 0: %d Masters, %d Slaves, Relay=%v", len(s.Masters), len(s.Slaves), s.Relay != nil)
@@ -421,20 +581,20 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 
 	stats := s.CollectStats()
 	configHash := computeConfigHash(s.cfg)
-	
+
 	// Build transaction graph (state providers are nil for now, will be implemented by other modules)
 	var txnGraph *TransactionGraph
 	if s.txnMgr != nil {
 		txnGraph = s.txnMgr.GetTransactionGraph(nil, nil, nil)
 	}
-	
+
 	frame := &SimulationFrame{
-		Cycle:         cycle,
-		Nodes:         nodes,
-		Edges:         edges,
-		InFlightCount: s.Chan.InFlightCount(),
-		Stats:         stats,
-		ConfigHash:    configHash,
+		Cycle:            cycle,
+		Nodes:            nodes,
+		Edges:            edges,
+		InFlightCount:    s.Chan.InFlightCount(),
+		Stats:            stats,
+		ConfigHash:       configHash,
 		TransactionGraph: txnGraph,
 	}
 	return frame
@@ -442,112 +602,32 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 
 func (s *Simulator) Run() {
 	s.isRunning = true
+	defer func() {
+		s.isRunning = false
+	}()
 
-	// If web frontend is available, start paused at cycle 0
-	// Otherwise (headless mode), start running immediately
-	if s.visualizer != nil && !s.visualizer.IsHeadless() {
-		s.isPaused = true
-		// Publish initial frame at cycle 0
-		frame := s.buildFrame(0)
-		s.visualizer.PublishFrame(frame)
-	} else {
-		s.isPaused = false
-	}
-
-	for s.current < s.cfg.TotalCycles {
-		// Check for control commands (except step, handled in paused section)
-		stepCommandPending := false
-		if s.visualizer != nil {
-			cmd, hasCmd := s.visualizer.NextCommand()
-			if hasCmd {
-				switch cmd.Type {
-				case CommandPause:
-					s.isPaused = true
-				case CommandResume:
-					s.isPaused = false
-				case CommandReset:
-					if cmd.ConfigOverride != nil {
-						log.Printf("[DEBUG] Simulator received reset command with config: NumMasters=%d, NumSlaves=%d, TotalCycles=%d",
-							cmd.ConfigOverride.NumMasters, cmd.ConfigOverride.NumSlaves, cmd.ConfigOverride.TotalCycles)
-					} else {
-						log.Printf("[DEBUG] Simulator received reset command without config override")
-					}
-					s.reset(cmd.ConfigOverride)
-					continue
-				case CommandStep:
-					// Step command is handled in paused section below
-					// Mark it as pending so we can process it there
-					if s.isPaused {
-						stepCommandPending = true
-					}
-					// If not paused, ignore step command (frontend should disable button)
-				}
+	for {
+		resetRequested := s.runCycles()
+		if resetRequested {
+			s.isPaused = false
+			cfg := s.pendingReset
+			s.pendingReset = nil
+			if cfg == nil {
+				cfg = s.cfg
 			}
-		}
-
-		// Wait if paused
-		if s.isPaused {
-			// Check for step command while paused
-			if stepCommandPending {
-				// Execute one cycle in step mode
-				// Continue to execute cycle below (break out of pause wait)
-				// isPaused remains true after execution
-			} else {
-				// No step command, wait normally
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-		}
-
-		cycle := s.current
-		s.current++
-
-		// Process link pipeline (handles packet movement and backpressure)
-		s.Chan.Tick(cycle)
-
-		relayID := -1
-		if s.Relay != nil {
-			relayID = s.Relay.ID
-		}
-
-		for _, m := range s.Masters {
-			if relayID < 0 {
-				continue
-			}
-			m.Tick(cycle, s.cfg, relayID, s.Chan, s.pktIDs, s.Slaves, s.txnMgr)
-		}
-
-		if s.Relay != nil {
-			s.Relay.Tick(cycle, s.Chan, s.cfg)
-		}
-
-		for _, sl := range s.Slaves {
-			resps := sl.Tick(cycle, s.pktIDs)
-			if relayID < 0 {
-				continue
-			}
-			for _, p := range resps {
-				s.Chan.Send(p, sl.ID, relayID, cycle, s.cfg.SlaveRelayLatency)
-			}
+			s.reset(cfg)
+			continue
 		}
 
 		if s.visualizer != nil && !s.visualizer.IsHeadless() {
-			frame := s.buildFrame(cycle)
-			s.visualizer.PublishFrame(frame)
+			cfg := s.waitForResetCommand()
+			s.isPaused = false
+			s.reset(cfg)
+			continue
 		}
 
-		// Periodic history cleanup (every 100 cycles)
-		if cycle%100 == 0 && s.txnMgr != nil {
-			s.txnMgr.CleanupHistory()
-		}
-
-		// Small delay to allow visualization updates
-		if s.visualizer != nil && !s.visualizer.IsHeadless() {
-			time.Sleep(DefaultVisualizationDelay)
-		}
+		break
 	}
-
-	s.isRunning = false
 }
 
 func (s *Simulator) reset(newCfg *Config) {
@@ -576,7 +656,7 @@ func (s *Simulator) reset(newCfg *Config) {
 	s.txnMgr = txnMgr
 	s.current = 0
 	s.edges = s.buildEdges()
-	
+
 	// Set TransactionManager for all components
 	for _, m := range s.Masters {
 		m.SetTransactionManager(s.txnMgr)
@@ -590,10 +670,10 @@ func (s *Simulator) reset(newCfg *Config) {
 	if s.Chan != nil {
 		s.Chan.SetTransactionManager(s.txnMgr)
 	}
-	
+
 	// Set node labels in TransactionManager
 	s.txnMgr.SetNodeLabels(s.nodeLabels)
-	
+
 	// Configure packet history tracking
 	// Default: enabled (true) if not explicitly disabled
 	// Since bool zero value is false, we check if any history config is set
@@ -611,9 +691,9 @@ func (s *Simulator) reset(newCfg *Config) {
 			enableHistory = true
 		}
 	}
-	
+
 	historyConfig := &PacketHistoryConfig{
-		EnablePacketHistory:  enableHistory,
+		EnablePacketHistory:   enableHistory,
 		MaxPacketHistorySize:  s.cfg.MaxPacketHistorySize,
 		HistoryOverflowMode:   s.cfg.HistoryOverflowMode,
 		MaxTransactionHistory: s.cfg.MaxTransactionHistory,
@@ -626,6 +706,10 @@ func (s *Simulator) reset(newCfg *Config) {
 	}
 	s.txnMgr.SetHistoryConfig(historyConfig)
 
+	if viz, ok := s.visualizer.(*WebVisualizer); ok {
+		viz.SetTransactionManager(s.txnMgr)
+	}
+
 	// If web frontend is available, pause at cycle 0 after reset
 	// Otherwise (headless mode), continue running
 	if s.visualizer != nil && !s.visualizer.IsHeadless() {
@@ -635,6 +719,161 @@ func (s *Simulator) reset(newCfg *Config) {
 		s.visualizer.PublishFrame(frame)
 	} else {
 		s.isPaused = false
+	}
+	s.stepOnce = false
+
+	s.initializeCycleRuntime()
+	s.updateCoordinatorLimit()
+}
+
+func (s *Simulator) stopRuntimes() {
+	if s.coordinator != nil {
+		s.coordinator.Stop()
+	}
+	s.runtimeWG.Wait()
+	s.coordinator = nil
+}
+
+func (s *Simulator) handleCommand(cmd ControlCommand) bool {
+	if cmd.Type == CommandNone {
+		return true
+	}
+
+	switch cmd.Type {
+	case CommandPause:
+		s.stepOnce = false
+		s.isPaused = true
+		s.updateCoordinatorLimit()
+	case CommandResume:
+		s.stepOnce = false
+		s.isPaused = false
+		s.updateCoordinatorLimit()
+	case CommandStep:
+		if s.isPaused {
+			s.stepOnce = true
+			s.isPaused = false
+			s.updateCoordinatorLimit()
+		}
+	case CommandReset:
+		if s.pendingReset == nil {
+			cfg := cmd.ConfigOverride
+			if cfg == nil {
+				cfgCopy := *s.cfg
+				cfg = &cfgCopy
+			}
+			s.pendingReset = cfg
+			s.stopRuntimes()
+		}
+		return false
+	}
+
+	return true
+}
+
+func (s *Simulator) processCommands() bool {
+	if s.visualizer == nil {
+		return true
+	}
+
+	for {
+		cmd, ok := s.visualizer.NextCommand()
+		if !ok || cmd.Type == CommandNone {
+			break
+		}
+		if !s.handleCommand(cmd) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (s *Simulator) runCycles() bool {
+	totalCycles := s.cfg.TotalCycles
+	if totalCycles < 0 {
+		totalCycles = 0
+	}
+
+	if totalCycles == 0 {
+		if s.visualizer != nil && !s.visualizer.IsHeadless() {
+			frame := s.buildFrame(0)
+			s.visualizer.PublishFrame(frame)
+		}
+		return false
+	}
+
+	if s.coordinator == nil {
+		s.initializeCycleRuntime()
+	}
+
+	s.startRuntimes()
+
+	for cycle := s.current; cycle < totalCycles; {
+		if !s.processCommands() {
+			return true
+		}
+
+		if s.isPaused {
+			if s.visualizer != nil && !s.visualizer.IsHeadless() {
+				cmd, ok := s.visualizer.WaitCommand(context.Background())
+				if ok && cmd.Type != CommandNone {
+					if !s.handleCommand(cmd) {
+						return true
+					}
+				}
+			}
+			if s.isPaused {
+				continue
+			}
+		}
+
+		for {
+			if s.coordinator.TargetCycle() > cycle {
+				break
+			}
+			if !s.processCommands() {
+				return true
+			}
+			time.Sleep(1 * time.Millisecond)
+		}
+
+		if s.visualizer != nil && !s.visualizer.IsHeadless() {
+			frame := s.buildFrame(cycle)
+			s.visualizer.PublishFrame(frame)
+		}
+
+		if s.txnMgr != nil && cycle%100 == 0 {
+			s.txnMgr.CleanupHistory()
+		}
+
+		cycle++
+		s.current = cycle
+
+		if s.visualizer != nil && !s.visualizer.IsHeadless() {
+			frame := s.buildFrame(s.current)
+			s.visualizer.PublishFrame(frame)
+		}
+
+		if s.stepOnce {
+			s.isPaused = true
+			s.stepOnce = false
+			s.updateCoordinatorLimit()
+		}
+	}
+
+	s.stopRuntimes()
+	s.current = totalCycles
+	return false
+}
+
+func (s *Simulator) waitForResetCommand() *Config {
+	for {
+		if !s.processCommands() {
+			cfg := s.pendingReset
+			s.pendingReset = nil
+			return cfg
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -13,11 +14,11 @@ const (
 	DefaultVisualizationDelay = 50 * time.Millisecond
 
 	// Queue capacity constants
-	DefaultSlaveQueueCapacity     = 20  // Limited capacity for high load visualization
-	UnlimitedQueueCapacity        = -1  // Unlimited queue capacity
-	DefaultRequestQueueCapacity   = 1024 // Default capacity for dispatch queue (changed from -1)
-	DefaultForwardQueueCapacity   = -1   // Unlimited for forward queue
-	DefaultDispatchQueueCapacity  = 1024 // Default capacity for dispatch queue
+	DefaultSlaveQueueCapacity    = 20   // Limited capacity for high load visualization
+	UnlimitedQueueCapacity       = -1   // Unlimited queue capacity
+	DefaultRequestQueueCapacity  = 1024 // Default capacity for dispatch queue (changed from -1)
+	DefaultForwardQueueCapacity  = -1   // Unlimited for forward queue
+	DefaultDispatchQueueCapacity = 1024 // Default capacity for dispatch queue
 
 	// Link and bandwidth constants
 	DefaultBandwidthLimit = 1 // Default maximum packets per slot in pipeline
@@ -95,16 +96,16 @@ type Packet struct {
 	ResponseType    CHIResponseType    // CHI response type (CompData, CompAck, etc.)
 	Address         uint64             // memory address for the transaction
 	DataSize        int                // data size in bytes (default: DefaultCacheLineSize)
-	
+
 	// Transaction tracking
-	TransactionID   int64  // ID of the transaction this packet belongs to (0 if not associated)
-	
+	TransactionID int64 // ID of the transaction this packet belongs to (0 if not associated)
+
 	// Snoop-related fields
-	OriginalTxnID   int64  // For Snoop responses: the original transaction ID that triggered this snoop
-	SnoopTargetID   int    // For Snoop requests: the target Request Node ID to snoop
+	OriginalTxnID int64 // For Snoop responses: the original transaction ID that triggered this snoop
+	SnoopTargetID int   // For Snoop requests: the target Request Node ID to snoop
 
 	// Packet generation tracking
-	ParentPacketID  int64  // ID of the parent packet that generated this packet (0 if no parent)
+	ParentPacketID int64 // ID of the parent packet that generated this packet (0 if no parent)
 }
 
 // Config holds simulation configuration values.
@@ -122,19 +123,19 @@ type Config struct {
 	SlaveRelayLatency  int // Slave  -> Relay
 
 	// processing and generation
-	SlaveProcessRate int     // requests processed per cycle per slave
-	
+	SlaveProcessRate int // requests processed per cycle per slave
+
 	// Request generation: uses RequestGenerator interface
 	// Generators are created in Simulator initialization (requires rng)
 	// If RequestGenerators is nil or empty, RequestGenerator is used for all masters
 	// If RequestGenerators is provided, it overrides RequestGenerator per master
 	RequestGenerator  RequestGenerator   // default generator for all masters (created in Simulator init)
 	RequestGenerators []RequestGenerator // per-master override (optional, len should match NumMasters)
-	
+
 	// Generator configuration (used to create generators if not already set)
 	// These fields are used when RequestGenerator is nil
 	RequestRateConfig float64 // probability for ProbabilityGenerator (0.0-1.0)
-	
+
 	// ScheduleGenerator configuration (optional)
 	// If ScheduleConfig is non-nil, ScheduleGenerator will be created instead of ProbabilityGenerator
 	ScheduleConfig map[int]map[int][]ScheduleItem // cycle -> masterIndex -> []ScheduleItem
@@ -151,16 +152,16 @@ type Config struct {
 	// visualization settings
 	Headless   bool   // true to run without visualization
 	VisualMode string // "gui" | "web" | "none" (default: "gui" if Headless is false)
-	
+
 	// Initial cache state (for test scenarios)
 	// Format: map[nodeID]map[address]CacheState
 	InitialCacheState map[int]map[uint64]CacheState
 
 	// Packet history tracking configuration
-	EnablePacketHistory  bool   // Enable packet history tracking (default: true)
-	MaxPacketHistorySize int    // Maximum packet history size (0 = unlimited, default: 0)
-	HistoryOverflowMode  string // "circular" or "initial" (default: "circular")
-	MaxTransactionHistory int   // Maximum number of transactions to keep history for (default: 1000)
+	EnablePacketHistory   bool   // Enable packet history tracking (default: true)
+	MaxPacketHistorySize  int    // Maximum packet history size (0 = unlimited, default: 0)
+	HistoryOverflowMode   string // "circular" or "initial" (default: "circular")
+	MaxTransactionHistory int    // Maximum number of transactions to keep history for (default: 1000)
 }
 
 // NodeIDAllocator provides simple incremental ids for nodes.
@@ -180,6 +181,7 @@ func (a *NodeIDAllocator) Allocate() int {
 
 // PacketIDAllocator provides unique ids for packets.
 type PacketIDAllocator struct {
+	mu   sync.Mutex
 	next int64
 }
 
@@ -188,8 +190,10 @@ func NewPacketIDAllocator() *PacketIDAllocator {
 }
 
 func (a *PacketIDAllocator) Allocate() int64 {
+	a.mu.Lock()
 	id := a.next
 	a.next++
+	a.mu.Unlock()
 	return id
 }
 
