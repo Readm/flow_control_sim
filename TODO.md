@@ -1,33 +1,52 @@
 # TODO List
 
-## Config Serialization Support
+## 1. Config Serialization Support
 
-### Priority: Medium
+- **Priority**: Medium  
+- **现状**: 配置仍硬编码在 `soc_configs.go`，`Simulator` 初始化时构造请求生成器。  
+- **目标**:
+  1. 提供 `Config` 结构体的 JSON 序列化/反序列化
+  2. 将 `RequestGenerator`、`ScheduleGenerator` 的配置化信息写入 JSON
+  3. 支持从文件加载/保存配置，保持对现有硬编码配置的兼容
+- **关键点**:
+  - 需要引入可序列化的中间结构，并在加载时转换为具体 Generator
+  - `ScheduleConfig` 可直接序列化，但需校验 JSON 标签
+- **相关文件**: `models.go`、`request_generator.go`、`soc_configs.go`、`web_server.go`
+- **预计工作量**: 2-3 天
 
-**Task**: Add JSON serialization support for Config structure, including RequestGenerator and ScheduleGenerator configurations.
+## 2. Policy / FlowControl 策略扩展
 
-**Current Status**: Config structures are hardcoded in source code (`soc_configs.go`). RequestGenerator and ScheduleGenerator are created in Simulator initialization.
+- **Priority**: High  
+- **目标**:
+  1. 在 `policy.Manager` 基础上实现一个示范性 FlowControl 插件（基于 credit 或 token bucket）
+  2. 支持通过 `PluginBroker` 注册/卸载策略插件（示例：动态调整路由、限速）
+  3. 将 DomainMapping 与策略关联，允许插件基于 `DomainOf` 返回值做差异化决策
+- **验证**:
+  - 为新策略编写单元测试：并发发送下的 credit 消耗、拒绝发送日志
+  - 扩展现有模拟器集成测试，验证启用/禁用策略的行为差异
+- **相关文件**: `policy/manager.go`、`simulator.go`、`rn.go`、`hn.go`
 
-**Requirements**:
-1. Support JSON serialization/deserialization of Config structure
-2. Serialize RequestGenerator configuration:
-   - ProbabilityGenerator: `RequestRateConfig` and `SlaveWeights`
-   - ScheduleGenerator: `ScheduleConfig` (map[int]map[int][]ScheduleItem)
-3. Support loading Config from JSON files
-4. Support saving Config to JSON files
-5. Ensure backward compatibility with existing hardcoded configs
+## 3. 文档与示例完善
 
-**Implementation Notes**:
-- RequestGenerator interface cannot be directly serialized (interface type)
-- Need to introduce a serializable config format that can be converted to Generator
-- Consider using a discriminator field to identify generator type
-- ScheduleConfig structure is already serializable (but may need custom JSON tags)
+- **Priority**: High  
+- **任务**:
+  1. 在 `doc/design.md` 基础上新增实战示例：如何注册自定义 Hook、如何组合 `policy.Manager`
+  2. 编写 `doc/testing.md` 或在 `TEST_RESULTS.md` 增补 Hook/Policy 测试说明及常见断言
+  3. 更新 Web 端或 CLI 使用说明，让配置与策略可视化（如输出当前路由、credit 状态）
+- **交付**:
+  - Markdown 文档，包含示例代码与时序示意
+  - 若涉及可视化，提供截图或操作步骤
 
-**Related Files**:
-- `models.go`: Config structure
-- `request_generator.go`: RequestGenerator interface and implementations
-- `soc_configs.go`: Predefined configs
-- `web_server.go`: Config loading/saving endpoints (if needed)
+## 4. 长时间运行与性能测试
 
-**Estimated Effort**: Medium (2-3 days)
+- **Priority**: Medium  
+- **内容**:
+  1. 在 `simulator_test.go` 添加长周期（>10k）运行示例，观测 Hook 对性能影响
+  2. 针对多 Master / 多 Slave 场景编写基准测试，分析吞吐与延迟
+  3. 输出测试报告（CSV/Markdown），便于对比优化前后数据
+- **相关文件**: `benchmark.go`、`simulator_test.go`
+
+---
+
+> 如需新增任务，请保持同样的分节格式（Priority / 目标 / 验证 / 相关文件），方便团队追踪。
 

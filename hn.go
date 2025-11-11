@@ -3,7 +3,10 @@ package main
 import (
 	"sync"
 
-	"github.com/example/flow_sim/queue"
+	"flow_sim/core"
+	"flow_sim/hooks"
+	"flow_sim/policy"
+	"flow_sim/queue"
 )
 
 // HomeNode (HN) represents a CHI Home Node that manages cache coherence and routes transactions.
@@ -11,24 +14,27 @@ import (
 // then routes responses back to the originating Request Node.
 type HomeNode struct {
 	Node   // embedded Node base class
-	queue  *queue.TrackedQueue[*Packet]
+	queue  *queue.TrackedQueue[*core.Packet]
 	txnMgr *TransactionManager // for recording packet events
 
 	mu       sync.Mutex
 	bindings *NodeCycleBindings
+
+	broker    *hooks.PluginBroker
+	policyMgr policy.Manager
 }
 
 func NewHomeNode(id int) *HomeNode {
 	hn := &HomeNode{
 		Node: Node{
 			ID:   id,
-			Type: NodeTypeHN,
+			Type: core.NodeTypeHN,
 		},
 		txnMgr:   nil, // will be set by simulator
 		bindings: NewNodeCycleBindings(),
 	}
 	hn.AddQueue("forward_queue", 0, DefaultForwardQueueCapacity)
-	hn.queue = queue.NewTrackedQueue("forward_queue", DefaultForwardQueueCapacity, hn.makeQueueMutator(), queue.QueueHooks[*Packet]{
+	hn.queue = queue.NewTrackedQueue("forward_queue", DefaultForwardQueueCapacity, hn.makeQueueMutator(), queue.QueueHooks[*core.Packet]{
 		OnEnqueue: hn.enqueueHook,
 		OnDequeue: hn.dequeueHook,
 	})
@@ -41,32 +47,32 @@ func (hn *HomeNode) makeQueueMutator() queue.MutateFunc {
 	}
 }
 
-func (hn *HomeNode) enqueueHook(p *Packet, cycle int) {
+func (hn *HomeNode) enqueueHook(p *core.Packet, cycle int) {
 	if hn.txnMgr == nil || p == nil || p.TransactionID == 0 {
 		return
 	}
-	event := &PacketEvent{
+	event := &core.PacketEvent{
 		TransactionID:  p.TransactionID,
 		PacketID:       p.ID,
 		ParentPacketID: p.ParentPacketID,
 		NodeID:         hn.ID,
-		EventType:      PacketEnqueued,
+		EventType:      core.PacketEnqueued,
 		Cycle:          cycle,
 		EdgeKey:        nil,
 	}
 	hn.txnMgr.RecordPacketEvent(event)
 }
 
-func (hn *HomeNode) dequeueHook(p *Packet, cycle int) {
+func (hn *HomeNode) dequeueHook(p *core.Packet, cycle int) {
 	if hn.txnMgr == nil || p == nil || p.TransactionID == 0 {
 		return
 	}
-	event := &PacketEvent{
+	event := &core.PacketEvent{
 		TransactionID:  p.TransactionID,
 		PacketID:       p.ID,
 		ParentPacketID: p.ParentPacketID,
 		NodeID:         hn.ID,
-		EventType:      PacketDequeued,
+		EventType:      core.PacketDequeued,
 		Cycle:          cycle,
 		EdgeKey:        nil,
 	}
@@ -76,6 +82,16 @@ func (hn *HomeNode) dequeueHook(p *Packet, cycle int) {
 // SetTransactionManager sets the transaction manager for event recording
 func (hn *HomeNode) SetTransactionManager(txnMgr *TransactionManager) {
 	hn.txnMgr = txnMgr
+}
+
+// SetPluginBroker assigns the hook broker for routing and sending stages.
+func (hn *HomeNode) SetPluginBroker(b *hooks.PluginBroker) {
+	hn.broker = b
+}
+
+// SetPolicyManager assigns the policy manager used during routing decisions.
+func (hn *HomeNode) SetPolicyManager(m policy.Manager) {
+	hn.policyMgr = m
 }
 
 // ConfigureCycleRuntime sets the coordinator bindings for the node.
@@ -88,7 +104,7 @@ func (hn *HomeNode) ConfigureCycleRuntime(componentID string, coord *CycleCoordi
 }
 
 // RegisterIncomingSignal registers the receive-finished signal for an incoming edge.
-func (hn *HomeNode) RegisterIncomingSignal(edge EdgeKey, signal *CycleSignal) {
+func (hn *HomeNode) RegisterIncomingSignal(edge core.EdgeKey, signal *CycleSignal) {
 	if hn.bindings == nil {
 		hn.bindings = NewNodeCycleBindings()
 	}
@@ -96,7 +112,7 @@ func (hn *HomeNode) RegisterIncomingSignal(edge EdgeKey, signal *CycleSignal) {
 }
 
 // RegisterOutgoingSignal registers the send-finished signal for an outgoing edge.
-func (hn *HomeNode) RegisterOutgoingSignal(edge EdgeKey, signal *CycleSignal) {
+func (hn *HomeNode) RegisterOutgoingSignal(edge core.EdgeKey, signal *CycleSignal) {
 	if hn.bindings == nil {
 		hn.bindings = NewNodeCycleBindings()
 	}
@@ -105,7 +121,7 @@ func (hn *HomeNode) RegisterOutgoingSignal(edge EdgeKey, signal *CycleSignal) {
 
 // CanReceive checks if the HomeNode can receive packets from the given edge.
 // HomeNode always can receive (unlimited capacity for forward_queue).
-func (hn *HomeNode) CanReceive(edgeKey EdgeKey, packetCount int) bool {
+func (hn *HomeNode) CanReceive(edgeKey core.EdgeKey, packetCount int) bool {
 	// forward_queue has unlimited capacity (-1)
 	return true
 }
@@ -121,7 +137,7 @@ func (hn *HomeNode) OnPackets(messages []*InFlightMessage, cycle int) {
 // For ReadNoSnp requests, this will be forwarded to the target Slave Node.
 // For responses from Slave Nodes, this will be forwarded back to the Request Node.
 // This method is kept for backward compatibility but is now called by OnPackets.
-func (hn *HomeNode) OnPacket(p *Packet, cycle int, ch *Link, cfg *Config) {
+func (hn *HomeNode) OnPacket(p *core.Packet, cycle int, ch *Link, cfg *Config) {
 	if p == nil {
 		return
 	}
@@ -149,38 +165,111 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 		if !ok {
 			break
 		}
-		var latency int
-		var toID int
-
-		// CHI protocol routing logic
-		if p.MessageType == CHIMsgReq {
-			// This is a request from Request Node, forward to Slave Node
-			// For ReadNoSnp, the DstID already points to the target Slave Node
-			toID = p.DstID
-			latency = cfg.RelaySlaveLatency
-		} else if p.MessageType == CHIMsgComp || p.MessageType == CHIMsgResp {
-			// This is a response from Slave Node, forward back to Request Node
-			// The MasterID field contains the original Request Node ID
-			toID = p.MasterID
-			latency = cfg.RelayMasterLatency
-		} else if p.Type == "request" {
-			// Legacy support: treat as request, forward to Slave Node
-			toID = p.DstID
-			latency = cfg.RelaySlaveLatency
-		} else if p.Type == "response" {
-			// Legacy support: treat as response, forward to Request Node
-			toID = p.DstID
-			latency = cfg.RelayMasterLatency
-		} else {
+		defaultTarget, latency, ok := hn.defaultRoute(p, cfg)
+		if !ok {
 			continue
 		}
 
+		finalTarget := defaultTarget
+
+		if hn.broker != nil {
+			routeCtx := &hooks.RouteContext{
+				Packet:        p,
+				SourceNodeID:  hn.ID,
+				DefaultTarget: defaultTarget,
+				TargetID:      defaultTarget,
+			}
+			if err := hn.broker.EmitBeforeRoute(routeCtx); err != nil {
+				GetLogger().Warnf("HomeNode %d OnBeforeRoute hook failed: %v", hn.ID, err)
+				continue
+			}
+			finalTarget = routeCtx.TargetID
+		}
+
+		if hn.policyMgr != nil {
+			resolvedTarget, err := hn.policyMgr.ResolveRoute(p, hn.ID, finalTarget)
+			if err != nil {
+				GetLogger().Warnf("HomeNode %d policy route failed: %v", hn.ID, err)
+				continue
+			}
+			finalTarget = resolvedTarget
+		}
+
+		if hn.broker != nil {
+			routeCtx := &hooks.RouteContext{
+				Packet:        p,
+				SourceNodeID:  hn.ID,
+				DefaultTarget: defaultTarget,
+				TargetID:      finalTarget,
+			}
+			if err := hn.broker.EmitAfterRoute(routeCtx); err != nil {
+				GetLogger().Warnf("HomeNode %d OnAfterRoute hook failed: %v", hn.ID, err)
+			}
+			finalTarget = routeCtx.TargetID
+		}
+
+		if hn.broker != nil {
+			sendCtx := &hooks.MessageContext{
+				Packet: p,
+				NodeID: hn.ID,
+				Cycle:  cycle,
+			}
+			if err := hn.broker.EmitBeforeSend(sendCtx); err != nil {
+				GetLogger().Warnf("HomeNode %d OnBeforeSend hook failed: %v", hn.ID, err)
+				continue
+			}
+		}
+
+		if hn.policyMgr != nil {
+			if err := hn.policyMgr.CheckFlowControl(p, hn.ID, finalTarget); err != nil {
+				GetLogger().Warnf("HomeNode %d flow control blocked packet: %v", hn.ID, err)
+				continue
+			}
+		}
+
+		latency = hn.adjustLatency(p, cfg, finalTarget)
+
 		p.SentAt = cycle
-		ch.Send(p, hn.ID, toID, cycle, latency)
+		ch.Send(p, hn.ID, finalTarget, cycle, latency)
 		count++
+
+		if hn.broker != nil {
+			sendCtx := &hooks.MessageContext{
+				Packet: p,
+				NodeID: hn.ID,
+				Cycle:  cycle,
+			}
+			if err := hn.broker.EmitAfterSend(sendCtx); err != nil {
+				GetLogger().Warnf("HomeNode %d OnAfterSend hook failed: %v", hn.ID, err)
+			}
+		}
 	}
 
 	return count
+}
+
+func (hn *HomeNode) defaultRoute(p *core.Packet, cfg *Config) (target int, latency int, ok bool) {
+	switch {
+	case p.MessageType == core.CHIMsgReq || p.Type == "request":
+		return p.DstID, cfg.RelaySlaveLatency, true
+	case p.MessageType == core.CHIMsgComp || p.MessageType == core.CHIMsgResp || p.Type == "response":
+		if p.MessageType == core.CHIMsgComp || p.MessageType == core.CHIMsgResp {
+			return p.MasterID, cfg.RelayMasterLatency, true
+		}
+		return p.DstID, cfg.RelayMasterLatency, true
+	default:
+		return 0, 0, false
+	}
+}
+
+func (hn *HomeNode) adjustLatency(p *core.Packet, cfg *Config, target int) int {
+	if p.MessageType == core.CHIMsgReq || p.Type == "request" {
+		return cfg.RelaySlaveLatency
+	}
+	if p.MessageType == core.CHIMsgComp || p.MessageType == core.CHIMsgResp || p.Type == "response" {
+		return cfg.RelayMasterLatency
+	}
+	return cfg.RelaySlaveLatency
 }
 
 // HomeNodeRuntime contains dependencies required during runtime execution.
@@ -213,15 +302,15 @@ func (hn *HomeNode) RunRuntime(ctx *HomeNodeRuntime) {
 }
 
 // GetQueuePackets returns packet information for the forward_queue
-func (hn *HomeNode) GetQueuePackets() []PacketInfo {
+func (hn *HomeNode) GetQueuePackets() []core.PacketInfo {
 	hn.mu.Lock()
 	defer hn.mu.Unlock()
-	packets := make([]PacketInfo, 0, hn.queue.Len())
+	packets := make([]core.PacketInfo, 0, hn.queue.Len())
 	for _, p := range hn.queue.Items() {
 		if p == nil {
 			continue
 		}
-		packets = append(packets, PacketInfo{
+		packets = append(packets, core.PacketInfo{
 			ID:              p.ID,
 			Type:            p.Type,
 			SrcID:           p.SrcID,

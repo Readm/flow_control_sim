@@ -2,12 +2,6 @@ package main
 
 import "sync"
 
-// EdgeKey represents a unique edge in the network (fromID -> toID)
-type EdgeKey struct {
-	FromID int `json:"fromID"`
-	ToID   int `json:"toID"`
-}
-
 // InFlightMessage represents a CHI protocol packet that is currently in transit.
 // It carries CHI messages (Req, Resp, Data, Comp) between nodes.
 type InFlightMessage struct {

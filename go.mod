@@ -1,4 +1,4 @@
-module github.com/example/flow_sim
+module flow_sim
 
 go 1.21
 

@@ -4,7 +4,10 @@ import (
 	"math/rand"
 	"sync"
 
-	"github.com/example/flow_sim/queue"
+	"flow_sim/core"
+	"flow_sim/hooks"
+	"flow_sim/policy"
+	"flow_sim/queue"
 )
 
 // RequestNode (RN) represents a CHI Request Node that initiates transactions.
@@ -13,10 +16,13 @@ type RequestNode struct {
 	Node        // embedded Node base class
 	generator   RequestGenerator
 	masterIndex int // index of this master in the masters array (for generator)
+	txFactory   *TxFactory
+	broker      *hooks.PluginBroker
+	policyMgr   policy.Manager
 
 	// queues for request management
-	stimulusQueue *queue.TrackedQueue[*Packet] // stimulus_queue: infinite capacity, stores generated requests
-	dispatchQueue *queue.TrackedQueue[*Packet] // dispatch_queue: limited capacity, stores requests ready to send
+	stimulusQueue *queue.TrackedQueue[*core.Packet] // stimulus_queue: infinite capacity, stores generated requests
+	dispatchQueue *queue.TrackedQueue[*core.Packet] // dispatch_queue: limited capacity, stores requests ready to send
 
 	// track request generation times by request id (for statistics)
 	generatedAtByReq map[int64]int
@@ -42,7 +48,7 @@ func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *Reques
 	rn := &RequestNode{
 		Node: Node{
 			ID:   id,
-			Type: NodeTypeRN,
+			Type: core.NodeTypeRN,
 		},
 		generator:        generator,
 		masterIndex:      masterIndex,
@@ -53,8 +59,8 @@ func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *Reques
 	rn.AddQueue("stimulus_queue", 0, UnlimitedQueueCapacity)
 	rn.AddQueue("dispatch_queue", 0, DefaultDispatchQueueCapacity)
 	rn.bindings = NewNodeCycleBindings()
-	rn.stimulusQueue = queue.NewTrackedQueue("stimulus_queue", queue.UnlimitedCapacity, rn.makeQueueMutator("stimulus_queue"), queue.QueueHooks[*Packet]{})
-	rn.dispatchQueue = queue.NewTrackedQueue("dispatch_queue", DefaultDispatchQueueCapacity, rn.makeQueueMutator("dispatch_queue"), queue.QueueHooks[*Packet]{
+	rn.stimulusQueue = queue.NewTrackedQueue("stimulus_queue", queue.UnlimitedCapacity, rn.makeQueueMutator("stimulus_queue"), queue.QueueHooks[*core.Packet]{})
+	rn.dispatchQueue = queue.NewTrackedQueue("dispatch_queue", DefaultDispatchQueueCapacity, rn.makeQueueMutator("dispatch_queue"), queue.QueueHooks[*core.Packet]{
 		OnEnqueue: rn.dispatchEnqueueHook,
 		OnDequeue: rn.dispatchDequeueHook,
 	})
@@ -67,45 +73,60 @@ func (rn *RequestNode) makeQueueMutator(queueName string) queue.MutateFunc {
 	}
 }
 
-func (rn *RequestNode) dispatchEnqueueHook(p *Packet, cycle int) {
+func (rn *RequestNode) dispatchEnqueueHook(p *core.Packet, cycle int) {
 	if rn.txnMgr == nil || p == nil || p.TransactionID == 0 {
 		return
 	}
-	event := &PacketEvent{
+	event := &core.PacketEvent{
 		TransactionID:  p.TransactionID,
 		PacketID:       p.ID,
 		ParentPacketID: p.ParentPacketID,
 		NodeID:         rn.ID,
-		EventType:      PacketEnqueued,
+		EventType:      core.PacketEnqueued,
 		Cycle:          cycle,
 		EdgeKey:        nil,
 	}
 	rn.txnMgr.RecordPacketEvent(event)
 }
 
-func (rn *RequestNode) dispatchDequeueHook(p *Packet, cycle int) {
+func (rn *RequestNode) dispatchDequeueHook(p *core.Packet, cycle int) {
 	if rn.txnMgr == nil || p == nil || p.TransactionID == 0 {
 		return
 	}
-	event := &PacketEvent{
+	event := &core.PacketEvent{
 		TransactionID:  p.TransactionID,
 		PacketID:       p.ID,
 		ParentPacketID: p.ParentPacketID,
 		NodeID:         rn.ID,
-		EventType:      PacketDequeued,
+		EventType:      core.PacketDequeued,
 		Cycle:          cycle,
 		EdgeKey:        nil,
 	}
 	rn.txnMgr.RecordPacketEvent(event)
+}
+
+// SetTxFactory assigns the transaction factory for request creation.
+func (rn *RequestNode) SetTxFactory(factory *TxFactory) {
+	rn.txFactory = factory
+}
+
+// SetPluginBroker assigns the hook broker for lifecycle callbacks.
+func (rn *RequestNode) SetPluginBroker(b *hooks.PluginBroker) {
+	rn.broker = b
+}
+
+// SetPolicyManager assigns the policy manager for routing decisions.
+func (rn *RequestNode) SetPolicyManager(m policy.Manager) {
+	rn.policyMgr = m
 }
 
 // GenerateReadNoSnpRequest creates a CHI ReadNoSnp transaction request packet.
 // ReadNoSnp is a simple read request that does not require snoop operations.
-func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID int, homeNodeID int) *Packet {
+func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID int, homeNodeID int) *core.Packet {
 	address := rn.nextAddress
 	rn.nextAddress += DefaultCacheLineSize
 
-	return &Packet{
+	return &core.Packet{
 		ID:              reqID,
 		Type:            "request", // legacy field for compatibility
 		SrcID:           rn.ID,
@@ -114,8 +135,8 @@ func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID 
 		SentAt:          cycle,
 		MasterID:        rn.ID, // legacy field
 		RequestID:       reqID,
-		TransactionType: CHITxnReadNoSnp,
-		MessageType:     CHIMsgReq,
+		TransactionType: core.CHITxnReadNoSnp,
+		MessageType:     core.CHIMsgReq,
 		Address:         address,
 		DataSize:        DefaultCacheLineSize,
 	}
@@ -153,8 +174,6 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 			// Get actual slave node ID from the slaves array
 			dstSNID := slaves[result.SlaveIndex].ID
 
-			reqID := packetIDs.Allocate()
-
 			// Determine address and data size
 			address := result.Address
 			if address == 0 {
@@ -170,45 +189,64 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 			// Determine transaction type
 			txnType := result.TransactionType
 			if txnType == "" {
-				txnType = CHITxnReadNoSnp
+				txnType = core.CHITxnReadNoSnp
 			}
 
-			// Create transaction if TransactionManager is available
-			var txnID int64
-			if txnMgr != nil {
-				txn := txnMgr.CreateTransaction(txnType, address, cycle)
-				txnID = txn.Context.TransactionID
-			}
+			var packet *core.Packet
+			if rn.txFactory != nil {
+				params := TxRequestParams{
+					Cycle:           cycle,
+					SrcID:           rn.ID,
+					MasterID:        rn.ID,
+					DstID:           dstSNID,
+					TransactionType: txnType,
+					Address:         address,
+					DataSize:        dataSize,
+				}
+				packet, _ = rn.txFactory.CreateRequest(params)
+			} else {
+				reqID := packetIDs.Allocate()
 
-			// Generate request packet
-			// SentAt is initially 0, will be set when actually sent to Link
-			p := &Packet{
-				ID:              reqID,
-				Type:            "request", // legacy field
-				SrcID:           rn.ID,
-				DstID:           dstSNID,
-				GeneratedAt:     cycle,
-				SentAt:          0, // Will be set when sent to Link
-				MasterID:        rn.ID,
-				RequestID:       reqID,
-				TransactionType: txnType,
-				MessageType:     CHIMsgReq,
-				Address:         address,
-				DataSize:        dataSize,
-				TransactionID:   txnID,
-				ParentPacketID:  0, // Initial request has no parent packet
+				// Create transaction if TransactionManager is available
+				var txnID int64
+				if txnMgr != nil {
+					txn := txnMgr.CreateTransaction(txnType, address, cycle)
+					txnID = txn.Context.TransactionID
+				}
+
+				// Generate request packet
+				// SentAt is initially 0, will be set when actually sent to Link
+				packet = &core.Packet{
+					ID:              reqID,
+					Type:            "request", // legacy field
+					SrcID:           rn.ID,
+					DstID:           dstSNID,
+					GeneratedAt:     cycle,
+					SentAt:          0, // Will be set when sent to Link
+					MasterID:        rn.ID,
+					RequestID:       reqID,
+					TransactionType: txnType,
+					MessageType:     core.CHIMsgReq,
+					Address:         address,
+					DataSize:        dataSize,
+					TransactionID:   txnID,
+					ParentPacketID:  0, // Initial request has no parent packet
+				}
+			}
+			if packet == nil {
+				continue
 			}
 
 			rn.TotalRequests++
-			rn.generatedAtByReq[reqID] = cycle
+			rn.generatedAtByReq[packet.RequestID] = cycle
 
 			// Mark transaction as in-flight when packet is sent
-			if txnMgr != nil && txnID > 0 {
+			if txnMgr != nil && packet.TransactionID > 0 {
 				// Will be marked in-flight when actually sent
 			}
 
 			// Add to stimulus_queue
-			rn.stimulusQueue.Enqueue(p, cycle)
+			rn.stimulusQueue.Enqueue(packet, cycle)
 		}
 	}
 
@@ -222,16 +260,85 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 	dispatchItems := rn.dispatchQueue.Items()
 	for i := 0; i < len(dispatchItems) && sentThisCycle < bandwidth; i++ {
 		p := dispatchItems[i]
-		// Check if packet has already been sent (SentAt > 0)
 		if p.SentAt > 0 {
-			continue // Already sent, skip
+			continue
 		}
-		// Send packet
-		ch.Send(p, rn.ID, homeNodeID, cycle, cfg.MasterRelayLatency)
+
+		targetID := homeNodeID
+		if rn.broker != nil {
+			routeCtx := &hooks.RouteContext{
+				Packet:        p,
+				SourceNodeID:  rn.ID,
+				DefaultTarget: homeNodeID,
+				TargetID:      homeNodeID,
+			}
+			if err := rn.broker.EmitBeforeRoute(routeCtx); err != nil {
+				GetLogger().Warnf("RequestNode %d OnBeforeRoute hook failed: %v", rn.ID, err)
+				continue
+			}
+			targetID = routeCtx.TargetID
+		}
+
+		if rn.policyMgr != nil {
+			resolvedTarget, err := rn.policyMgr.ResolveRoute(p, rn.ID, targetID)
+			if err != nil {
+				GetLogger().Warnf("RequestNode %d policy route failed: %v", rn.ID, err)
+				continue
+			}
+			targetID = resolvedTarget
+		}
+
+		if rn.broker != nil {
+			routeCtx := &hooks.RouteContext{
+				Packet:        p,
+				SourceNodeID:  rn.ID,
+				DefaultTarget: homeNodeID,
+				TargetID:      targetID,
+			}
+			if err := rn.broker.EmitAfterRoute(routeCtx); err != nil {
+				GetLogger().Warnf("RequestNode %d OnAfterRoute hook failed: %v", rn.ID, err)
+			}
+			targetID = routeCtx.TargetID
+		}
+
+		if rn.broker != nil {
+			ctx := &hooks.MessageContext{
+				Packet: p,
+				NodeID: rn.ID,
+				Cycle:  cycle,
+			}
+			if err := rn.broker.EmitBeforeSend(ctx); err != nil {
+				GetLogger().Warnf("RequestNode %d OnBeforeSend hook failed: %v", rn.ID, err)
+				continue
+			}
+		}
+
+		if rn.policyMgr != nil {
+			if err := rn.policyMgr.CheckFlowControl(p, rn.ID, targetID); err != nil {
+				GetLogger().Warnf("RequestNode %d flow control blocked packet: %v", rn.ID, err)
+				continue
+			}
+		}
+
+		if targetID <= 0 {
+			targetID = homeNodeID
+		}
+
+		ch.Send(p, rn.ID, targetID, cycle, cfg.MasterRelayLatency)
 		p.SentAt = cycle
 		// Mark transaction as in-flight when packet is sent
 		if txnMgr != nil && p.TransactionID > 0 {
 			txnMgr.MarkTransactionInFlight(p.TransactionID, cycle)
+		}
+		if rn.broker != nil {
+			ctx := &hooks.MessageContext{
+				Packet: p,
+				NodeID: rn.ID,
+				Cycle:  cycle,
+			}
+			if err := rn.broker.EmitAfterSend(ctx); err != nil {
+				GetLogger().Warnf("RequestNode %d OnAfterSend hook failed: %v", rn.ID, err)
+			}
 		}
 		sentThisCycle++
 		// Packet remains in dispatchQueue, will be removed when Comp response arrives
@@ -292,25 +399,25 @@ func (rn *RequestNode) SetTransactionManager(txnMgr *TransactionManager) {
 // OnResponse processes a CHI response arriving to the request node at given cycle.
 // Handles CompData responses for ReadNoSnp transactions.
 // Removes the corresponding request packet from dispatch_queue when Comp response arrives.
-func (rn *RequestNode) OnResponse(p *Packet, cycle int, txnMgr *TransactionManager) {
+func (rn *RequestNode) OnResponse(p *core.Packet, cycle int, txnMgr *TransactionManager) {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
 	rn.handleResponseLocked(p, cycle, txnMgr)
 }
 
-func (rn *RequestNode) handleResponseLocked(p *Packet, cycle int, txnMgr *TransactionManager) {
+func (rn *RequestNode) handleResponseLocked(p *core.Packet, cycle int, txnMgr *TransactionManager) {
 	if p == nil {
 		return
 	}
 	// Check for CHI response or legacy response type
-	isCHIResponse := p.MessageType == CHIMsgComp || p.MessageType == CHIMsgResp
+	isCHIResponse := p.MessageType == core.CHIMsgComp || p.MessageType == core.CHIMsgResp
 	isLegacyResponse := p.Type == "response"
 	if !isCHIResponse && !isLegacyResponse {
 		return
 	}
 
 	requestID := p.RequestID
-	_, found := rn.dispatchQueue.RemoveMatch(func(reqPkt *Packet) bool {
+	_, found := rn.dispatchQueue.RemoveMatch(func(reqPkt *core.Packet) bool {
 		return reqPkt != nil && reqPkt.RequestID == requestID
 	}, cycle)
 
@@ -372,17 +479,17 @@ func (rn *RequestNode) SnapshotStats() *RequestNodeStats {
 
 // GetQueuePackets returns packet information for stimulus_queue and dispatch_queue
 // Returns packets from both queues for visualization
-func (rn *RequestNode) GetQueuePackets() []PacketInfo {
+func (rn *RequestNode) GetQueuePackets() []core.PacketInfo {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
-	packets := make([]PacketInfo, 0, rn.stimulusQueue.Len()+rn.dispatchQueue.Len())
+	packets := make([]core.PacketInfo, 0, rn.stimulusQueue.Len()+rn.dispatchQueue.Len())
 
 	// Add packets from stimulus_queue
 	for _, p := range rn.stimulusQueue.Items() {
 		if p == nil {
 			continue
 		}
-		packets = append(packets, PacketInfo{
+		packets = append(packets, core.PacketInfo{
 			ID:              p.ID,
 			RequestID:       p.RequestID,
 			Type:            p.Type,
@@ -407,7 +514,7 @@ func (rn *RequestNode) GetQueuePackets() []PacketInfo {
 		if p == nil {
 			continue
 		}
-		packets = append(packets, PacketInfo{
+		packets = append(packets, core.PacketInfo{
 			ID:              p.ID,
 			RequestID:       p.RequestID,
 			Type:            p.Type,
@@ -431,15 +538,15 @@ func (rn *RequestNode) GetQueuePackets() []PacketInfo {
 }
 
 // GetStimulusQueuePackets returns packet information for stimulus_queue only
-func (rn *RequestNode) GetStimulusQueuePackets() []PacketInfo {
+func (rn *RequestNode) GetStimulusQueuePackets() []core.PacketInfo {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
-	packets := make([]PacketInfo, 0, rn.stimulusQueue.Len())
+	packets := make([]core.PacketInfo, 0, rn.stimulusQueue.Len())
 	for _, p := range rn.stimulusQueue.Items() {
 		if p == nil {
 			continue
 		}
-		packets = append(packets, PacketInfo{
+		packets = append(packets, core.PacketInfo{
 			ID:              p.ID,
 			RequestID:       p.RequestID,
 			Type:            p.Type,
@@ -462,15 +569,15 @@ func (rn *RequestNode) GetStimulusQueuePackets() []PacketInfo {
 }
 
 // GetDispatchQueuePackets returns packet information for dispatch_queue only
-func (rn *RequestNode) GetDispatchQueuePackets() []PacketInfo {
+func (rn *RequestNode) GetDispatchQueuePackets() []core.PacketInfo {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
-	packets := make([]PacketInfo, 0, rn.dispatchQueue.Len())
+	packets := make([]core.PacketInfo, 0, rn.dispatchQueue.Len())
 	for _, p := range rn.dispatchQueue.Items() {
 		if p == nil {
 			continue
 		}
-		packets = append(packets, PacketInfo{
+		packets = append(packets, core.PacketInfo{
 			ID:              p.ID,
 			RequestID:       p.RequestID,
 			Type:            p.Type,
@@ -494,7 +601,7 @@ func (rn *RequestNode) GetDispatchQueuePackets() []PacketInfo {
 
 // GetPendingRequests is a legacy method kept for backward compatibility
 // Deprecated: Use GetQueuePackets() instead
-func (rn *RequestNode) GetPendingRequests() []PacketInfo {
+func (rn *RequestNode) GetPendingRequests() []core.PacketInfo {
 	return rn.GetQueuePackets()
 }
 
@@ -568,12 +675,12 @@ func (rn *RequestNode) processIncomingMessage(msg *InFlightMessage, cycle int) {
 
 	// Record PacketReceived event
 	if rn.txnMgr != nil && packet.TransactionID > 0 {
-		event := &PacketEvent{
+		event := &core.PacketEvent{
 			TransactionID:  packet.TransactionID,
 			PacketID:       packet.ID,
 			ParentPacketID: packet.ParentPacketID,
 			NodeID:         rn.ID,
-			EventType:      PacketReceived,
+			EventType:      core.PacketReceived,
 			Cycle:          cycle,
 			EdgeKey:        nil, // in-node event
 		}

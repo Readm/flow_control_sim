@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"flow_sim/core"
 )
 
 // Simulation constants
@@ -32,36 +34,36 @@ const (
 )
 
 // CHITransactionType represents CHI protocol transaction types
-type CHITransactionType string
+type CHITransactionType = core.CHITransactionType
 
 const (
-	CHITxnReadNoSnp   CHITransactionType = "ReadNoSnp"
-	CHITxnWriteNoSnp  CHITransactionType = "WriteNoSnp"
-	CHITxnReadOnce    CHITransactionType = "ReadOnce"
-	CHITxnWriteUnique CHITransactionType = "WriteUnique"
+	CHITxnReadNoSnp   CHITransactionType = core.CHITxnReadNoSnp
+	CHITxnWriteNoSnp  CHITransactionType = core.CHITxnWriteNoSnp
+	CHITxnReadOnce    CHITransactionType = core.CHITxnReadOnce
+	CHITxnWriteUnique CHITransactionType = core.CHITxnWriteUnique
 )
 
 // CHIMessageType represents CHI protocol message types
-type CHIMessageType string
+type CHIMessageType = core.CHIMessageType
 
 const (
-	CHIMsgReq     CHIMessageType = "Req"     // Request message
-	CHIMsgResp    CHIMessageType = "Resp"    // Response message
-	CHIMsgData    CHIMessageType = "Data"    // Data message
-	CHIMsgComp    CHIMessageType = "Comp"    // Completion message
-	CHIMsgSnp     CHIMessageType = "Snp"     // Snoop request message
-	CHIMsgSnpResp CHIMessageType = "SnpResp" // Snoop response message
+	CHIMsgReq     CHIMessageType = core.CHIMsgReq     // Request message
+	CHIMsgResp    CHIMessageType = core.CHIMsgResp    // Response message
+	CHIMsgData    CHIMessageType = core.CHIMsgData    // Data message
+	CHIMsgComp    CHIMessageType = core.CHIMsgComp    // Completion message
+	CHIMsgSnp     CHIMessageType = core.CHIMsgSnp     // Snoop request message
+	CHIMsgSnpResp CHIMessageType = core.CHIMsgSnpResp // Snoop response message
 )
 
 // CHIResponseType represents CHI response types
-type CHIResponseType string
+type CHIResponseType = core.CHIResponseType
 
 const (
-	CHIRespCompData   CHIResponseType = "CompData"   // Completion with data
-	CHIRespCompAck    CHIResponseType = "CompAck"    // Completion acknowledgment
-	CHIRespSnpData    CHIResponseType = "SnpData"    // Snoop response with data
-	CHIRespSnpInvalid CHIResponseType = "SnpInvalid" // Snoop response invalidating cache
-	CHIRespSnpNoData  CHIResponseType = "SnpNoData"  // Snoop response with no data
+	CHIRespCompData   CHIResponseType = core.CHIRespCompData   // Completion with data
+	CHIRespCompAck    CHIResponseType = core.CHIRespCompAck    // Completion acknowledgment
+	CHIRespSnpData    CHIResponseType = core.CHIRespSnpData    // Snoop response with data
+	CHIRespSnpInvalid CHIResponseType = core.CHIRespSnpInvalid // Snoop response invalidating cache
+	CHIRespSnpNoData  CHIResponseType = core.CHIRespSnpNoData  // Snoop response with no data
 )
 
 // Packet represents a CHI protocol message flowing through the simulator.
@@ -71,42 +73,22 @@ const (
 // - Primary fields: Use CHI protocol fields (TransactionType, MessageType, ResponseType)
 // - Legacy fields: Kept for backward compatibility, will be deprecated in future versions
 // - When to use: New code should prefer CHI fields; legacy fields are checked as fallback
-type Packet struct {
-	ID    int64  // unique packet id
-	Type  string // legacy: "request" or "response" - use MessageType instead (kept for compatibility)
-	SrcID int    // source node id
-	DstID int    // destination node id
+type Packet = core.Packet
 
-	GeneratedAt int // cycle when generated (for requests)
-	SentAt      int // cycle when sent to channel
-	ReceivedAt  int // cycle when received by next hop
-	CompletedAt int // cycle when processed (for requests)
+// EdgeKey represents a unique edge in the network (fromID -> toID).
+type EdgeKey = core.EdgeKey
 
-	// Legacy fields (deprecated, kept for backward compatibility)
-	// These fields are maintained for compatibility with older code but should not be used in new code.
-	// Migration: Use CHI protocol fields (MessageType, TransactionType) instead of Type.
-	// MasterID is equivalent to the original Request Node ID in CHI terminology.
-	MasterID  int   // legacy: original master/request node id - use CHI MessageType + DstID instead
-	RequestID int64 // legacy: request id - same as ID for request packets, preserved for compatibility
+type NodeType = core.NodeType
+type PacketInfo = core.PacketInfo
+type QueueInfo = core.QueueInfo
+type Position = core.Position
 
-	// CHI protocol fields (preferred)
-	// These are the primary fields for packet identification and routing in CHI protocol.
-	TransactionType CHITransactionType // CHI transaction type (ReadNoSnp, WriteNoSnp, etc.)
-	MessageType     CHIMessageType     // CHI message type (Req, Resp, Data, Comp) - primary field for message type
-	ResponseType    CHIResponseType    // CHI response type (CompData, CompAck, etc.)
-	Address         uint64             // memory address for the transaction
-	DataSize        int                // data size in bytes (default: DefaultCacheLineSize)
-
-	// Transaction tracking
-	TransactionID int64 // ID of the transaction this packet belongs to (0 if not associated)
-
-	// Snoop-related fields
-	OriginalTxnID int64 // For Snoop responses: the original transaction ID that triggered this snoop
-	SnoopTargetID int   // For Snoop requests: the target Request Node ID to snoop
-
-	// Packet generation tracking
-	ParentPacketID int64 // ID of the parent packet that generated this packet (0 if no parent)
-}
+// NodeType constants re-exported for compatibility.
+const (
+	NodeTypeRN core.NodeType = core.NodeTypeRN
+	NodeTypeHN core.NodeType = core.NodeTypeHN
+	NodeTypeSN core.NodeType = core.NodeTypeSN
+)
 
 // Config holds simulation configuration values.
 type Config struct {

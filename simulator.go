@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
-	simruntime "github.com/example/flow_sim/simulator"
+	"flow_sim/hooks"
+	"flow_sim/policy"
+	simruntime "flow_sim/simulator"
 )
 
 type Simulator struct {
@@ -39,6 +41,10 @@ type Simulator struct {
 
 	pendingReset *Config
 	stepOnce     bool
+
+	pluginBroker *hooks.PluginBroker
+	txFactory    *TxFactory
+	policyMgr    policy.Manager
 }
 
 type cycleSignaler interface {
@@ -234,22 +240,40 @@ func NewSimulator(cfg *Config) *Simulator {
 
 	pktAlloc := NewPacketIDAllocator()
 	txnMgr := NewTransactionManager()
+	broker := hooks.NewPluginBroker()
+	txFactory := NewTxFactory(broker, txnMgr, pktAlloc)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(cfg, rng)
 
 	sim := &Simulator{
-		Masters:    masters,
-		Slaves:     slaves,
-		Relay:      relay,
-		Chan:       ch,
-		masterByID: masterByID,
-		slaveByID:  slaveByID,
-		nodeLabels: labels,
-		cfg:        cfg,
-		rng:        rng,
-		pktIDs:     pktAlloc,
-		txnMgr:     txnMgr,
-		current:    0,
+		Masters:      masters,
+		Slaves:       slaves,
+		Relay:        relay,
+		Chan:         ch,
+		masterByID:   masterByID,
+		slaveByID:    slaveByID,
+		nodeLabels:   labels,
+		cfg:          cfg,
+		rng:          rng,
+		pktIDs:       pktAlloc,
+		txnMgr:       txnMgr,
+		current:      0,
+		pluginBroker: broker,
+		txFactory:    txFactory,
+		policyMgr:    policy.NewDefaultManager(),
+	}
+
+	for _, m := range sim.Masters {
+		m.SetTxFactory(txFactory)
+		m.SetPluginBroker(broker)
+		m.SetPolicyManager(sim.policyMgr)
+	}
+	for _, sl := range sim.Slaves {
+		sl.SetPluginBroker(broker)
+	}
+	if sim.Relay != nil {
+		sim.Relay.SetPluginBroker(broker)
+		sim.Relay.SetPolicyManager(sim.policyMgr)
 	}
 
 	sim.edges = sim.buildEdges()
@@ -718,6 +742,8 @@ func (s *Simulator) reset(newCfg *Config) {
 	// Reinitialize simulator with new config
 	pktAlloc := NewPacketIDAllocator()
 	txnMgr := NewTransactionManager()
+	broker := hooks.NewPluginBroker()
+	txFactory := NewTxFactory(broker, txnMgr, pktAlloc)
 	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(s.cfg, s.rng)
 
 	s.Masters = masters
@@ -732,6 +758,22 @@ func (s *Simulator) reset(newCfg *Config) {
 	s.txnMgr = txnMgr
 	s.current = 0
 	s.edges = s.buildEdges()
+	s.pluginBroker = broker
+	s.txFactory = txFactory
+	s.policyMgr = policy.NewDefaultManager()
+
+	for _, m := range s.Masters {
+		m.SetTxFactory(txFactory)
+		m.SetPluginBroker(broker)
+		m.SetPolicyManager(s.policyMgr)
+	}
+	for _, sl := range s.Slaves {
+		sl.SetPluginBroker(broker)
+	}
+	if s.Relay != nil {
+		s.Relay.SetPluginBroker(broker)
+		s.Relay.SetPolicyManager(s.policyMgr)
+	}
 
 	// Set TransactionManager for all components
 	for _, m := range s.Masters {

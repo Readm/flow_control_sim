@@ -2,15 +2,17 @@ package main
 
 import (
 	"math/rand"
+
+	"flow_sim/core"
 )
 
 // RequestGenerationResult contains the result of request generation decision
 type RequestGenerationResult struct {
-	ShouldGenerate bool
-	SlaveIndex     int
-	TransactionType CHITransactionType
-	Address        uint64  // 0 means auto-increment
-	DataSize       int     // 0 means default (DefaultCacheLineSize)
+	ShouldGenerate  bool
+	SlaveIndex      int
+	TransactionType core.CHITransactionType
+	Address         uint64 // 0 means auto-increment
+	DataSize        int    // 0 means default (DefaultCacheLineSize)
 }
 
 // RequestGenerator defines the interface for generating requests
@@ -23,7 +25,7 @@ type RequestGenerator interface {
 	// Returns: slice of RequestGenerationResult, empty slice means no generation
 	// Note: Can return multiple results for multiple requests in same cycle
 	ShouldGenerate(cycle int, masterIndex int, numSlaves int) []RequestGenerationResult
-	
+
 	// Reset resets the generator state (called on simulation reset)
 	Reset()
 }
@@ -58,17 +60,17 @@ func (pg *ProbabilityGenerator) ShouldGenerate(cycle int, masterIndex int, numSl
 	if pg.rng.Float64() >= pg.RequestRate {
 		return nil
 	}
-	
+
 	slaveIndex := weightedChoose(pg.rng, pg.SlaveWeights)
 	if slaveIndex < 0 || slaveIndex >= numSlaves {
 		return nil
 	}
-	
+
 	return []RequestGenerationResult{
 		{
-			ShouldGenerate: true,
-			SlaveIndex:     slaveIndex,
-			TransactionType: CHITxnReadNoSnp,
+			ShouldGenerate:  true,
+			SlaveIndex:      slaveIndex,
+			TransactionType: core.CHITxnReadNoSnp,
 		},
 	}
 }
@@ -76,9 +78,9 @@ func (pg *ProbabilityGenerator) ShouldGenerate(cycle int, masterIndex int, numSl
 // ScheduleItem defines a single request in the schedule
 type ScheduleItem struct {
 	SlaveIndex      int
-	TransactionType CHITransactionType
-	Address         uint64  // 0 means auto-increment
-	DataSize        int     // 0 means default (DefaultCacheLineSize)
+	TransactionType core.CHITransactionType
+	Address         uint64 // 0 means auto-increment
+	DataSize        int    // 0 means default (DefaultCacheLineSize)
 }
 
 // ScheduleGenerator implements deterministic request generation based on a schedule
@@ -86,9 +88,9 @@ type ScheduleItem struct {
 // Supports multiple requests per cycle per master
 type ScheduleGenerator struct {
 	BaseGenerator
-	schedule     map[int]map[int][]ScheduleItem  // cycle -> masterIndex -> []ScheduleItem
-	originalSchedule map[int]map[int][]ScheduleItem  // backup for Reset()
-	currentCycle int
+	schedule         map[int]map[int][]ScheduleItem // cycle -> masterIndex -> []ScheduleItem
+	originalSchedule map[int]map[int][]ScheduleItem // backup for Reset()
+	currentCycle     int
 }
 
 // NewScheduleGenerator creates a new schedule-based request generator
@@ -103,45 +105,45 @@ func NewScheduleGenerator(schedule map[int]map[int][]ScheduleItem) *ScheduleGene
 			originalSchedule[cycle][masterIdx] = itemsCopy
 		}
 	}
-	
+
 	return &ScheduleGenerator{
 		schedule:         schedule,
 		originalSchedule: originalSchedule,
-		currentCycle:    0,
+		currentCycle:     0,
 	}
 }
 
 func (sg *ScheduleGenerator) ShouldGenerate(cycle int, masterIndex int, numSlaves int) []RequestGenerationResult {
 	sg.currentCycle = cycle
-	
+
 	cycleSchedule, exists := sg.schedule[cycle]
 	if !exists {
 		return nil
 	}
-	
+
 	masterSchedule, exists := cycleSchedule[masterIndex]
 	if !exists || len(masterSchedule) == 0 {
 		return nil
 	}
-	
+
 	// Return all items for this master at this cycle
 	results := make([]RequestGenerationResult, 0, len(masterSchedule))
 	for _, item := range masterSchedule {
 		results = append(results, RequestGenerationResult{
-			ShouldGenerate: true,
-			SlaveIndex:     item.SlaveIndex,
+			ShouldGenerate:  true,
+			SlaveIndex:      item.SlaveIndex,
 			TransactionType: item.TransactionType,
-			Address:        item.Address,
-			DataSize:       item.DataSize,
+			Address:         item.Address,
+			DataSize:        item.DataSize,
 		})
 	}
-	
+
 	// Remove consumed items from schedule
 	delete(sg.schedule[cycle], masterIndex)
 	if len(sg.schedule[cycle]) == 0 {
 		delete(sg.schedule, cycle)
 	}
-	
+
 	return results
 }
 
@@ -158,4 +160,3 @@ func (sg *ScheduleGenerator) Reset() {
 	}
 	sg.currentCycle = 0
 }
-

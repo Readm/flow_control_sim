@@ -3,7 +3,8 @@ package main
 import (
 	"sync"
 
-	"github.com/example/flow_sim/queue"
+	"flow_sim/hooks"
+	"flow_sim/queue"
 )
 
 // SlaveNode (SN) represents a CHI Slave Node that processes requests and provides data.
@@ -13,6 +14,7 @@ type SlaveNode struct {
 	ProcessRate int
 	queue       *queue.TrackedQueue[*Packet]
 	txnMgr      *TransactionManager // for recording packet events
+	broker      *hooks.PluginBroker
 
 	// stats
 	ProcessedCount int
@@ -88,6 +90,11 @@ func (sn *SlaveNode) SetTransactionManager(txnMgr *TransactionManager) {
 	sn.txnMgr = txnMgr
 }
 
+// SetPluginBroker assigns the hook broker for process lifecycle callbacks.
+func (sn *SlaveNode) SetPluginBroker(b *hooks.PluginBroker) {
+	sn.broker = b
+}
+
 // ConfigureCycleRuntime sets the coordinator bindings for the node.
 func (sn *SlaveNode) ConfigureCycleRuntime(componentID string, coord *CycleCoordinator) {
 	if sn.bindings == nil {
@@ -160,6 +167,16 @@ func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 		if !ok {
 			break
 		}
+		if sn.broker != nil {
+			ctx := &hooks.ProcessContext{
+				Packet: pkt,
+				NodeID: sn.ID,
+				Cycle:  cycle,
+			}
+			if err := sn.broker.EmitBeforeProcess(ctx); err != nil {
+				GetLogger().Warnf("SlaveNode %d OnBeforeProcess hook failed: %v", sn.ID, err)
+			}
+		}
 		processed = append(processed, pkt)
 	}
 	sn.mu.Unlock()
@@ -213,6 +230,17 @@ func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 				EdgeKey:        nil, // in-node event
 			}
 			sn.txnMgr.RecordPacketEvent(event)
+		}
+
+		if sn.broker != nil {
+			ctx := &hooks.ProcessContext{
+				Packet: req,
+				NodeID: sn.ID,
+				Cycle:  cycle,
+			}
+			if err := sn.broker.EmitAfterProcess(ctx); err != nil {
+				GetLogger().Warnf("SlaveNode %d OnAfterProcess hook failed: %v", sn.ID, err)
+			}
 		}
 
 		responses = append(responses, resp)
