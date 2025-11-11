@@ -1906,9 +1906,13 @@
          * @param {Array} sortedNodes - Sorted array of nodes (for looking up node types)
          */
         function inferMessageLabel(event, allEvents, sortedNodes) {
-            // Try to get from metadata first
+            // Try to get from metadata first (for PacketSent events, this should contain MessageType)
             if (event.metadata && event.metadata.messageType) {
-                return event.metadata.messageType;
+                const msgType = event.metadata.messageType;
+                // Map CHI message types to display labels
+                if (msgType === 'Snp') return 'Snp';
+                if (msgType === 'SnpResp') return 'SnpResp';
+                return msgType; // 'Req', 'Comp', etc.
             }
             
             // For PacketInTransitEnd, try to find the corresponding PacketSent event

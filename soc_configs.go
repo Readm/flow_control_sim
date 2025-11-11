@@ -11,13 +11,13 @@ type SOCNetworkConfig struct {
 func GetPredefinedConfigs() []SOCNetworkConfig {
 	return []SOCNetworkConfig{
 		{
-			Name:        "readonce_snoop_test",
-			Description: "ReadOnce Snoop Test: 2 RNs, 1 HN, 1 SN. RN0 pre-loads cache, RN1 issues ReadOnce to trigger snoop",
+			Name:        "readonce_mesi_snoop",
+			Description: "ReadOnce MESI Snoop Test: 2 RNs (both with cache), 1 HN, 1 SN. RN0 reads first and caches data, RN1 reads same address triggering Snoop to RN0",
 			Config: &Config{
 				NumMasters:         2,
 				NumSlaves:          1,
 				NumRelays:          1,
-				TotalCycles:        100,
+				TotalCycles:        150,
 				MasterRelayLatency: 2,
 				RelayMasterLatency: 2,
 				RelaySlaveLatency:  1,
@@ -25,25 +25,25 @@ func GetPredefinedConfigs() []SOCNetworkConfig {
 				SlaveProcessRate:   1,
 				BandwidthLimit:     1,
 				SlaveWeights:       []int{1},
-				Headless:           false,
+				Headless:           true,
 				VisualMode:         "web",
-				// Schedule: RN0 reads at cycle 0 (pre-load cache), RN1 reads same address at cycle 5 (triggers snoop)
+				// Schedule: RN0 reads at cycle 0, RN1 reads same address at cycle 30 (triggers Snoop)
 				ScheduleConfig: map[int]map[int][]ScheduleItem{
 					0: {
 						0: {
 							{
 								SlaveIndex:      0,
-								TransactionType: CHITxnReadNoSnp,
+								TransactionType: CHITxnReadOnce,
 								Address:         DefaultAddressBase, // 0x1000
 							},
 						},
 					},
-					5: {
+					30: {
 						1: {
 							{
 								SlaveIndex:      0,
 								TransactionType: CHITxnReadOnce,
-								Address:         DefaultAddressBase, // Same address to trigger snoop
+								Address:         DefaultAddressBase, // Same address to trigger Snoop
 							},
 						},
 					},

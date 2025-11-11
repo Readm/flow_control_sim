@@ -163,6 +163,16 @@ func (c *Link) Send(packet *Packet, fromID, toID, currentCycle, latency int) {
 
 	// Record PacketSent event
 	if c.txnMgr != nil && packet != nil && packet.TransactionID > 0 {
+		metadata := make(map[string]string)
+		if packet.MessageType != "" {
+			metadata["messageType"] = string(packet.MessageType)
+		}
+		if packet.TransactionType != "" {
+			metadata["transactionType"] = string(packet.TransactionType)
+		}
+		if packet.ResponseType != "" {
+			metadata["responseType"] = string(packet.ResponseType)
+		}
 		event := &PacketEvent{
 			TransactionID:  packet.TransactionID,
 			PacketID:       packet.ID,
@@ -171,6 +181,7 @@ func (c *Link) Send(packet *Packet, fromID, toID, currentCycle, latency int) {
 			EventType:      PacketSent,
 			Cycle:          currentCycle,
 			EdgeKey:        &edgeKey,
+			Metadata:       metadata,
 		}
 		c.txnMgr.RecordPacketEvent(event)
 	}
@@ -206,6 +217,16 @@ func (c *Link) deliverImmediate(edgeKey EdgeKey, msg *InFlightMessage, cycle int
 	}
 
 	if c.txnMgr != nil && msg.Packet != nil && msg.Packet.TransactionID > 0 {
+		metadata := make(map[string]string)
+		if msg.Packet.MessageType != "" {
+			metadata["messageType"] = string(msg.Packet.MessageType)
+		}
+		if msg.Packet.TransactionType != "" {
+			metadata["transactionType"] = string(msg.Packet.TransactionType)
+		}
+		if msg.Packet.ResponseType != "" {
+			metadata["responseType"] = string(msg.Packet.ResponseType)
+		}
 		event := &PacketEvent{
 			TransactionID:  msg.Packet.TransactionID,
 			PacketID:       msg.Packet.ID,
@@ -214,6 +235,7 @@ func (c *Link) deliverImmediate(edgeKey EdgeKey, msg *InFlightMessage, cycle int
 			EventType:      PacketInTransitEnd,
 			Cycle:          cycle,
 			EdgeKey:        &edgeKey,
+			Metadata:       metadata,
 		}
 		c.txnMgr.RecordPacketEvent(event)
 	}

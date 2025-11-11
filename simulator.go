@@ -267,6 +267,7 @@ func NewSimulator(cfg *Config) *Simulator {
 		m.SetTxFactory(txFactory)
 		m.SetPluginBroker(broker)
 		m.SetPolicyManager(sim.policyMgr)
+		m.SetPacketIDAllocator(sim.pktIDs)
 	}
 	for _, sl := range sim.Slaves {
 		sl.SetPluginBroker(broker)
