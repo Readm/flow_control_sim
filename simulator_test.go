@@ -243,6 +243,143 @@ func TestReadNoSnpTransaction(t *testing.T) {
 	}
 }
 
+// TestReadOnceCacheMechanism verifies the simplest cache mechanism:
+// 1 RN - 1 HN - 1 SN topology
+// HN has one cacheline
+// RN sends two ReadOnce requests (same address)
+// First request: cache miss -> RN -> HN -> SN -> HN (cache data) -> RN
+// Second request: cache hit -> RN -> HN (direct return) -> RN
+func TestReadOnceCacheMechanism(t *testing.T) {
+	testAddress := uint64(0x1000) // Use a fixed address for both requests
+
+	cfg := &Config{
+		NumMasters:         1,
+		NumSlaves:          1,
+		NumRelays:          1,
+		TotalCycles:        100,
+		MasterRelayLatency: 2,
+		RelayMasterLatency: 2,
+		RelaySlaveLatency:  1,
+		SlaveRelayLatency:  1,
+		SlaveProcessRate:   1,
+		BandwidthLimit:     1,
+		SlaveWeights:       []int{1},
+		Headless:           true,
+		VisualMode:         "none",
+		// Schedule two ReadOnce requests at the same address
+		// First at cycle 0, second at cycle 20 (enough time for first to complete)
+		ScheduleConfig: map[int]map[int][]ScheduleItem{
+			0: {
+				0: {
+					{
+						SlaveIndex:      0,
+						TransactionType: CHITxnReadOnce,
+						Address:         testAddress,
+					},
+				},
+			},
+			20: {
+				0: {
+					{
+						SlaveIndex:      0,
+						TransactionType: CHITxnReadOnce,
+						Address:         testAddress, // Same address to trigger cache hit
+					},
+				},
+			},
+		},
+	}
+
+	sim := NewSimulator(cfg)
+	sim.Run()
+
+	// Get TransactionManager to verify cache behavior
+	// Access txnMgr through reflection or add a getter method
+	// For now, we'll check through transaction metadata
+	stats := sim.CollectStats()
+	if stats == nil || stats.Global == nil {
+		t.Fatalf("stats should not be nil")
+	}
+
+	g := stats.Global
+	t.Logf("ReadOnce Cache Test - Total=%d Completed=%d Rate=%.2f%%",
+		g.TotalRequests, g.Completed, g.CompletionRate)
+
+	if g.TotalRequests != 2 {
+		t.Fatalf("expected 2 ReadOnce requests, got %d", g.TotalRequests)
+	}
+
+	if g.Completed < 2 {
+		t.Fatalf("expected both requests to complete, got %d completed", g.Completed)
+	}
+
+	// Verify cache behavior through transaction metadata
+	txnMgr := sim.GetTransactionManager()
+	if txnMgr == nil {
+		t.Fatalf("TransactionManager should not be nil")
+	}
+
+	allTxns := txnMgr.GetAllTransactions()
+	if len(allTxns) < 2 {
+		t.Fatalf("expected at least 2 transactions, got %d", len(allTxns))
+	}
+
+	// Find transactions by address and order
+	var firstTxn, secondTxn *Transaction
+	for _, txn := range allTxns {
+		if txn.Context.Address == testAddress {
+			if firstTxn == nil {
+				firstTxn = txn
+			} else if secondTxn == nil {
+				if txn.Context.InitiatedAt > firstTxn.Context.InitiatedAt {
+					secondTxn = txn
+				} else {
+					secondTxn = firstTxn
+					firstTxn = txn
+				}
+			}
+		}
+	}
+
+	if firstTxn == nil || secondTxn == nil {
+		t.Fatalf("expected to find both transactions for address 0x%x", testAddress)
+	}
+
+	// Verify first transaction (cache miss)
+	if firstTxn.Context.Metadata == nil {
+		t.Fatalf("first transaction should have metadata")
+	}
+	cacheMiss, hasMiss := firstTxn.Context.Metadata["cache_miss"]
+	if !hasMiss || cacheMiss != "true" {
+		t.Fatalf("first transaction should have cache_miss=true, got %v", cacheMiss)
+	}
+	cacheUpdated, hasUpdated := firstTxn.Context.Metadata["cache_updated"]
+	if !hasUpdated || cacheUpdated != "true" {
+		t.Fatalf("first transaction should have cache_updated=true, got %v", cacheUpdated)
+	}
+	t.Logf("First transaction: cache_miss=%s, cache_updated=%s", cacheMiss, cacheUpdated)
+
+	// Verify second transaction (cache hit)
+	if secondTxn.Context.Metadata == nil {
+		t.Fatalf("second transaction should have metadata")
+	}
+	cacheHit, hasHit := secondTxn.Context.Metadata["cache_hit"]
+	if !hasHit || cacheHit != "true" {
+		t.Fatalf("second transaction should have cache_hit=true, got %v", cacheHit)
+	}
+	t.Logf("Second transaction: cache_hit=%s", cacheHit)
+
+	// Verify both transactions completed
+	if firstTxn.Context.State != TxStateCompleted {
+		t.Fatalf("first transaction should be completed, got state %s", firstTxn.Context.State)
+	}
+	if secondTxn.Context.State != TxStateCompleted {
+		t.Fatalf("second transaction should be completed, got state %s", secondTxn.Context.State)
+	}
+
+	t.Logf("Cache mechanism test passed: first request (cache miss) and second request (cache hit) both completed successfully")
+}
+
 func newInteractiveConfig(totalCycles int) *Config {
 	return &Config{
 		NumMasters:         1,

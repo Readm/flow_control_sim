@@ -274,6 +274,7 @@ func NewSimulator(cfg *Config) *Simulator {
 	if sim.Relay != nil {
 		sim.Relay.SetPluginBroker(broker)
 		sim.Relay.SetPolicyManager(sim.policyMgr)
+		sim.Relay.SetPacketIDAllocator(sim.pktIDs)
 	}
 
 	sim.edges = sim.buildEdges()
@@ -685,6 +686,11 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		TransactionGraph: txnGraph,
 	}
 	return frame
+}
+
+// GetTransactionManager returns the TransactionManager instance (for testing)
+func (s *Simulator) GetTransactionManager() *TransactionManager {
+	return s.txnMgr
 }
 
 func (s *Simulator) Run() {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 
 	"flow_sim/core"
@@ -8,6 +9,12 @@ import (
 	"flow_sim/policy"
 	"flow_sim/queue"
 )
+
+// CacheLine represents a single cache line in the HomeNode cache.
+type CacheLine struct {
+	Address uint64
+	Valid   bool
+}
 
 // HomeNode (HN) represents a CHI Home Node that manages cache coherence and routes transactions.
 // It receives requests from Request Nodes and forwards them to Slave Nodes,
@@ -22,6 +29,13 @@ type HomeNode struct {
 
 	broker    *hooks.PluginBroker
 	policyMgr policy.Manager
+
+	// Cache storage: simple map from address to cache line
+	cache   map[uint64]*CacheLine
+	cacheMu sync.RWMutex
+
+	// PacketIDAllocator for generating response packet IDs
+	packetIDs *PacketIDAllocator
 }
 
 func NewHomeNode(id int) *HomeNode {
@@ -32,6 +46,8 @@ func NewHomeNode(id int) *HomeNode {
 		},
 		txnMgr:   nil, // will be set by simulator
 		bindings: NewNodeCycleBindings(),
+		cache:    make(map[uint64]*CacheLine),
+		packetIDs: nil, // will be set by simulator
 	}
 	hn.AddQueue("forward_queue", 0, DefaultForwardQueueCapacity)
 	hn.queue = queue.NewTrackedQueue("forward_queue", DefaultForwardQueueCapacity, hn.makeQueueMutator(), queue.QueueHooks[*core.Packet]{
@@ -94,6 +110,11 @@ func (hn *HomeNode) SetPolicyManager(m policy.Manager) {
 	hn.policyMgr = m
 }
 
+// SetPacketIDAllocator assigns the packet ID allocator for generating response packets.
+func (hn *HomeNode) SetPacketIDAllocator(allocator *PacketIDAllocator) {
+	hn.packetIDs = allocator
+}
+
 // ConfigureCycleRuntime sets the coordinator bindings for the node.
 func (hn *HomeNode) ConfigureCycleRuntime(componentID string, coord *CycleCoordinator) {
 	if hn.bindings == nil {
@@ -147,7 +168,55 @@ func (hn *HomeNode) OnPacket(p *core.Packet, cycle int, ch *Link, cfg *Config) {
 	hn.mu.Unlock()
 }
 
+// checkCache checks if the cache contains data for the given address.
+// Returns true if cache hit, false if cache miss.
+func (hn *HomeNode) checkCache(addr uint64) bool {
+	hn.cacheMu.RLock()
+	defer hn.cacheMu.RUnlock()
+	line, exists := hn.cache[addr]
+	return exists && line != nil && line.Valid
+}
+
+// updateCache updates the cache with data for the given address.
+func (hn *HomeNode) updateCache(addr uint64) {
+	hn.cacheMu.Lock()
+	defer hn.cacheMu.Unlock()
+	hn.cache[addr] = &CacheLine{
+		Address: addr,
+		Valid:   true,
+	}
+}
+
+// generateCacheHitResponse generates a CompData response for a cache hit.
+func (hn *HomeNode) generateCacheHitResponse(req *core.Packet, cycle int) *core.Packet {
+	if hn.packetIDs == nil {
+		return nil
+	}
+	respID := hn.packetIDs.Allocate()
+	resp := &core.Packet{
+		ID:              respID,
+		Type:            "response", // legacy field
+		SrcID:           hn.ID,
+		DstID:           req.MasterID, // return to Request Node
+		GeneratedAt:     cycle,
+		SentAt:          cycle,
+		MasterID:        req.MasterID,
+		RequestID:       req.RequestID,
+		TransactionType: req.TransactionType,
+		MessageType:     core.CHIMsgComp,
+		ResponseType:    core.CHIRespCompData,
+		Address:         req.Address,
+		DataSize:        req.DataSize,
+		TransactionID:   req.TransactionID,
+		ParentPacketID:  req.ID,
+	}
+	return resp
+}
+
 // Tick processes the queue and forwards CHI packets according to CHI protocol rules.
+// For ReadOnce transactions:
+//   - If cache hit: generate CompData response directly to RN (Alternative 1)
+//   - If cache miss: forward request to SN, then update cache when response arrives
 // For ReadNoSnp transactions:
 //   - Requests from RN: forward to target SN
 //   - CompData responses from SN: forward back to originating RN
@@ -165,6 +234,93 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 		if !ok {
 			break
 		}
+
+		// Handle ReadOnce requests with cache lookup
+		if p.MessageType == core.CHIMsgReq && p.TransactionType == core.CHITxnReadOnce {
+			GetLogger().Infof("[Cache] HomeNode %d: Received ReadOnce request (TxnID=%d, Addr=0x%x, Cycle=%d)", 
+				hn.ID, p.TransactionID, p.Address, cycle)
+			// Check cache first
+			if hn.checkCache(p.Address) {
+				// Cache hit: generate CompData response directly
+				GetLogger().Infof("[Cache] HomeNode %d: CACHE HIT for address 0x%x (TxnID=%d, Cycle=%d)", 
+					hn.ID, p.Address, p.TransactionID, cycle)
+				resp := hn.generateCacheHitResponse(p, cycle)
+				if resp != nil {
+					// Record cache hit event
+					if hn.txnMgr != nil && p.TransactionID > 0 {
+						event := &core.PacketEvent{
+							TransactionID:  p.TransactionID,
+							PacketID:       resp.ID,
+							ParentPacketID: p.ID,
+							NodeID:         hn.ID,
+							EventType:      core.PacketGenerated,
+							Cycle:          cycle,
+							EdgeKey:        nil,
+						}
+						hn.txnMgr.RecordPacketEvent(event)
+					}
+
+					// Send response directly to RN
+					latency := cfg.RelayMasterLatency
+					resp.SentAt = cycle
+					GetLogger().Infof("[Cache] HomeNode %d: Sending CompData response directly to RN %d (TxnID=%d, PacketID=%d, Cycle=%d)", 
+						hn.ID, resp.DstID, p.TransactionID, resp.ID, cycle)
+					ch.Send(resp, hn.ID, resp.DstID, cycle, latency)
+					count++
+
+					// Record cache hit in transaction metadata
+					if hn.txnMgr != nil && p.TransactionID > 0 {
+						txn := hn.txnMgr.GetTransaction(p.TransactionID)
+						if txn != nil && txn.Context != nil {
+							if txn.Context.Metadata == nil {
+								txn.Context.Metadata = make(map[string]string)
+							}
+							txn.Context.Metadata["cache_hit"] = "true"
+							txn.Context.Metadata["cache_hit_node"] = fmt.Sprintf("%d", hn.ID)
+						}
+					}
+					continue
+				}
+			} else {
+				// Cache miss: record and continue with normal forwarding
+				GetLogger().Infof("[Cache] HomeNode %d: CACHE MISS for address 0x%x (TxnID=%d, Cycle=%d) - forwarding to SN", 
+					hn.ID, p.Address, p.TransactionID, cycle)
+				if hn.txnMgr != nil && p.TransactionID > 0 {
+					txn := hn.txnMgr.GetTransaction(p.TransactionID)
+					if txn != nil && txn.Context != nil {
+						if txn.Context.Metadata == nil {
+							txn.Context.Metadata = make(map[string]string)
+						}
+						txn.Context.Metadata["cache_miss"] = "true"
+						txn.Context.Metadata["cache_miss_node"] = fmt.Sprintf("%d", hn.ID)
+					}
+				}
+			}
+		}
+
+		// Handle CompData responses from SN: update cache for ReadOnce transactions
+		if p.MessageType == core.CHIMsgComp && p.ResponseType == core.CHIRespCompData {
+			if p.TransactionType == core.CHITxnReadOnce {
+				// Update cache with the data
+				GetLogger().Infof("[Cache] HomeNode %d: Received CompData from SN, updating cache for address 0x%x (TxnID=%d, Cycle=%d)", 
+					hn.ID, p.Address, p.TransactionID, cycle)
+				hn.updateCache(p.Address)
+				GetLogger().Infof("[Cache] HomeNode %d: Cache updated for address 0x%x (TxnID=%d)", 
+					hn.ID, p.Address, p.TransactionID)
+				// Record cache update event
+				if hn.txnMgr != nil && p.TransactionID > 0 {
+					txn := hn.txnMgr.GetTransaction(p.TransactionID)
+					if txn != nil && txn.Context != nil {
+						if txn.Context.Metadata == nil {
+							txn.Context.Metadata = make(map[string]string)
+						}
+						txn.Context.Metadata["cache_updated"] = "true"
+						txn.Context.Metadata["cache_updated_node"] = fmt.Sprintf("%d", hn.ID)
+					}
+				}
+			}
+		}
+
 		defaultTarget, latency, ok := hn.defaultRoute(p, cfg)
 		if !ok {
 			continue
