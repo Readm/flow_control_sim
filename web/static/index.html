@@ -1969,53 +1969,25 @@
         }
 
         /**
-         * Find corresponding receive event for a packet
+         * Build unique key for packet transmission on a specific edge
          */
-        function findReceiveEvent(events, packetID, targetNodeID) {
-            return events.find(e => 
-                e.packetID === packetID && 
-                e.nodeID === targetNodeID &&
-                (e.eventType === 'PacketInTransitEnd' || e.eventType === 'PacketReceived')
-            );
-        }
-
-        /**
-         * Find events for a specific packet in a specific node
-         */
-        function findPacketEventsInNode(events, packetID, nodeID) {
-            return events.filter(e => 
-                e.packetID === packetID && 
-                e.nodeID === nodeID
-            ).sort((a, b) => a.cycle - b.cycle);
-        }
-
-        /**
-         * Generate Link identifier from EdgeKey
-         */
-        function getLinkIdentifier(edgeKey, nodeAliasMap) {
-            const fromAlias = nodeAliasMap.get(edgeKey.fromID);
-            const toAlias = nodeAliasMap.get(edgeKey.toID);
-            if (!fromAlias || !toAlias) {
+        function buildPacketEdgeKey(packetID, edgeKey) {
+            if (!edgeKey) {
                 return null;
             }
-            return `Link_${fromAlias}_${toAlias}`;
+            return `${packetID}:${edgeKey.fromID}->${edgeKey.toID}`;
         }
 
         /**
-         * Generate Link display name from EdgeKey
+         * Clamp percent value to [0, 100] and trim trailing zeros
          */
-        function getLinkDisplayName(edgeKey, nodeAliasMap, sortedNodes) {
-            const fromAlias = nodeAliasMap.get(edgeKey.fromID);
-            const toAlias = nodeAliasMap.get(edgeKey.toID);
-            if (!fromAlias || !toAlias) {
-                return null;
+        function formatPercent(value) {
+            if (!Number.isFinite(value)) {
+                return '0';
             }
-            // Get original node labels for display
-            const fromNode = sortedNodes.find(n => n.id === edgeKey.fromID);
-            const toNode = sortedNodes.find(n => n.id === edgeKey.toID);
-            const fromLabel = fromNode ? fromNode.label : fromAlias;
-            const toLabel = toNode ? toNode.label : toAlias;
-            return `Link ${fromLabel}→${toLabel}`;
+            const clamped = Math.min(100, Math.max(0, value));
+            const fixed = clamped.toFixed(2);
+            return fixed.replace(/\.?0+$/, '');
         }
 
         /**
@@ -2032,160 +2004,14 @@
 
             // 1. Define node participants (sorted by type: RN -> HN -> SN)
             const sortedNodes = sortNodesByType(nodes);
-            const nodeParticipants = sortedNodes.map(node => {
+            const nodeAliasMap = new Map();
+            const participants = sortedNodes.map(node => {
                 const alias = sanitizeAlias(node.label);
+                nodeAliasMap.set(node.id, alias);
                 return `    participant ${alias} as "${node.label}"`;
             });
             
-            // 2. Build node alias map (nodeID -> Mermaid alias)
-            const nodeAliasMap = new Map();
-            sortedNodes.forEach(node => {
-                nodeAliasMap.set(node.id, sanitizeAlias(node.label));
-            });
-
-            // 3. Extract all unique EdgeKeys from events to create Link participants
-            const linkMap = new Map(); // EdgeKey string -> {identifier, displayName, edgeKey}
-            events.forEach(event => {
-                if (event.edgeKey) {
-                    const keyStr = `${event.edgeKey.fromID}-${event.edgeKey.toID}`;
-                    if (!linkMap.has(keyStr)) {
-                        const identifier = getLinkIdentifier(event.edgeKey, nodeAliasMap);
-                        const displayName = getLinkDisplayName(event.edgeKey, nodeAliasMap, sortedNodes);
-                        if (identifier && displayName) {
-                            linkMap.set(keyStr, {
-                                identifier: identifier,
-                                displayName: displayName,
-                                edgeKey: event.edgeKey
-                            });
-                        }
-                    }
-                }
-            });
-
-            // 4. Build ordered participants list with Links inserted between their source and target nodes
-            const orderedParticipants = [];
-            const nodeIndexMap = new Map(); // nodeID -> index in sortedNodes
-            const nodeAliasToIndex = new Map(); // nodeAlias -> index in orderedParticipants (will be built as we go)
-            
-            // Build node index map for quick lookup
-            sortedNodes.forEach((node, index) => {
-                nodeIndexMap.set(node.id, index);
-            });
-            
-            // First pass: add all nodes and track their positions
-            sortedNodes.forEach((node) => {
-                const nodeAlias = sanitizeAlias(node.label);
-                orderedParticipants.push({
-                    type: 'node',
-                    alias: nodeAlias,
-                    label: node.label,
-                    nodeID: node.id
-                });
-                nodeAliasToIndex.set(nodeAlias, orderedParticipants.length - 1);
-            });
-            
-            // Second pass: insert Links between their source and target nodes
-            const linksToInsert = Array.from(linkMap.values());
-            
-            // Sort links by target node position (descending), then by source node position
-            // This way we insert from right to left, avoiding index shifting issues
-            linksToInsert.sort((a, b) => {
-                const aTargetIndex = nodeIndexMap.get(a.edgeKey.toID) ?? 999;
-                const bTargetIndex = nodeIndexMap.get(b.edgeKey.toID) ?? 999;
-                if (aTargetIndex !== bTargetIndex) {
-                    return bTargetIndex - aTargetIndex; // Descending order
-                }
-                const aSourceIndex = nodeIndexMap.get(a.edgeKey.fromID) ?? 999;
-                const bSourceIndex = nodeIndexMap.get(b.edgeKey.fromID) ?? 999;
-                return bSourceIndex - aSourceIndex; // Descending order
-            });
-            
-            // Insert each link between its source and target nodes
-            // Insert from right to left to avoid index shifting
-            linksToInsert.forEach(link => {
-                const sourceIndex = nodeIndexMap.get(link.edgeKey.fromID);
-                const targetIndex = nodeIndexMap.get(link.edgeKey.toID);
-                
-                if (sourceIndex === undefined || targetIndex === undefined) {
-                    return; // Skip if nodes not found
-                }
-                
-                // Find the actual positions in orderedParticipants array
-                // Since we're inserting from right to left, we need to find current positions
-                let sourcePos = -1;
-                let targetPos = -1;
-                
-                for (let i = 0; i < orderedParticipants.length; i++) {
-                    const item = orderedParticipants[i];
-                    if (item.type === 'node') {
-                        if (item.nodeID === link.edgeKey.fromID && sourcePos === -1) {
-                            sourcePos = i;
-                        }
-                        if (item.nodeID === link.edgeKey.toID && targetPos === -1) {
-                            targetPos = i;
-                        }
-                    }
-                    if (sourcePos !== -1 && targetPos !== -1) break;
-                }
-                
-                if (sourcePos === -1 || targetPos === -1) {
-                    return; // Skip if nodes not found in array
-                }
-                
-                // Find insertion position: between source and target
-                let insertAfterIndex;
-                if (sourcePos < targetPos) {
-                    // Normal case: source comes before target
-                    // Insert after source, but before target
-                    insertAfterIndex = sourcePos;
-                    // Move forward until we're just before the target node
-                    while (insertAfterIndex < targetPos - 1) {
-                        const nextItem = orderedParticipants[insertAfterIndex + 1];
-                        if (nextItem && nextItem.type === 'node' && nextItem.nodeID === link.edgeKey.toID) {
-                            break; // We've reached the target node
-                        }
-                        insertAfterIndex++;
-                    }
-                } else {
-                    // Reverse case: target comes before source
-                    // Insert after target, but before source
-                    insertAfterIndex = targetPos;
-                    while (insertAfterIndex < sourcePos - 1) {
-                        const nextItem = orderedParticipants[insertAfterIndex + 1];
-                        if (nextItem && nextItem.type === 'node' && nextItem.nodeID === link.edgeKey.fromID) {
-                            break; // We've reached the source node
-                        }
-                        insertAfterIndex++;
-                    }
-                }
-                
-                // Insert the link
-                orderedParticipants.splice(insertAfterIndex + 1, 0, {
-                    type: 'link',
-                    identifier: link.identifier,
-                    displayName: link.displayName
-                });
-            });
-            
-            // Convert to Mermaid participant strings
-            const participantStrings = orderedParticipants.map(item => {
-                if (item.type === 'node') {
-                    return `    participant ${item.alias} as "${item.label}"`;
-                } else {
-                    return `    participant ${item.identifier} as "${item.displayName}"`;
-                }
-            });
-
-            // 5. Combine all participants
-            const participants = participantStrings.join('\n');
-            
-            // 6. Build link identifier map (EdgeKey string -> Link identifier)
-            const linkIdentifierMap = new Map();
-            linkMap.forEach((link, keyStr) => {
-                linkIdentifierMap.set(keyStr, link.identifier);
-            });
-
-            // 7. Sort events by cycle
+            // 2. Sort events by cycle
             const sortedEvents = [...events].sort((a, b) => {
                 if (a.cycle !== b.cycle) {
                     return a.cycle - b.cycle;
@@ -2194,18 +2020,51 @@
                 return (a.sequence || 0) - (b.sequence || 0);
             });
             
-            // 8. Build message sequence with activation boxes
+            const cycleValues = sortedEvents
+                .map(e => (typeof e.cycle === 'number' ? e.cycle : null))
+                .filter(c => c !== null);
+            const minCycle = cycleValues.length ? Math.min(...cycleValues) : 0;
+            const maxCycle = cycleValues.length ? Math.max(...cycleValues) : minCycle;
+            const cycleRange = maxCycle - minCycle;
+
+            function cycleToPercent(cycle) {
+                if (!Number.isFinite(cycle)) {
+                    return 0;
+                }
+                if (!Number.isFinite(minCycle) || cycleRange <= 0) {
+                    return 0;
+                }
+                const normalized = ((cycle - minCycle) / cycleRange) * 100;
+                return normalized;
+            }
+
+            function buildDirective(startPercent, endPercent) {
+                return `[ys=${formatPercent(startPercent)}%,ye=${formatPercent(endPercent)}%]`;
+            }
+
+            function buildMessageDetails(sendCycle, receiveCycle) {
+                if (!Number.isFinite(sendCycle)) {
+                    return ` (cycle ${receiveCycle})`;
+                }
+                if (sendCycle === receiveCycle) {
+                    return ` (cycle ${receiveCycle})`;
+                }
+                const parts = [`cycles ${sendCycle}→${receiveCycle}`];
+                const delay = receiveCycle - sendCycle;
+                if (delay > 0) {
+                    parts.push(`delay ${delay}`);
+                }
+                return ` (${parts.join(', ')})`;
+            }
+
+            // 3. Build message sequence with activation boxes
             const messages = [];
-            const activations = new Map(); // Track active activation boxes: identifier -> {startCycle, type}
-            const packetStates = new Map(); // Track packet states: packetID -> {nodeID, state, cycle}
+            const activations = new Map(); // activationKey -> alias
+            const sendEventMap = new Map(); // packetEdgeKey -> {fromAlias, toAlias, sendCycle, label}
             
             sortedEvents.forEach(event => {
-                const nodeAlias = nodeAliasMap.get(event.nodeID);
-                if (!nodeAlias && event.eventType !== 'PacketSent' && event.eventType !== 'PacketInTransitEnd') {
-                    return;
-                }
-                
                 const cycle = event.cycle;
+                const nodeAlias = nodeAliasMap.get(event.nodeID);
                 
                 switch (event.eventType) {
                     case 'PacketSent':
@@ -2213,152 +2072,74 @@
                             const fromAlias = nodeAliasMap.get(event.edgeKey.fromID);
                             const toAlias = nodeAliasMap.get(event.edgeKey.toID);
                             if (!fromAlias || !toAlias) break;
-                            
-                            // Get Link identifier
-                            const keyStr = `${event.edgeKey.fromID}-${event.edgeKey.toID}`;
-                            const linkIdentifier = linkIdentifierMap.get(keyStr);
-                            if (!linkIdentifier) break;
-                            
+                            const key = buildPacketEdgeKey(event.packetID, event.edgeKey);
+                            if (!key) break;
                             const messageLabel = inferMessageLabel(event, events, sortedNodes);
-                            const sendCycle = cycle;
-                            
-                            // Node -> Link: Real-time (send time = Link receive time)
-                            messages.push(`    ${fromAlias}->>${linkIdentifier}: ${messageLabel} (cycle ${sendCycle})`);
-                            
-                            // Activate Link to represent packet in transit
-                            const linkActivationKey = `link_${event.packetID}_${keyStr}`;
-                            if (!activations.has(linkActivationKey)) {
-                                messages.push(`    activate ${linkIdentifier}`);
-                                activations.set(linkActivationKey, {
-                                    identifier: linkIdentifier,
-                                    startCycle: sendCycle,
-                                    type: 'link_transmission',
-                                    packetID: event.packetID
-                                });
-                            }
-                            
-                            // Track packet state
-                            packetStates.set(event.packetID, {
-                                nodeID: event.edgeKey.toID,
-                                state: 'in_link',
-                                cycle: sendCycle
+                            sendEventMap.set(key, {
+                                fromAlias,
+                                toAlias,
+                                sendCycle: cycle,
+                                label: messageLabel
                             });
                         }
                         break;
                         
                     case 'PacketInTransitEnd':
-                        // Link -> Node: Shows delay (packet transmission time in Link)
                         if (event.edgeKey) {
-                            const toAlias = nodeAliasMap.get(event.nodeID);
-                            if (!toAlias) break;
-                            
-                            // Get Link identifier
-                            const keyStr = `${event.edgeKey.fromID}-${event.edgeKey.toID}`;
-                            const linkIdentifier = linkIdentifierMap.get(keyStr);
-                            if (!linkIdentifier) break;
-                            
-                            const messageLabel = inferMessageLabel(event, events, sortedNodes);
+                            const key = buildPacketEdgeKey(event.packetID, event.edgeKey);
+                            const fromAlias = nodeAliasMap.get(event.edgeKey.fromID);
+                            const toAlias = nodeAliasMap.get(event.edgeKey.toID);
+                            if (!fromAlias || !toAlias) break;
+                            const sendInfo = key ? sendEventMap.get(key) : null;
+                            const sendCycle = sendInfo ? sendInfo.sendCycle : cycle;
                             const receiveCycle = cycle;
-                            
-                            // Find send event to calculate delay
-                            const sendEvent = events.find(e => 
-                                e.packetID === event.packetID &&
-                                e.eventType === 'PacketSent' &&
-                                e.edgeKey &&
-                                e.edgeKey.fromID === event.edgeKey.fromID &&
-                                e.edgeKey.toID === event.edgeKey.toID
-                            );
-                            const sendCycle = sendEvent ? sendEvent.cycle : receiveCycle;
-                            const delay = receiveCycle - sendCycle;
-                            
-                            // Link -> Node: Shows transmission delay
-                            if (delay > 0) {
-                                messages.push(`    ${linkIdentifier}->>${toAlias}: ${messageLabel} (delay: ${delay} cycles, cycle ${receiveCycle})`);
-                            } else {
-                                messages.push(`    ${linkIdentifier}->>${toAlias}: ${messageLabel} (cycle ${receiveCycle})`);
+                            const messageLabel = sendInfo ? sendInfo.label : inferMessageLabel(event, events, sortedNodes);
+
+                            const directive = buildDirective(cycleToPercent(sendCycle), cycleToPercent(receiveCycle));
+                            const details = buildMessageDetails(sendCycle, receiveCycle);
+                            messages.push(`    ${fromAlias}->>${toAlias}: ${directive} ${messageLabel}${details}`);
+                            if (key) {
+                                sendEventMap.delete(key);
                             }
-                            
-                            // Deactivate Link (packet left the link)
-                            const linkActivationKey = `link_${event.packetID}_${keyStr}`;
-                            if (activations.has(linkActivationKey)) {
-                                messages.push(`    deactivate ${linkIdentifier}`);
-                                activations.delete(linkActivationKey);
-                            }
-                            
-                            // Update packet state
-                            packetStates.set(event.packetID, {
-                                nodeID: event.nodeID,
-                                state: 'received',
-                                cycle: cycle
-                            });
                         }
                         break;
                         
                     case 'PacketReceived':
-                        // Node received the message
-                        packetStates.set(event.packetID, {
-                            nodeID: event.nodeID,
-                            state: 'received',
-                            cycle: cycle
-                        });
+                        // No visualization change needed here
                         break;
                         
                     case 'PacketEnqueued':
-                        // Start queue waiting activation box
+                        if (!nodeAlias) break;
                         const queueKey = `queue_${event.packetID}_${event.nodeID}`;
                         if (!activations.has(queueKey)) {
-                            const nodeAlias = nodeAliasMap.get(event.nodeID);
                             messages.push(`    activate ${nodeAlias}`);
-                            activations.set(queueKey, {
-                                nodeID: event.nodeID,
-                                startCycle: cycle,
-                                type: 'queue',
-                                packetID: event.packetID
-                            });
+                            activations.set(queueKey, nodeAlias);
                         }
-                        packetStates.set(event.packetID, {
-                            nodeID: event.nodeID,
-                            state: 'queued',
-                            cycle: cycle
-                        });
                         break;
                         
                     case 'PacketDequeued':
-                        // End queue waiting activation box
+                        if (!nodeAlias) break;
                         const dequeueKey = `queue_${event.packetID}_${event.nodeID}`;
                         if (activations.has(dequeueKey)) {
-                            const nodeAlias = nodeAliasMap.get(event.nodeID);
                             messages.push(`    deactivate ${nodeAlias}`);
                             activations.delete(dequeueKey);
                         }
-                        packetStates.set(event.packetID, {
-                            nodeID: event.nodeID,
-                            state: 'dequeued',
-                            cycle: cycle
-                        });
                         break;
                         
                     case 'PacketProcessingStart':
-                        // Start processing activation box
+                        if (!nodeAlias) break;
                         const processKey = `process_${event.packetID}_${event.nodeID}`;
                         if (!activations.has(processKey)) {
-                            const nodeAlias = nodeAliasMap.get(event.nodeID);
                             messages.push(`    activate ${nodeAlias}`);
-                            activations.set(processKey, {
-                                nodeID: event.nodeID,
-                                startCycle: cycle,
-                                type: 'processing',
-                                packetID: event.packetID
-                            });
+                            activations.set(processKey, nodeAlias);
                         }
                         messages.push(`    Note over ${nodeAlias}: Processing (cycle ${cycle})`);
                         break;
                         
                     case 'PacketProcessingEnd':
-                        // End processing activation box
+                        if (!nodeAlias) break;
                         const processEndKey = `process_${event.packetID}_${event.nodeID}`;
                         if (activations.has(processEndKey)) {
-                            const nodeAlias = nodeAliasMap.get(event.nodeID);
                             messages.push(`    deactivate ${nodeAlias}`);
                             activations.delete(processEndKey);
                         }
@@ -2366,24 +2147,404 @@
                         
                     case 'PacketGenerated':
                         // Node generated new message (self-loop)
+                        if (!nodeAlias) break;
                         const messageLabel = inferMessageLabel(event, events, sortedNodes);
                         messages.push(`    ${nodeAlias}->>${nodeAlias}: ${messageLabel} (cycle ${cycle})`);
                         break;
                 }
             });
             
+            // Handle packets still in transit (no end event)
+            sendEventMap.forEach(info => {
+                const directive = buildDirective(cycleToPercent(info.sendCycle), cycleToPercent(info.sendCycle));
+                const details = Number.isFinite(info.sendCycle) ? ` (cycle ${info.sendCycle}, pending)` : '';
+                messages.push(`    ${info.fromAlias}->>${info.toAlias}: ${directive} ${info.label}${details}`);
+            });
+
             // Close any remaining activation boxes
-            activations.forEach((activation, key) => {
-                messages.push(`    deactivate ${activation.identifier}`);
+            activations.forEach(alias => {
+                messages.push(`    deactivate ${alias}`);
             });
             
-            // 9. Combine into complete Mermaid syntax
+            // 4. Combine into complete Mermaid syntax
             const mermaidCode = `sequenceDiagram
-${participants}
+${participants.join('\n')}
 
 ${messages.join('\n')}`;
             
             return mermaidCode;
+        }
+
+        /**
+         * Parse directive string into structured parameters
+         */
+        function parseDirectiveStr(input) {
+            const result = {};
+            if (!input) {
+                return result;
+            }
+            const parts = input.split(',').map(p => p.trim()).filter(Boolean);
+            for (const part of parts) {
+                let match = part.match(/^([a-zA-Z]+)\s*=\s*([+-]?\d+(\.\d+)?)%$/);
+                if (match) {
+                    const key = match[1];
+                    result[key] = Number(match[2]);
+                    result[`${key}Unit`] = 'percent';
+                    continue;
+                }
+                match = part.match(/^([a-zA-Z]+)\s*=\s*([+-]?\d+(\.\d+)?)$/);
+                if (match) {
+                    const key = match[1];
+                    result[key] = Number(match[2]);
+                    result[`${key}Unit`] = 'absolute';
+                }
+            }
+            return result;
+        }
+
+        /**
+         * Inject tokens for directives prior to Mermaid rendering
+         */
+        function preprocessMermaidDiagram(diagramText) {
+            const lines = diagramText.split('\n');
+            const map = {};
+            let counter = 0;
+
+            const processed = lines.map(line => {
+                if (!line.includes(':')) {
+                    return line;
+                }
+                const idx = line.indexOf(':');
+                const header = line.slice(0, idx);
+                const message = line.slice(idx + 1);
+                const match = message.match(/^\s*\[([^\]]+)\]\s*(.*)$/);
+                if (!match) {
+                    return line;
+                }
+                counter += 1;
+                const directive = match[1];
+                const restText = match[2] || '';
+                const args = parseDirectiveStr(directive);
+                const token = `__MSG_TOK_${Date.now()}_${counter}__`;
+                map[token] = {
+                    ...args,
+                    orig: restText.trim()
+                };
+                const rebuilt = `${header}: ${token}${restText ? ` ${restText}` : ''}`;
+                return rebuilt;
+            }).join('\n');
+
+            return { text: processed, map };
+        }
+
+        /**
+         * Extract start/end points from a path definition
+         */
+        function extractEndpointsFromPathD(d) {
+            const nums = (d.match(/-?\d+\.?\d*/g) || []).map(Number);
+            if (nums.length >= 4) {
+                const x1 = nums[0];
+                const y1 = nums[1];
+                const x2 = nums[nums.length - 2];
+                const y2 = nums[nums.length - 1];
+                return { x1, y1, x2, y2 };
+            }
+            return null;
+        }
+
+        /**
+         * Build a smooth cubic path between two points
+         */
+        function makeSmoothCubicPath(x1, y1, x2, y2) {
+            const dx = (x2 - x1);
+            const cp1x = x1 + dx * 0.25;
+            const cp2x = x1 + dx * 0.75;
+            const cp1y = y1 + (y2 - y1) * 0.15;
+            const cp2y = y2 - (y2 - y1) * 0.15;
+            return `M ${x1} ${y1} C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${x2} ${y2}`;
+        }
+
+        /**
+         * Locate label elements containing a specific token
+         */
+        function findLabelElements(svgEl, token) {
+            const texts = Array.from(svgEl.querySelectorAll('text')).filter(t => (t.textContent || '').includes(token));
+            const foreigns = Array.from(svgEl.querySelectorAll('foreignObject')).filter(f => (f.textContent || '').includes(token));
+            return texts.concat(foreigns);
+        }
+
+        /**
+         * Safely get bounding box for an element
+         */
+        function safeGetBBox(el) {
+            try {
+                return el.getBBox();
+            } catch (e) {
+                const rect = el.getBoundingClientRect();
+                return {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height
+                };
+            }
+        }
+
+        /**
+         * Apply directive-driven adjustments to the rendered SVG
+         */
+        async function postProcessMermaidSvg(svgEl, mapObj) {
+            if (!mapObj || Object.keys(mapObj).length === 0) {
+                return;
+            }
+
+            const allEdges = Array.from(svgEl.querySelectorAll('path, line'));
+            let globalYMin = Infinity;
+            let globalYMax = -Infinity;
+
+            allEdges.forEach(edge => {
+                try {
+                    if (edge.tagName === 'line') {
+                        const y1 = Number(edge.getAttribute('y1') || 0);
+                        const y2 = Number(edge.getAttribute('y2') || 0);
+                        globalYMin = Math.min(globalYMin, y1, y2);
+                        globalYMax = Math.max(globalYMax, y1, y2);
+                    } else {
+                        const dAttr = edge.getAttribute('d') || '';
+                        const pts = extractEndpointsFromPathD(dAttr);
+                        if (pts) {
+                            globalYMin = Math.min(globalYMin, pts.y1, pts.y2);
+                            globalYMax = Math.max(globalYMax, pts.y1, pts.y2);
+                        }
+                    }
+                } catch (error) {
+                    // Ignore malformed edges
+                }
+            });
+
+            if (!Number.isFinite(globalYMin) || !Number.isFinite(globalYMax)) {
+                try {
+                    const bbox = svgEl.getBBox();
+                    globalYMin = bbox.y;
+                    globalYMax = bbox.y + bbox.height;
+                } catch (error) {
+                    globalYMin = 0;
+                    globalYMax = 0;
+                }
+            }
+
+            const actorRects = Array.from(svgEl.querySelectorAll('g.actor rect, rect.actor'));
+            const midY = (globalYMin + globalYMax) / 2;
+            let topActorBottom = globalYMin;
+            let bottomActorTop = globalYMax;
+
+            actorRects.forEach(rect => {
+                const y = Number(rect.getAttribute('y') || 0);
+                const height = Number(rect.getAttribute('height') || 0);
+                if (!Number.isFinite(y) || !Number.isFinite(height)) {
+                    return;
+                }
+                const center = y + height / 2;
+                if (center <= midY) {
+                    topActorBottom = Math.max(topActorBottom, y + height);
+                } else {
+                    bottomActorTop = Math.min(bottomActorTop, y);
+                }
+            });
+
+            const topPadding = 16;
+            const bottomPadding = 16;
+
+            let percentBase = Math.max(globalYMin, topActorBottom + topPadding);
+            let usableMax = Math.min(globalYMax, bottomActorTop - bottomPadding);
+            if (!Number.isFinite(usableMax) || usableMax <= percentBase) {
+                usableMax = globalYMax;
+            }
+            const percentRange = Math.max(1, usableMax - percentBase);
+
+            console.log('[sequenceDiagram] Y baseline info', {
+                globalYMin,
+                globalYMax,
+                percentBase,
+                percentRange,
+                topActorBottom,
+                bottomActorTop,
+                actorCount: actorRects.length
+            });
+
+            function resolveAbsolute(value, unit, fallback) {
+                if (typeof value !== 'number') {
+                    return fallback;
+                }
+                if (unit === 'percent') {
+                    return percentBase + (value / 100) * percentRange;
+                }
+                return value;
+            }
+
+            function resolveDelta(value, unit) {
+                if (typeof value !== 'number') {
+                    return 0;
+                }
+                if (unit === 'percent') {
+                    return (value / 100) * percentRange;
+                }
+                return value;
+            }
+
+            for (const token of Object.keys(mapObj)) {
+                const info = mapObj[token];
+                const labelEls = findLabelElements(svgEl, token);
+                if (labelEls.length === 0) {
+                    continue;
+                }
+
+                for (const labelEl of labelEls) {
+                    let group = labelEl;
+                    while (group && group.nodeName !== 'g' && group.nodeName !== 'svg') {
+                        group = group.parentNode;
+                    }
+                    const parent = group && group.parentNode;
+                    let candidates = parent ? Array.from(parent.querySelectorAll('path, line')) : [];
+                    if (candidates.length === 0) {
+                        candidates = allEdges.slice();
+                    }
+
+                    const labelBox = safeGetBBox(labelEl);
+                    const labelCenter = {
+                        x: labelBox.x + (labelBox.width || 0) / 2,
+                        y: labelBox.y + (labelBox.height || 0) / 2
+                    };
+
+                    let bestEdge = null;
+                    let bestDist = Infinity;
+                    candidates.forEach(edge => {
+                        try {
+                            let center = { x: 0, y: 0 };
+                            if (edge.tagName === 'line') {
+                                const x1 = Number(edge.getAttribute('x1') || 0);
+                                const y1 = Number(edge.getAttribute('y1') || 0);
+                                const x2 = Number(edge.getAttribute('x2') || 0);
+                                const y2 = Number(edge.getAttribute('y2') || 0);
+                                center = {
+                                    x: (x1 + x2) / 2,
+                                    y: (y1 + y2) / 2
+                                };
+                            } else {
+                                const dAttr = edge.getAttribute('d') || '';
+                                const pts = extractEndpointsFromPathD(dAttr);
+                                if (pts) {
+                                    center = {
+                                        x: (pts.x1 + pts.x2) / 2,
+                                        y: (pts.y1 + pts.y2) / 2
+                                    };
+                                } else {
+                                    const bb = edge.getBBox();
+                                    center = {
+                                        x: bb.x + bb.width / 2,
+                                        y: bb.y + bb.height / 2
+                                    };
+                                }
+                            }
+                            const dx = center.x - labelCenter.x;
+                            const dy = center.y - labelCenter.y;
+                            const dist2 = dx * dx + dy * dy;
+                            if (dist2 < bestDist) {
+                                bestDist = dist2;
+                                bestEdge = edge;
+                            }
+                        } catch (error) {
+                            // Ignore malformed edge
+                        }
+                    });
+
+                    if (!bestEdge) {
+                        continue;
+                    }
+
+                    let x1;
+                    let y1;
+                    let x2;
+                    let y2;
+                    if (bestEdge.tagName === 'line') {
+                        x1 = Number(bestEdge.getAttribute('x1') || 0);
+                        y1 = Number(bestEdge.getAttribute('y1') || 0);
+                        x2 = Number(bestEdge.getAttribute('x2') || 0);
+                        y2 = Number(bestEdge.getAttribute('y2') || 0);
+                    } else {
+                        const dAttr = bestEdge.getAttribute('d') || '';
+                        const pts = extractEndpointsFromPathD(dAttr);
+                        if (!pts) {
+                            continue;
+                        }
+                        x1 = pts.x1;
+                        y1 = pts.y1;
+                        x2 = pts.x2;
+                        y2 = pts.y2;
+                    }
+
+                    let newY1 = y1;
+                    let newY2 = y2;
+
+                    if (typeof info.ys === 'number') {
+                        newY1 = resolveAbsolute(info.ys, info.ysUnit, newY1);
+                    } else if (typeof info.dys === 'number') {
+                        newY1 = newY1 + resolveDelta(info.dys, info.dysUnit);
+                    }
+
+                    if (typeof info.ye === 'number') {
+                        newY2 = resolveAbsolute(info.ye, info.yeUnit, newY2);
+                    } else if (typeof info.dye === 'number') {
+                        newY2 = newY2 + resolveDelta(info.dye, info.dyeUnit);
+                    }
+
+                    if (bestEdge.tagName === 'line') {
+                        const newPathD = makeSmoothCubicPath(x1, newY1, x2, newY2);
+                        const svgNS = 'http://www.w3.org/2000/svg';
+                        const newPath = document.createElementNS(svgNS, 'path');
+                        Array.from(bestEdge.attributes).forEach(attr => {
+                            if (['x1', 'y1', 'x2', 'y2'].includes(attr.name)) {
+                                return;
+                            }
+                            newPath.setAttribute(attr.name, attr.value);
+                        });
+                        newPath.setAttribute('d', newPathD);
+                        bestEdge.parentNode.replaceChild(newPath, bestEdge);
+                        bestEdge = newPath;
+                    } else {
+                        const newPathD = makeSmoothCubicPath(x1, newY1, x2, newY2);
+                        bestEdge.setAttribute('d', newPathD);
+                    }
+
+                    if (labelEl.textContent && labelEl.textContent.includes(token)) {
+                        const replacement = (info.orig || '').trim();
+                        if (replacement) {
+                            labelEl.textContent = replacement;
+                        } else {
+                            labelEl.textContent = labelEl.textContent.replace(token, '').trim();
+                        }
+                    }
+
+                    const midX = (x1 + x2) / 2;
+                    const midY = (newY1 + newY2) / 2;
+                    let moveTarget = labelEl;
+                    if (labelEl.tagName && labelEl.tagName.toLowerCase() === 'tspan') {
+                        moveTarget = labelEl.parentNode;
+                    }
+
+                    try {
+                        const lb = moveTarget.getBBox();
+                        const currentCx = lb.x + lb.width / 2;
+                        const currentCy = lb.y + lb.height / 2;
+                        const dx = midX - currentCx;
+                        const dy = midY - currentCy - 8;
+                        const prevTransform = moveTarget.getAttribute('transform') || '';
+                        moveTarget.setAttribute('transform', `${prevTransform} translate(${dx}, ${dy})`);
+                    } catch (error) {
+                        moveTarget.style.transform = `translate(${midX}px, ${midY - 8}px)`;
+                    }
+                }
+            }
         }
 
         /**
@@ -2437,11 +2598,20 @@ ${messages.join('\n')}`;
                 // Create unique ID for this diagram
                 const diagramId = `mermaid-diagram-${timeline.transactionID || Date.now()}`;
                 
-                // Render the diagram
-                const { svg } = await mermaid.render(diagramId, mermaidCode);
-                
-                // Display the rendered SVG
-                container.innerHTML = svg;
+                const { text: processedCode, map } = preprocessMermaidDiagram(mermaidCode);
+                const { svg } = await mermaid.render(diagramId, processedCode);
+
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = svg;
+                const svgEl = wrapper.querySelector('svg');
+                if (!svgEl) {
+                    container.innerHTML = '<div class="sequence-diagram-error">Mermaid rendered empty diagram</div>';
+                    return;
+                }
+
+                container.innerHTML = '';
+                container.appendChild(svgEl);
+                await postProcessMermaidSvg(svgEl, map);
                 
             } catch (error) {
                 console.error('Mermaid rendering error:', error);
