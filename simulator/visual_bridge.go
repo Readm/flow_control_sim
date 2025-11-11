@@ -45,3 +45,4 @@ func (v *VisualBridge[Frame]) UpdatePublisher(publish func(Frame)) {
 	}
 	v.publish = publish
 }
+

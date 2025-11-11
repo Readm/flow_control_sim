@@ -71,3 +71,4 @@ func (c *CommandLoop[T]) WaitAndHandle(ctx context.Context) bool {
 	}
 	return c.handler.HandleCommand(cmd)
 }
+

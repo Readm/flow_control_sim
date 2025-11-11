@@ -73,3 +73,4 @@ func (ws *WebServer) handleConfigs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to encode configs", http.StatusInternalServerError)
 	}
 }
+

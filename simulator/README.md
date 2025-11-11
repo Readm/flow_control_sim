@@ -12,3 +12,4 @@ Simulator
 - **Runner**：封装命令循环与可视化桥接，供主循环统一调度。
 - **CommandLoop**：抽象命令来源与处理逻辑，负责串行消费控制指令。
 - **VisualBridge**：对接可视化通道，集中管理 headless 状态与帧发布。
+

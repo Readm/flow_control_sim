@@ -1902,12 +1902,61 @@
 
         /**
          * Infer message label from event
+         * @param {PacketEvent} event - The packet event
+         * @param {Array} allEvents - All events in the timeline (for looking up related events)
+         * @param {Array} sortedNodes - Sorted array of nodes (for looking up node types)
          */
-        function inferMessageLabel(event) {
+        function inferMessageLabel(event, allEvents, sortedNodes) {
             // Try to get from metadata first
             if (event.metadata && event.metadata.messageType) {
                 return event.metadata.messageType;
             }
+            
+            // For PacketInTransitEnd, try to find the corresponding PacketSent event
+            if (event.eventType === 'PacketInTransitEnd' && event.edgeKey && allEvents) {
+                const sendEvent = allEvents.find(e => 
+                    e.packetID === event.packetID &&
+                    e.eventType === 'PacketSent' &&
+                    e.edgeKey &&
+                    e.edgeKey.fromID === event.edgeKey.fromID &&
+                    e.edgeKey.toID === event.edgeKey.toID
+                );
+                if (sendEvent) {
+                    // Try metadata first
+                    if (sendEvent.metadata && sendEvent.metadata.messageType) {
+                        return sendEvent.metadata.messageType;
+                    }
+                    // Check parent packet ID
+                    if (sendEvent.parentPacketID && sendEvent.parentPacketID > 0) {
+                        return 'Comp';
+                    }
+                }
+            }
+            
+            // Check if this is a response packet (has parent packet ID)
+            if (event.parentPacketID && event.parentPacketID > 0) {
+                return 'Comp';
+            }
+            
+            // Infer from node types and direction
+            if (event.edgeKey && sortedNodes) {
+                const fromNode = sortedNodes.find(n => n.id === event.edgeKey.fromID);
+                const toNode = sortedNodes.find(n => n.id === event.edgeKey.toID);
+                
+                // If from SN/HN to RN, it's likely a response
+                if (fromNode && toNode) {
+                    const fromType = fromNode.type || '';
+                    const toType = toNode.type || '';
+                    if ((fromType === 'SN' || fromType === 'HN') && toType === 'RN') {
+                        return 'Comp';
+                    }
+                    // If from RN to SN/HN, it's likely a request
+                    if (fromType === 'RN' && (toType === 'SN' || toType === 'HN')) {
+                        return 'Req';
+                    }
+                }
+            }
+            
             // Infer from event type
             switch (event.eventType) {
                 case 'PacketSent':
@@ -1941,6 +1990,35 @@
         }
 
         /**
+         * Generate Link identifier from EdgeKey
+         */
+        function getLinkIdentifier(edgeKey, nodeAliasMap) {
+            const fromAlias = nodeAliasMap.get(edgeKey.fromID);
+            const toAlias = nodeAliasMap.get(edgeKey.toID);
+            if (!fromAlias || !toAlias) {
+                return null;
+            }
+            return `Link_${fromAlias}_${toAlias}`;
+        }
+
+        /**
+         * Generate Link display name from EdgeKey
+         */
+        function getLinkDisplayName(edgeKey, nodeAliasMap, sortedNodes) {
+            const fromAlias = nodeAliasMap.get(edgeKey.fromID);
+            const toAlias = nodeAliasMap.get(edgeKey.toID);
+            if (!fromAlias || !toAlias) {
+                return null;
+            }
+            // Get original node labels for display
+            const fromNode = sortedNodes.find(n => n.id === edgeKey.fromID);
+            const toNode = sortedNodes.find(n => n.id === edgeKey.toID);
+            const fromLabel = fromNode ? fromNode.label : fromAlias;
+            const toLabel = toNode ? toNode.label : toAlias;
+            return `Link ${fromLabel}→${toLabel}`;
+        }
+
+        /**
          * Convert TransactionTimeline data to Mermaid sequence diagram syntax
          * @param {TransactionTimeline} timeline - Transaction timeline data
          * @returns {string} Mermaid sequence diagram syntax string
@@ -1952,20 +2030,162 @@
                 return 'sequenceDiagram\n    Note over System: No events available';
             }
 
-            // 1. Define participants (sorted by type: RN -> HN -> SN)
+            // 1. Define node participants (sorted by type: RN -> HN -> SN)
             const sortedNodes = sortNodesByType(nodes);
-            const participants = sortedNodes.map(node => {
+            const nodeParticipants = sortedNodes.map(node => {
                 const alias = sanitizeAlias(node.label);
                 return `    participant ${alias} as "${node.label}"`;
-            }).join('\n');
+            });
             
             // 2. Build node alias map (nodeID -> Mermaid alias)
             const nodeAliasMap = new Map();
             sortedNodes.forEach(node => {
                 nodeAliasMap.set(node.id, sanitizeAlias(node.label));
             });
+
+            // 3. Extract all unique EdgeKeys from events to create Link participants
+            const linkMap = new Map(); // EdgeKey string -> {identifier, displayName, edgeKey}
+            events.forEach(event => {
+                if (event.edgeKey) {
+                    const keyStr = `${event.edgeKey.fromID}-${event.edgeKey.toID}`;
+                    if (!linkMap.has(keyStr)) {
+                        const identifier = getLinkIdentifier(event.edgeKey, nodeAliasMap);
+                        const displayName = getLinkDisplayName(event.edgeKey, nodeAliasMap, sortedNodes);
+                        if (identifier && displayName) {
+                            linkMap.set(keyStr, {
+                                identifier: identifier,
+                                displayName: displayName,
+                                edgeKey: event.edgeKey
+                            });
+                        }
+                    }
+                }
+            });
+
+            // 4. Build ordered participants list with Links inserted between their source and target nodes
+            const orderedParticipants = [];
+            const nodeIndexMap = new Map(); // nodeID -> index in sortedNodes
+            const nodeAliasToIndex = new Map(); // nodeAlias -> index in orderedParticipants (will be built as we go)
             
-            // 3. Sort events by cycle
+            // Build node index map for quick lookup
+            sortedNodes.forEach((node, index) => {
+                nodeIndexMap.set(node.id, index);
+            });
+            
+            // First pass: add all nodes and track their positions
+            sortedNodes.forEach((node) => {
+                const nodeAlias = sanitizeAlias(node.label);
+                orderedParticipants.push({
+                    type: 'node',
+                    alias: nodeAlias,
+                    label: node.label,
+                    nodeID: node.id
+                });
+                nodeAliasToIndex.set(nodeAlias, orderedParticipants.length - 1);
+            });
+            
+            // Second pass: insert Links between their source and target nodes
+            const linksToInsert = Array.from(linkMap.values());
+            
+            // Sort links by target node position (descending), then by source node position
+            // This way we insert from right to left, avoiding index shifting issues
+            linksToInsert.sort((a, b) => {
+                const aTargetIndex = nodeIndexMap.get(a.edgeKey.toID) ?? 999;
+                const bTargetIndex = nodeIndexMap.get(b.edgeKey.toID) ?? 999;
+                if (aTargetIndex !== bTargetIndex) {
+                    return bTargetIndex - aTargetIndex; // Descending order
+                }
+                const aSourceIndex = nodeIndexMap.get(a.edgeKey.fromID) ?? 999;
+                const bSourceIndex = nodeIndexMap.get(b.edgeKey.fromID) ?? 999;
+                return bSourceIndex - aSourceIndex; // Descending order
+            });
+            
+            // Insert each link between its source and target nodes
+            // Insert from right to left to avoid index shifting
+            linksToInsert.forEach(link => {
+                const sourceIndex = nodeIndexMap.get(link.edgeKey.fromID);
+                const targetIndex = nodeIndexMap.get(link.edgeKey.toID);
+                
+                if (sourceIndex === undefined || targetIndex === undefined) {
+                    return; // Skip if nodes not found
+                }
+                
+                // Find the actual positions in orderedParticipants array
+                // Since we're inserting from right to left, we need to find current positions
+                let sourcePos = -1;
+                let targetPos = -1;
+                
+                for (let i = 0; i < orderedParticipants.length; i++) {
+                    const item = orderedParticipants[i];
+                    if (item.type === 'node') {
+                        if (item.nodeID === link.edgeKey.fromID && sourcePos === -1) {
+                            sourcePos = i;
+                        }
+                        if (item.nodeID === link.edgeKey.toID && targetPos === -1) {
+                            targetPos = i;
+                        }
+                    }
+                    if (sourcePos !== -1 && targetPos !== -1) break;
+                }
+                
+                if (sourcePos === -1 || targetPos === -1) {
+                    return; // Skip if nodes not found in array
+                }
+                
+                // Find insertion position: between source and target
+                let insertAfterIndex;
+                if (sourcePos < targetPos) {
+                    // Normal case: source comes before target
+                    // Insert after source, but before target
+                    insertAfterIndex = sourcePos;
+                    // Move forward until we're just before the target node
+                    while (insertAfterIndex < targetPos - 1) {
+                        const nextItem = orderedParticipants[insertAfterIndex + 1];
+                        if (nextItem && nextItem.type === 'node' && nextItem.nodeID === link.edgeKey.toID) {
+                            break; // We've reached the target node
+                        }
+                        insertAfterIndex++;
+                    }
+                } else {
+                    // Reverse case: target comes before source
+                    // Insert after target, but before source
+                    insertAfterIndex = targetPos;
+                    while (insertAfterIndex < sourcePos - 1) {
+                        const nextItem = orderedParticipants[insertAfterIndex + 1];
+                        if (nextItem && nextItem.type === 'node' && nextItem.nodeID === link.edgeKey.fromID) {
+                            break; // We've reached the source node
+                        }
+                        insertAfterIndex++;
+                    }
+                }
+                
+                // Insert the link
+                orderedParticipants.splice(insertAfterIndex + 1, 0, {
+                    type: 'link',
+                    identifier: link.identifier,
+                    displayName: link.displayName
+                });
+            });
+            
+            // Convert to Mermaid participant strings
+            const participantStrings = orderedParticipants.map(item => {
+                if (item.type === 'node') {
+                    return `    participant ${item.alias} as "${item.label}"`;
+                } else {
+                    return `    participant ${item.identifier} as "${item.displayName}"`;
+                }
+            });
+
+            // 5. Combine all participants
+            const participants = participantStrings.join('\n');
+            
+            // 6. Build link identifier map (EdgeKey string -> Link identifier)
+            const linkIdentifierMap = new Map();
+            linkMap.forEach((link, keyStr) => {
+                linkIdentifierMap.set(keyStr, link.identifier);
+            });
+
+            // 7. Sort events by cycle
             const sortedEvents = [...events].sort((a, b) => {
                 if (a.cycle !== b.cycle) {
                     return a.cycle - b.cycle;
@@ -1974,73 +2194,95 @@
                 return (a.sequence || 0) - (b.sequence || 0);
             });
             
-            // 4. Build message sequence with activation boxes
+            // 8. Build message sequence with activation boxes
             const messages = [];
-            const activations = new Map(); // Track active activation boxes: nodeID -> {startCycle, type}
+            const activations = new Map(); // Track active activation boxes: identifier -> {startCycle, type}
             const packetStates = new Map(); // Track packet states: packetID -> {nodeID, state, cycle}
             
             sortedEvents.forEach(event => {
                 const nodeAlias = nodeAliasMap.get(event.nodeID);
-                if (!nodeAlias) return;
+                if (!nodeAlias && event.eventType !== 'PacketSent' && event.eventType !== 'PacketInTransitEnd') {
+                    return;
+                }
                 
                 const cycle = event.cycle;
                 
                 switch (event.eventType) {
                     case 'PacketSent':
                         if (event.edgeKey) {
+                            const fromAlias = nodeAliasMap.get(event.edgeKey.fromID);
                             const toAlias = nodeAliasMap.get(event.edgeKey.toID);
-                            if (!toAlias) break;
+                            if (!fromAlias || !toAlias) break;
                             
-                            const messageLabel = inferMessageLabel(event);
+                            // Get Link identifier
+                            const keyStr = `${event.edgeKey.fromID}-${event.edgeKey.toID}`;
+                            const linkIdentifier = linkIdentifierMap.get(keyStr);
+                            if (!linkIdentifier) break;
+                            
+                            const messageLabel = inferMessageLabel(event, events, sortedNodes);
                             const sendCycle = cycle;
                             
-                            // Find receive event to get receive cycle
-                            const receiveEvent = findReceiveEvent(events, event.packetID, event.edgeKey.toID);
-                            const receiveCycle = receiveEvent ? receiveEvent.cycle : sendCycle;
+                            // Node -> Link: Real-time (send time = Link receive time)
+                            messages.push(`    ${fromAlias}->>${linkIdentifier}: ${messageLabel} (cycle ${sendCycle})`);
                             
-                            // Draw message arrow (horizontal line at send time)
-                            if (sendCycle === receiveCycle) {
-                                messages.push(`    ${nodeAlias}->>${toAlias}: ${messageLabel} (cycle ${sendCycle})`);
-                            } else {
-                                messages.push(`    ${nodeAlias}->>${toAlias}: ${messageLabel} (sent: cycle ${sendCycle})`);
-                                messages.push(`    Note over ${nodeAlias},${toAlias}: Received at cycle ${receiveCycle}`);
-                            }
-                            
-                            // Start transmission delay activation box on receiver
-                            // This represents the time from send to receive
-                            if (receiveCycle > sendCycle) {
-                                const activationKey = `transmit_${event.packetID}_${event.edgeKey.toID}`;
-                                if (!activations.has(activationKey)) {
-                                    messages.push(`    activate ${toAlias}`);
-                                    activations.set(activationKey, {
-                                        nodeID: event.edgeKey.toID,
-                                        startCycle: sendCycle,
-                                        type: 'transmission',
-                                        packetID: event.packetID
-                                    });
-                                }
+                            // Activate Link to represent packet in transit
+                            const linkActivationKey = `link_${event.packetID}_${keyStr}`;
+                            if (!activations.has(linkActivationKey)) {
+                                messages.push(`    activate ${linkIdentifier}`);
+                                activations.set(linkActivationKey, {
+                                    identifier: linkIdentifier,
+                                    startCycle: sendCycle,
+                                    type: 'link_transmission',
+                                    packetID: event.packetID
+                                });
                             }
                             
                             // Track packet state
                             packetStates.set(event.packetID, {
                                 nodeID: event.edgeKey.toID,
-                                state: 'in_transit',
+                                state: 'in_link',
                                 cycle: sendCycle
                             });
                         }
                         break;
                         
                     case 'PacketInTransitEnd':
-                        // Message arrived at destination
+                        // Link -> Node: Shows delay (packet transmission time in Link)
                         if (event.edgeKey) {
-                            const fromAlias = nodeAliasMap.get(event.edgeKey.fromID);
                             const toAlias = nodeAliasMap.get(event.nodeID);
+                            if (!toAlias) break;
                             
-                            // End transmission activation if exists
-                            const activationKey = `transmit_${event.packetID}_${event.nodeID}`;
-                            if (activations.has(activationKey)) {
-                                messages.push(`    deactivate ${toAlias}`);
-                                activations.delete(activationKey);
+                            // Get Link identifier
+                            const keyStr = `${event.edgeKey.fromID}-${event.edgeKey.toID}`;
+                            const linkIdentifier = linkIdentifierMap.get(keyStr);
+                            if (!linkIdentifier) break;
+                            
+                            const messageLabel = inferMessageLabel(event, events, sortedNodes);
+                            const receiveCycle = cycle;
+                            
+                            // Find send event to calculate delay
+                            const sendEvent = events.find(e => 
+                                e.packetID === event.packetID &&
+                                e.eventType === 'PacketSent' &&
+                                e.edgeKey &&
+                                e.edgeKey.fromID === event.edgeKey.fromID &&
+                                e.edgeKey.toID === event.edgeKey.toID
+                            );
+                            const sendCycle = sendEvent ? sendEvent.cycle : receiveCycle;
+                            const delay = receiveCycle - sendCycle;
+                            
+                            // Link -> Node: Shows transmission delay
+                            if (delay > 0) {
+                                messages.push(`    ${linkIdentifier}->>${toAlias}: ${messageLabel} (delay: ${delay} cycles, cycle ${receiveCycle})`);
+                            } else {
+                                messages.push(`    ${linkIdentifier}->>${toAlias}: ${messageLabel} (cycle ${receiveCycle})`);
+                            }
+                            
+                            // Deactivate Link (packet left the link)
+                            const linkActivationKey = `link_${event.packetID}_${keyStr}`;
+                            if (activations.has(linkActivationKey)) {
+                                messages.push(`    deactivate ${linkIdentifier}`);
+                                activations.delete(linkActivationKey);
                             }
                             
                             // Update packet state
@@ -2124,7 +2366,7 @@
                         
                     case 'PacketGenerated':
                         // Node generated new message (self-loop)
-                        const messageLabel = inferMessageLabel(event);
+                        const messageLabel = inferMessageLabel(event, events, sortedNodes);
                         messages.push(`    ${nodeAlias}->>${nodeAlias}: ${messageLabel} (cycle ${cycle})`);
                         break;
                 }
@@ -2132,13 +2374,10 @@
             
             // Close any remaining activation boxes
             activations.forEach((activation, key) => {
-                const nodeAlias = nodeAliasMap.get(activation.nodeID);
-                if (nodeAlias) {
-                    messages.push(`    deactivate ${nodeAlias}`);
-                }
+                messages.push(`    deactivate ${activation.identifier}`);
             });
             
-            // 5. Combine into complete Mermaid syntax
+            // 9. Combine into complete Mermaid syntax
             const mermaidCode = `sequenceDiagram
 ${participants}
 

@@ -57,3 +57,4 @@ func (m *metricsCollector) emitIfNeeded() {
 }
 
 var metrics = newMetricsCollector(5 * time.Second)
+

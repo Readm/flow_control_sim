@@ -43,3 +43,4 @@ func (q *channelCommandQueue) Next(ctx context.Context) (ControlCommand, bool) {
 		return ControlCommand{Type: CommandNone}, false
 	}
 }
+

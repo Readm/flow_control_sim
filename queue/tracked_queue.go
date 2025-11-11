@@ -150,3 +150,4 @@ func (q *TrackedQueue[T]) notify() {
 	}
 	q.mutate(len(q.items), q.capacity)
 }
+

@@ -63,3 +63,4 @@ func (r *Runner[TCommand, Frame]) UpdateCommandLoop(loop *CommandLoop[TCommand])
 	}
 	r.commandLoop = loop
 }
+
