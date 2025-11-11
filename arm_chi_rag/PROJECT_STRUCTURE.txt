@@ -1,0 +1,28 @@
+ARM CHI RAG系统 - 项目结构
+
+核心模块 (rag_system/):
+  - __init__.py              # 包初始化
+  - document_processor.py    # PDF处理和文本分块
+  - vector_store.py          # ChromaDB向量数据库操作
+  - retriever.py             # 检索和查询逻辑
+  - api_server.py            # FastAPI RESTful API服务
+
+主要文件:
+  - main.py                  # 命令行入口程序
+  - cursor_integration.py    # Cursor集成工具类
+  - example_usage.py         # 使用示例脚本
+  - config.yaml              # 配置文件
+  - requirements.txt         # Python依赖包
+  - README.md                # 使用文档
+  - .gitignore              # Git忽略文件
+
+目录:
+  - data/arm_chi_docs/       # ARM CHI PDF文档存放目录
+  - vector_db/              # ChromaDB向量数据库存储目录
+
+快速开始:
+1. 安装依赖: pip install -r requirements.txt
+2. 放置PDF文档到 data/arm_chi_docs/
+3. 索引文档: python main.py index data/arm_chi_docs
+4. 查询文档: python main.py query "你的查询"
+5. 启动API: python main.py api

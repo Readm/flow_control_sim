@@ -24,7 +24,6 @@ go.work
 *.swp
 *.swo
 *~
-arm_chi_rag
 
 # OS specific files
 .DS_Store
