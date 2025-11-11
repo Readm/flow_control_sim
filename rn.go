@@ -21,8 +21,9 @@ type RequestNode struct {
 	policyMgr   policy.Manager
 
 	// queues for request management
-	stimulusQueue *queue.TrackedQueue[*core.Packet] // stimulus_queue: infinite capacity, stores generated requests
-	dispatchQueue *queue.TrackedQueue[*core.Packet] // dispatch_queue: limited capacity, stores requests ready to send
+	stimulusQueue  *queue.TrackedQueue[*core.Packet] // stimulus_queue: infinite capacity, stores generated requests
+	dispatchQueue  *queue.TrackedQueue[*core.Packet] // dispatch_queue: limited capacity, stores requests ready to send
+	snoopRespQueue *queue.TrackedQueue[*core.Packet] // snoop response queue: stores snoop responses to send
 
 	// track request generation times by request id (for statistics)
 	generatedAtByReq map[int64]int
@@ -40,6 +41,13 @@ type RequestNode struct {
 	// Transaction manager reference (set by Simulator)
 	txnMgr *TransactionManager
 
+	// MESI cache: map from address to cache line state
+	cache   map[uint64]core.MESIState
+	cacheMu sync.RWMutex
+
+	// PacketIDAllocator for generating snoop response packets
+	packetIDs *PacketIDAllocator
+
 	mu       sync.Mutex
 	bindings *NodeCycleBindings
 }
@@ -55,15 +63,19 @@ func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *Reques
 		generatedAtByReq: make(map[int64]int),
 		MinDelay:         int(^uint(0) >> 1), // max int
 		nextAddress:      DefaultAddressBase,
+		cache:            make(map[uint64]core.MESIState),
+		packetIDs:        nil, // will be set by simulator
 	}
 	rn.AddQueue("stimulus_queue", 0, UnlimitedQueueCapacity)
 	rn.AddQueue("dispatch_queue", 0, DefaultDispatchQueueCapacity)
+	rn.AddQueue("snoop_resp_queue", 0, UnlimitedQueueCapacity)
 	rn.bindings = NewNodeCycleBindings()
 	rn.stimulusQueue = queue.NewTrackedQueue("stimulus_queue", queue.UnlimitedCapacity, rn.makeQueueMutator("stimulus_queue"), queue.QueueHooks[*core.Packet]{})
 	rn.dispatchQueue = queue.NewTrackedQueue("dispatch_queue", DefaultDispatchQueueCapacity, rn.makeQueueMutator("dispatch_queue"), queue.QueueHooks[*core.Packet]{
 		OnEnqueue: rn.dispatchEnqueueHook,
 		OnDequeue: rn.dispatchDequeueHook,
 	})
+	rn.snoopRespQueue = queue.NewTrackedQueue("snoop_resp_queue", queue.UnlimitedCapacity, rn.makeQueueMutator("snoop_resp_queue"), queue.QueueHooks[*core.Packet]{})
 	return rn
 }
 
@@ -344,6 +356,23 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 		// Packet remains in dispatchQueue, will be removed when Comp response arrives
 	}
 
+	// Phase 2.5: Send snoop responses from snoop_resp_queue to HomeNode
+	snoopRespItems := rn.snoopRespQueue.Items()
+	for _, snoopResp := range snoopRespItems {
+		if snoopResp.SentAt > 0 {
+			continue
+		}
+		// Send snoop response to HomeNode
+		snoopResp.SentAt = cycle
+		ch.Send(snoopResp, rn.ID, homeNodeID, cycle, cfg.MasterRelayLatency)
+		// Remove from queue after sending
+		rn.snoopRespQueue.RemoveMatch(func(p *core.Packet) bool {
+			return p != nil && p.ID == snoopResp.ID
+		}, cycle)
+		GetLogger().Infof("[MESI] RequestNode %d: Sent Snoop response %s (PacketID=%d) to HomeNode %d",
+			rn.ID, snoopResp.ResponseType, snoopResp.ID, homeNodeID)
+	}
+
 	// Phase 3: Release requests from stimulus_queue to dispatch_queue (max BandwidthLimit per cycle)
 	// Check dispatch_queue capacity before releasing
 	dispatchLen := rn.dispatchQueue.Len()
@@ -396,6 +425,33 @@ func (rn *RequestNode) SetTransactionManager(txnMgr *TransactionManager) {
 	rn.txnMgr = txnMgr
 }
 
+// SetPacketIDAllocator assigns the packet ID allocator for generating snoop response packets.
+func (rn *RequestNode) SetPacketIDAllocator(allocator *PacketIDAllocator) {
+	rn.packetIDs = allocator
+}
+
+// getCacheState returns the MESI state for the given address.
+func (rn *RequestNode) getCacheState(addr uint64) core.MESIState {
+	rn.cacheMu.RLock()
+	defer rn.cacheMu.RUnlock()
+	state, exists := rn.cache[addr]
+	if !exists {
+		return core.MESIInvalid
+	}
+	return state
+}
+
+// setCacheState sets the MESI state for the given address.
+func (rn *RequestNode) setCacheState(addr uint64, state core.MESIState) {
+	rn.cacheMu.Lock()
+	defer rn.cacheMu.Unlock()
+	if state == core.MESIInvalid {
+		delete(rn.cache, addr)
+	} else {
+		rn.cache[addr] = state
+	}
+}
+
 // OnResponse processes a CHI response arriving to the request node at given cycle.
 // Handles CompData responses for ReadNoSnp transactions.
 // Removes the corresponding request packet from dispatch_queue when Comp response arrives.
@@ -445,6 +501,14 @@ func (rn *RequestNode) handleResponseLocked(p *core.Packet, cycle int, txnMgr *T
 	// Mark transaction as completed
 	if txnMgr != nil && p.TransactionID > 0 {
 		txnMgr.MarkTransactionCompleted(p.TransactionID, cycle)
+	}
+
+	// Update cache state for ReadOnce transactions
+	if p.TransactionType == core.CHITxnReadOnce && p.ResponseType == core.CHIRespCompData {
+		// ReadOnce with CompData: cache line becomes Shared
+		rn.setCacheState(p.Address, core.MESIShared)
+		GetLogger().Infof("[MESI] RequestNode %d: Cache updated to Shared for address 0x%x (TxnID=%d)",
+			rn.ID, p.Address, p.TransactionID)
 	}
 
 }
@@ -687,8 +751,100 @@ func (rn *RequestNode) processIncomingMessage(msg *InFlightMessage, cycle int) {
 		rn.txnMgr.RecordPacketEvent(event)
 	}
 
+	// Handle Snoop requests
+	if packet.MessageType == core.CHIMsgSnp {
+		rn.handleSnoopRequestLocked(packet, cycle)
+		rn.mu.Unlock()
+		return
+	}
+
 	rn.handleResponseLocked(packet, cycle, rn.txnMgr)
 	rn.mu.Unlock()
+}
+
+// handleSnoopRequestLocked processes a Snoop request (must be called with mu locked).
+func (rn *RequestNode) handleSnoopRequestLocked(snoopReq *core.Packet, cycle int) {
+	if snoopReq == nil || rn.packetIDs == nil {
+		return
+	}
+
+	GetLogger().Infof("[MESI] RequestNode %d: Received Snoop request for address 0x%x (TxnID=%d, Cycle=%d)",
+		rn.ID, snoopReq.Address, snoopReq.TransactionID, cycle)
+
+	// Check cache state
+	cacheState := rn.getCacheState(snoopReq.Address)
+
+	var snoopResp *core.Packet
+	if cacheState.CanProvideData() {
+		// Cache has data: respond with SnpData
+		// State transitions: Shared/Exclusive/Modified -> Shared (if ReadOnce snoop)
+		snoopResp = &core.Packet{
+			ID:              rn.packetIDs.Allocate(),
+			Type:            "response", // legacy
+			SrcID:           rn.ID,
+			DstID:           snoopReq.SrcID, // return to HomeNode
+			GeneratedAt:     cycle,
+			SentAt:          0, // Will be set when sent in Phase 2.5
+			MasterID:        snoopReq.SrcID,
+			RequestID:       snoopReq.ID,
+			TransactionType: snoopReq.TransactionType,
+			MessageType:     core.CHIMsgSnpResp,
+			ResponseType:    core.CHIRespSnpData,
+			Address:         snoopReq.Address,
+			DataSize:        snoopReq.DataSize,
+			TransactionID:   snoopReq.TransactionID,
+			OriginalTxnID:   snoopReq.TransactionID,
+			ParentPacketID:  snoopReq.ID,
+		}
+
+		// For ReadOnce snoop: keep cache line in Shared state
+		if snoopReq.TransactionType == core.CHITxnReadOnce {
+			rn.setCacheState(snoopReq.Address, core.MESIShared)
+			GetLogger().Infof("[MESI] RequestNode %d: Cache state remains Shared for address 0x%x after Snoop",
+				rn.ID, snoopReq.Address)
+		}
+	} else {
+		// Cache invalid: respond with SnpNoData
+		snoopResp = &core.Packet{
+			ID:              rn.packetIDs.Allocate(),
+			Type:            "response", // legacy
+			SrcID:           rn.ID,
+			DstID:           snoopReq.SrcID, // return to HomeNode
+			GeneratedAt:     cycle,
+			SentAt:          0, // Will be set when sent in Phase 2.5
+			MasterID:        snoopReq.SrcID,
+			RequestID:       snoopReq.ID,
+			TransactionType: snoopReq.TransactionType,
+			MessageType:     core.CHIMsgSnpResp,
+			ResponseType:    core.CHIRespSnpNoData,
+			Address:         snoopReq.Address,
+			DataSize:        snoopReq.DataSize,
+			TransactionID:   snoopReq.TransactionID,
+			OriginalTxnID:   snoopReq.TransactionID,
+			ParentPacketID:  snoopReq.ID,
+		}
+		GetLogger().Infof("[MESI] RequestNode %d: Cache invalid, responding with SnpNoData for address 0x%x",
+			rn.ID, snoopReq.Address)
+	}
+
+	// Record snoop response generation
+	if rn.txnMgr != nil && snoopReq.TransactionID > 0 {
+		event := &core.PacketEvent{
+			TransactionID:  snoopReq.TransactionID,
+			PacketID:       snoopResp.ID,
+			ParentPacketID: snoopReq.ID,
+			NodeID:         rn.ID,
+			EventType:      core.PacketGenerated,
+			Cycle:          cycle,
+			EdgeKey:        nil,
+		}
+		rn.txnMgr.RecordPacketEvent(event)
+	}
+
+	// Queue snoop response to be sent in next Tick
+	rn.snoopRespQueue.Enqueue(snoopResp, cycle)
+	GetLogger().Infof("[MESI] RequestNode %d: Generated Snoop response %s (PacketID=%d) for TxnID=%d, queued for sending",
+		rn.ID, snoopResp.ResponseType, snoopResp.ID, snoopReq.TransactionID)
 }
 
 // Legacy type aliases for backward compatibility during transition
