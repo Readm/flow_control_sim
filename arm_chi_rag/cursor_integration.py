@@ -1,5 +1,6 @@
 """
 Cursor集成示例：提供便捷的Python接口供Cursor使用
+仅用于查询，不包含生成功能
 """
 
 import os
@@ -8,9 +9,6 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from rag_system.vector_store import VectorStore
 from rag_system.retriever import Retriever
-from rag_system.generator import AnswerGenerator
-from rag_system.rag_chain import RAGChain
-from rag_system.llm_factory import create_llm
 
 
 class ARMCHIRAG:
@@ -51,26 +49,6 @@ class ARMCHIRAG:
             vector_store=self.vector_store,
             top_k=retrieval_config.get("top_k", 5),
             score_threshold=retrieval_config.get("score_threshold", 0.5)
-        )
-        
-        # 初始化生成器（如果启用）
-        generation_config = self.config.get("generation", {})
-        self.generator = None
-        if generation_config.get("enabled", False):
-            llm = create_llm(generation_config)
-            if llm:
-                self.generator = AnswerGenerator(
-                    llm=llm,
-                    system_prompt=generation_config.get("system_prompt")
-                )
-                print("LLM生成功能已启用")
-            else:
-                print("警告: LLM生成功能配置失败，将只使用检索功能")
-        
-        # 创建RAG链
-        self.rag_chain = RAGChain(
-            retriever=self.retriever,
-            generator=self.generator
         )
     
     def query(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -127,25 +105,19 @@ class ARMCHIRAG:
     def ask(
         self, 
         query: str, 
-        top_k: Optional[int] = None,
-        generate_answer: bool = True
-    ) -> Dict[str, Any]:
+        top_k: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
         """
-        完整的RAG查询：检索 + 生成回答
+        查询ARM CHI文档（ask方法的别名，保持兼容性）
         
         Args:
             query: 用户问题
             top_k: 检索的文档数量
-            generate_answer: 是否生成回答（如果有generator）
             
         Returns:
-            包含检索结果和生成回答的字典
+            查询结果列表
         """
-        return self.rag_chain.query(
-            query=query,
-            top_k=top_k,
-            generate_answer=generate_answer
-        )
+        return self.query(query, top_k)
 
 
 # 全局实例（可选）
