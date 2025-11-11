@@ -103,9 +103,9 @@ func GetPredefinedConfigs() []SOCNetworkConfig {
 				RelayMasterLatency: 1,
 				RelaySlaveLatency:  1,
 				SlaveRelayLatency:  1,
-				SlaveProcessRate:   1,  // Slow: only 1 packet per cycle
+				SlaveProcessRate:   1,   // Slow: only 1 packet per cycle
 				RequestRateConfig:  1.0, // High: always generate requests
-				BandwidthLimit:     3,  // Allow multiple packets per slot
+				BandwidthLimit:     3,   // Allow multiple packets per slot
 				SlaveWeights:       []int{1},
 				Headless:           false,
 				VisualMode:         "web",
@@ -163,7 +163,7 @@ func GetConfigByName(name string) *Config {
 				cfgCopy.SlaveWeights = make([]int, len(original.SlaveWeights))
 				copy(cfgCopy.SlaveWeights, original.SlaveWeights)
 			}
-			
+
 			// Deep copy ScheduleConfig if present
 			if original.ScheduleConfig != nil {
 				cfgCopy.ScheduleConfig = make(map[int]map[int][]ScheduleItem)
@@ -176,11 +176,10 @@ func GetConfigByName(name string) *Config {
 					}
 				}
 			}
-			
+
 			// RequestGenerator will be created in Simulator initialization
 			return &cfgCopy
 		}
 	}
 	return nil
 }
-
