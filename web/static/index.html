@@ -16,7 +16,6 @@
             padding: 0;
             box-sizing: border-box;
         }
-
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             display: flex;
@@ -2237,6 +2236,13 @@ ${messages.join('\n')}`;
             return { text: processed, map };
         }
 
+        function clamp(value, min, max) {
+            if (!Number.isFinite(value)) {
+                return min;
+            }
+            return Math.min(Math.max(value, min), max);
+        }
+
         /**
          * Extract start/end points from a path definition
          */
@@ -2333,44 +2339,73 @@ ${messages.join('\n')}`;
                 }
             }
 
-            const actorRects = Array.from(svgEl.querySelectorAll('g.actor rect, rect.actor'));
-            const midY = (globalYMin + globalYMax) / 2;
-            let topActorBottom = globalYMin;
-            let bottomActorTop = globalYMax;
-
-            actorRects.forEach(rect => {
-                const y = Number(rect.getAttribute('y') || 0);
-                const height = Number(rect.getAttribute('height') || 0);
-                if (!Number.isFinite(y) || !Number.isFinite(height)) {
-                    return;
-                }
-                const center = y + height / 2;
-                if (center <= midY) {
-                    topActorBottom = Math.max(topActorBottom, y + height);
-                } else {
-                    bottomActorTop = Math.min(bottomActorTop, y);
+            const actorNodes = Array.from(svgEl.querySelectorAll('[class*=actor]'));
+            const actorBoxes = [];
+            actorNodes.forEach(node => {
+                try {
+                    const box = node.getBBox();
+                    if (box && Number.isFinite(box.y) && Number.isFinite(box.height)) {
+                        actorBoxes.push({
+                            top: box.y,
+                            bottom: box.y + box.height,
+                            height: box.height
+                        });
+                    }
+                } catch (_) {
+                    const rect = node.getBoundingClientRect?.();
+                    if (rect && Number.isFinite(rect.y) && Number.isFinite(rect.height)) {
+                        actorBoxes.push({
+                            top: rect.y,
+                            bottom: rect.y + rect.height,
+                            height: rect.height
+                        });
+                    }
                 }
             });
 
-            const topPadding = 16;
-            const bottomPadding = 16;
-
-            let percentBase = Math.max(globalYMin, topActorBottom + topPadding);
-            let usableMax = Math.min(globalYMax, bottomActorTop - bottomPadding);
-            if (!Number.isFinite(usableMax) || usableMax <= percentBase) {
-                usableMax = globalYMax;
-            }
-            const percentRange = Math.max(1, usableMax - percentBase);
-
-            console.log('[sequenceDiagram] Y baseline info', {
+            let percentBase = globalYMin;
+            let percentRange = Math.max(1, globalYMax - globalYMin);
+            const debugInfo = {
                 globalYMin,
                 globalYMax,
-                percentBase,
-                percentRange,
-                topActorBottom,
-                bottomActorTop,
-                actorCount: actorRects.length
-            });
+                actorCount: actorBoxes.length
+            };
+
+            if (actorBoxes.length > 0) {
+                const minBottom = Math.min(...actorBoxes.map(b => b.bottom));
+                const maxTop = Math.max(...actorBoxes.map(b => b.top));
+                const avgHeight = actorBoxes.reduce((acc, b) => acc + b.height, 0) / actorBoxes.length;
+                const dynamicPad = clamp(avgHeight * 0.3, 8, 40);
+                const startCandidate = Math.max(globalYMin, minBottom + dynamicPad);
+                const endCandidate = Math.min(globalYMax, maxTop - dynamicPad);
+
+                debugInfo.minBottom = minBottom;
+                debugInfo.maxTop = maxTop;
+                debugInfo.dynamicPad = dynamicPad;
+
+                if (Number.isFinite(startCandidate) && Number.isFinite(endCandidate) && endCandidate - startCandidate >= 4) {
+                    percentBase = startCandidate;
+                    percentRange = endCandidate - startCandidate;
+                    debugInfo.start = percentBase;
+                    debugInfo.end = percentBase + percentRange;
+                } else {
+                    const fallbackPad = clamp((globalYMax - globalYMin) * 0.05, 8, 40);
+                    const fallbackStart = Math.max(globalYMin, globalYMin + fallbackPad);
+                    const fallbackEnd = Math.max(fallbackStart + 1, globalYMax - fallbackPad);
+                    percentBase = fallbackStart;
+                    percentRange = fallbackEnd - fallbackStart;
+                    debugInfo.fallbackPad = fallbackPad;
+                    debugInfo.start = percentBase;
+                    debugInfo.end = fallbackEnd;
+                }
+            } else {
+                debugInfo.start = percentBase;
+                debugInfo.end = percentBase + percentRange;
+            }
+
+            debugInfo.percentBase = percentBase;
+            debugInfo.percentRange = percentRange;
+            console.log('[sequenceDiagram] Y baseline info', debugInfo);
 
             function resolveAbsolute(value, unit, fallback) {
                 if (typeof value !== 'number') {
@@ -2612,6 +2647,19 @@ ${messages.join('\n')}`;
                 container.innerHTML = '';
                 container.appendChild(svgEl);
                 await postProcessMermaidSvg(svgEl, map);
+
+                const sourceBlock = document.createElement('pre');
+                sourceBlock.className = 'sequence-diagram-source';
+                sourceBlock.textContent = mermaidCode;
+                sourceBlock.style.marginTop = '12px';
+                sourceBlock.style.padding = '8px 12px';
+                sourceBlock.style.background = '#f7f7f7';
+                sourceBlock.style.borderRadius = '6px';
+                sourceBlock.style.fontSize = '11px';
+                sourceBlock.style.lineHeight = '1.45';
+                sourceBlock.style.whiteSpace = 'pre';
+                sourceBlock.style.overflowX = 'auto';
+                container.appendChild(sourceBlock);
                 
             } catch (error) {
                 console.error('Mermaid rendering error:', error);
