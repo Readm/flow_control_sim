@@ -3,8 +3,8 @@ package capabilities
 import (
 	"fmt"
 
-	"flow_sim/core"
-	"flow_sim/hooks"
+	"github.com/Readm/flow_sim/core"
+	"github.com/Readm/flow_sim/hooks"
 )
 
 // TxRequestParams describes the information needed to build a request packet.

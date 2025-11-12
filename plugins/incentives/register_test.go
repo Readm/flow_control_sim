@@ -3,7 +3,7 @@ package incentives
 import (
 	"testing"
 
-	"flow_sim/hooks"
+	"github.com/Readm/flow_sim/hooks"
 )
 
 func TestRegisterAndLoad(t *testing.T) {

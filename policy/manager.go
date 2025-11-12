@@ -1,6 +1,6 @@
 package policy
 
-import "flow_sim/core"
+import "github.com/Readm/flow_sim/core"
 
 // Manager coordinates routing, flow control, and domain lookups.
 type Manager interface {

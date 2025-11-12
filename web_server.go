@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sync"
 
-	"flow_sim/visual"
+	"github.com/Readm/flow_sim/visual"
 )
 
 // WebServer provides HTTP endpoints for visualization and control.

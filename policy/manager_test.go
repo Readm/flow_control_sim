@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"flow_sim/core"
+	"github.com/Readm/flow_sim/core"
 )
 
 type stubRouter struct {

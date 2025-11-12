@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"flow_sim/core"
+	"github.com/Readm/flow_sim/core"
 )
 
 // ExampleCacheLog demonstrates how to view cache mechanism execution logs

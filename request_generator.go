@@ -3,7 +3,7 @@ package main
 import (
 	"math/rand"
 
-	"flow_sim/core"
+	"github.com/Readm/flow_sim/core"
 )
 
 // RequestGenerationResult contains the result of request generation decision

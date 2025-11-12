@@ -3,7 +3,7 @@ package capabilities
 import (
 	"sync"
 
-	"flow_sim/hooks"
+	"github.com/Readm/flow_sim/hooks"
 )
 
 // DirectoryCapability provides address-to-node tracking for coherence.

@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"flow_sim/visual"
+	"github.com/Readm/flow_sim/visual"
 )
 
 // CommandQueue abstracts command delivery to simulator.

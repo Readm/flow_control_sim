@@ -3,7 +3,7 @@ package incentives
 import (
 	"fmt"
 
-	"flow_sim/hooks"
+	"github.com/Readm/flow_sim/hooks"
 )
 
 // Factory installs incentive hooks into the broker.

@@ -1,9 +1,9 @@
 package main
 
 import (
-	"flow_sim/capabilities"
-	"flow_sim/core"
-	"flow_sim/hooks"
+	"github.com/Readm/flow_sim/capabilities"
+	"github.com/Readm/flow_sim/core"
+	"github.com/Readm/flow_sim/hooks"
 )
 
 // TxFactory is responsible for creating transactions and initial request packets.

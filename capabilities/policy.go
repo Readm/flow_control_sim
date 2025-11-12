@@ -1,8 +1,8 @@
 package capabilities
 
 import (
-	"flow_sim/hooks"
-	"flow_sim/policy"
+	"github.com/Readm/flow_sim/hooks"
+	"github.com/Readm/flow_sim/policy"
 )
 
 type policyRoutingCapability struct {

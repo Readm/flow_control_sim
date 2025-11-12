@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"flow_sim/visual"
+	"github.com/Readm/flow_sim/visual"
 )
 
 // WebVisualizer bridges the simulator with the web server.

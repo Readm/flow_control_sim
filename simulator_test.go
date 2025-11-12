@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"flow_sim/visual"
+	"github.com/Readm/flow_sim/visual"
 )
 
 // mockVisualizer implements the Visualizer interface for unit testing control flow.

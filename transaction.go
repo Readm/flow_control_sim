@@ -1,6 +1,6 @@
 package main
 
-import "flow_sim/core"
+import "github.com/Readm/flow_sim/core"
 
 // TransactionState represents the state of a CHI transaction
 type TransactionState = core.TransactionState

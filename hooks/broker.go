@@ -3,7 +3,7 @@ package hooks
 import (
 	"sync"
 
-	"flow_sim/core"
+	"github.com/Readm/flow_sim/core"
 )
 
 // PluginCategory represents the high-level role of a plugin.

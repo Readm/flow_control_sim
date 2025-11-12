@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"sync"
 
-	"flow_sim/capabilities"
-	"flow_sim/core"
-	"flow_sim/hooks"
-	"flow_sim/policy"
-	"flow_sim/queue"
+	"github.com/Readm/flow_sim/capabilities"
+	"github.com/Readm/flow_sim/core"
+	"github.com/Readm/flow_sim/hooks"
+	"github.com/Readm/flow_sim/policy"
+	"github.com/Readm/flow_sim/queue"
 )
 
 // CacheLine represents a single cache line in the HomeNode cache.

@@ -1,6 +1,6 @@
 package capabilities
 
-import "flow_sim/hooks"
+import "github.com/Readm/flow_sim/hooks"
 
 type hookCapability struct {
 	desc   hooks.PluginDescriptor

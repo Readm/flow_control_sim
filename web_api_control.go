@@ -5,7 +5,7 @@ import (
 	"io"
 	"net/http"
 
-	"flow_sim/visual"
+	"github.com/Readm/flow_sim/visual"
 )
 
 func (ws *WebServer) handleControl(w http.ResponseWriter, r *http.Request) {

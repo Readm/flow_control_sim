@@ -3,8 +3,8 @@ package visualization
 import (
 	"fmt"
 
-	"flow_sim/hooks"
-	"flow_sim/visual"
+	"github.com/Readm/flow_sim/hooks"
+	"github.com/Readm/flow_sim/visual"
 )
 
 // Factory creates a visualizer instance.

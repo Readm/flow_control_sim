@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"flow_sim/core"
+	"github.com/Readm/flow_sim/core"
 )
 
 // Simulation constants

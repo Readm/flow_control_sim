@@ -3,8 +3,8 @@ package capabilities
 import (
 	"sync"
 
-	"flow_sim/core"
-	"flow_sim/hooks"
+	"github.com/Readm/flow_sim/core"
+	"github.com/Readm/flow_sim/hooks"
 )
 
 // CacheRole represents the intended owner of the cache capability.

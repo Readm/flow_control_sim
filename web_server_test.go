@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"flow_sim/visual"
+	"github.com/Readm/flow_sim/visual"
 )
 
 func TestWebServer_FrameEndpoint(t *testing.T) {

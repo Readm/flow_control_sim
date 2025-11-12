@@ -3,8 +3,8 @@ package capabilities
 import (
 	"testing"
 
-	"flow_sim/core"
-	"flow_sim/hooks"
+	"github.com/Readm/flow_sim/core"
+	"github.com/Readm/flow_sim/hooks"
 )
 
 func TestMESICacheCapabilityStoresState(t *testing.T) {

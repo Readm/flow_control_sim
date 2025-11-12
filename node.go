@@ -1,6 +1,6 @@
 package main
 
-import "flow_sim/core"
+import "github.com/Readm/flow_sim/core"
 
 // Node is the base class for Master, Slave, and Relay.
 // It provides common functionality including visualization support.

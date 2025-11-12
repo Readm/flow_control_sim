@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"flow_sim/hooks"
-	incentiveplugin "flow_sim/plugins/incentives"
-	visualplugin "flow_sim/plugins/visualization"
-	"flow_sim/policy"
-	simruntime "flow_sim/simulator"
-	"flow_sim/visual"
+	"github.com/Readm/flow_sim/hooks"
+	incentiveplugin "github.com/Readm/flow_sim/plugins/incentives"
+	visualplugin "github.com/Readm/flow_sim/plugins/visualization"
+	"github.com/Readm/flow_sim/policy"
+	simruntime "github.com/Readm/flow_sim/simulator"
+	"github.com/Readm/flow_sim/visual"
 )
 
 type Simulator struct {
