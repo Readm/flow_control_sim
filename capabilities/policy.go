@@ -44,16 +44,20 @@ func (c *policyRoutingCapability) Register(broker *hooks.PluginBroker) error {
 		return nil
 	}
 	broker.RegisterBundle(c.Descriptor(), hooks.HookBundle{
-		AfterRoute: []hooks.AfterRouteHook{c.afterRoute},
+		BeforeRoute: []hooks.BeforeRouteHook{c.beforeRoute},
 	})
 	return nil
 }
 
-func (c *policyRoutingCapability) afterRoute(ctx *hooks.RouteContext) error {
+func (c *policyRoutingCapability) beforeRoute(ctx *hooks.RouteContext) error {
 	if c.policy == nil || ctx == nil || ctx.Packet == nil {
 		return nil
 	}
-	resolved, err := c.policy.ResolveRoute(ctx.Packet, ctx.SourceNodeID, ctx.TargetID)
+	defaultTarget := ctx.TargetID
+	if defaultTarget == 0 {
+		defaultTarget = ctx.DefaultTarget
+	}
+	resolved, err := c.policy.ResolveRoute(ctx.Packet, ctx.SourceNodeID, defaultTarget)
 	if err != nil {
 		return err
 	}

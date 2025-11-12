@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"flow_sim/capabilities"
+	"flow_sim/core"
 	"flow_sim/hooks"
 	"flow_sim/queue"
 )
@@ -250,10 +251,16 @@ func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 			break
 		}
 		if sn.broker != nil {
+			var txn *Transaction
+			if sn.txnMgr != nil && pkt != nil && pkt.TransactionID > 0 {
+				txn = sn.txnMgr.GetTransaction(pkt.TransactionID)
+			}
 			ctx := &hooks.ProcessContext{
-				Packet: pkt,
-				NodeID: sn.ID,
-				Cycle:  cycle,
+				Packet:      pkt,
+				Transaction: txn,
+				Node:        &sn.Node,
+				NodeID:      sn.ID,
+				Cycle:       cycle,
 			}
 			if err := sn.broker.EmitBeforeProcess(ctx); err != nil {
 				GetLogger().Warnf("SlaveNode %d OnBeforeProcess hook failed: %v", sn.ID, err)
@@ -287,10 +294,16 @@ func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 		}
 
 		if sn.broker != nil {
+			var txn *Transaction
+			if sn.txnMgr != nil && req != nil && req.TransactionID > 0 {
+				txn = sn.txnMgr.GetTransaction(req.TransactionID)
+			}
 			ctx := &hooks.ProcessContext{
-				Packet: req,
-				NodeID: sn.ID,
-				Cycle:  cycle,
+				Packet:      req,
+				Transaction: txn,
+				Node:        &sn.Node,
+				NodeID:      sn.ID,
+				Cycle:       cycle,
 			}
 			if err := sn.broker.EmitAfterProcess(ctx); err != nil {
 				GetLogger().Warnf("SlaveNode %d OnAfterProcess hook failed: %v", sn.ID, err)
@@ -411,6 +424,7 @@ func (sn *SlaveNode) GetQueuePackets() []PacketInfo {
 			Address:         p.Address,
 			DataSize:        p.DataSize,
 			TransactionID:   p.TransactionID,
+			Metadata:        core.CloneMetadata(p.Metadata),
 		})
 	}
 	return packets

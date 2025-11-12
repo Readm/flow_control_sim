@@ -52,8 +52,8 @@ func TestRoutingCapabilityResolvesTarget(t *testing.T) {
 		DefaultTarget: 5,
 		TargetID:      5,
 	}
-	if err := broker.EmitAfterRoute(ctx); err != nil {
-		t.Fatalf("EmitAfterRoute returned error: %v", err)
+	if err := broker.EmitBeforeRoute(ctx); err != nil {
+		t.Fatalf("EmitBeforeRoute returned error: %v", err)
 	}
 	if ctx.TargetID != 15 {
 		t.Fatalf("expected target 15, got %d", ctx.TargetID)

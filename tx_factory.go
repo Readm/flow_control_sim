@@ -1,21 +1,10 @@
 package main
 
 import (
+	"flow_sim/capabilities"
 	"flow_sim/core"
 	"flow_sim/hooks"
 )
-
-// TxRequestParams describes the information needed to build a request packet.
-type TxRequestParams struct {
-	Cycle           int
-	SrcID           int
-	MasterID        int
-	DstID           int
-	TransactionType core.CHITransactionType
-	Address         uint64
-	DataSize        int
-	ParentPacketID  int64
-}
 
 // TxFactory is responsible for creating transactions and initial request packets.
 type TxFactory struct {
@@ -34,7 +23,7 @@ func NewTxFactory(broker *hooks.PluginBroker, txnMgr *TransactionManager, packet
 }
 
 // CreateRequest builds a request packet, registers the transaction, and triggers hooks.
-func (f *TxFactory) CreateRequest(params TxRequestParams) (*core.Packet, *Transaction) {
+func (f *TxFactory) CreateRequest(params capabilities.TxRequestParams) (*core.Packet, *core.Transaction) {
 	if f == nil || f.txnMgr == nil || f.packetIDs == nil {
 		return nil, nil
 	}

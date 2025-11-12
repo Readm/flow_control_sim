@@ -106,9 +106,11 @@ type MessageContext struct {
 
 // ProcessContext provides data for process stage hooks.
 type ProcessContext struct {
-	Packet *core.Packet
-	NodeID int
-	Cycle  int
+	Packet      *core.Packet
+	Transaction *core.Transaction
+	Node        interface{}
+	NodeID      int
+	Cycle       int
 }
 
 type BeforeRouteHook func(ctx *RouteContext) error

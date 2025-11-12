@@ -12,10 +12,7 @@ import (
 )
 
 // CacheLine represents a single cache line in the HomeNode cache.
-type CacheLine struct {
-	Address uint64
-	Valid   bool
-}
+type CacheLine = capabilities.HomeCacheLine
 
 // HomeNode (HN) represents a CHI Home Node that manages cache coherence and routes transactions.
 // It receives requests from Request Nodes and forwards them to Slave Nodes,
@@ -32,13 +29,13 @@ type HomeNode struct {
 	policyMgr policy.Manager
 
 	// Cache storage: simple map from address to cache line
-	cache   map[uint64]*CacheLine
-	cacheMu sync.RWMutex
+	cacheCapability capabilities.CacheWithHomeStore
+	cacheStore      capabilities.HomeCache
 
 	// Directory: tracks which RequestNodes have cached which addresses
 	// map[address] -> set of RequestNode IDs
-	directory   map[uint64]map[int]bool
-	directoryMu sync.RWMutex
+	directoryCapability capabilities.DirectoryCapability
+	directoryStore      capabilities.DirectoryStore
 
 	// Pending requests: tracks ReadOnce requests waiting for Snoop responses
 	// map[transactionID] -> pending request info
@@ -61,8 +58,6 @@ func NewHomeNode(id int) *HomeNode {
 		},
 		txnMgr:          nil, // will be set by simulator
 		bindings:        NewNodeCycleBindings(),
-		cache:           make(map[uint64]*CacheLine),
-		directory:       make(map[uint64]map[int]bool),
 		pendingRequests: make(map[int64]*PendingSnoopRequest),
 		packetIDs:       nil, // will be set by simulator
 	}
@@ -135,26 +130,41 @@ func (hn *HomeNode) SetPacketIDAllocator(allocator *PacketIDAllocator) {
 }
 
 func (hn *HomeNode) ensureDefaultCapabilities() {
-	if hn.defaultCapsRegistered {
+	if hn.defaultCapsRegistered && hn.policyMgr != nil {
 		return
 	}
-	if hn.policyMgr == nil || hn.broker == nil {
+	if hn.broker == nil {
 		return
 	}
-	caps := []capabilities.NodeCapability{
-		capabilities.NewRoutingCapability(
-			fmt.Sprintf("home-routing-%d", hn.ID),
-			hn.policyMgr,
-		),
-		capabilities.NewFlowControlCapability(
-			fmt.Sprintf("home-flow-%d", hn.ID),
-			hn.policyMgr,
-		),
+	caps := []capabilities.NodeCapability{}
+	if hn.cacheStore == nil {
+		caps = append(caps, capabilities.NewHomeCacheCapability(
+			fmt.Sprintf("home-cache-%d", hn.ID),
+		))
+	}
+	if hn.directoryStore == nil {
+		caps = append(caps, capabilities.NewDirectoryCapability(
+			fmt.Sprintf("home-directory-%d", hn.ID),
+		))
+	}
+	if hn.policyMgr != nil {
+		caps = append(caps,
+			capabilities.NewRoutingCapability(
+				fmt.Sprintf("home-routing-%d", hn.ID),
+				hn.policyMgr,
+			),
+			capabilities.NewFlowControlCapability(
+				fmt.Sprintf("home-flow-%d", hn.ID),
+				hn.policyMgr,
+			),
+		)
 	}
 	for _, cap := range caps {
 		hn.registerCapability(cap)
 	}
-	hn.defaultCapsRegistered = true
+	if hn.policyMgr != nil {
+		hn.defaultCapsRegistered = true
+	}
 }
 
 func (hn *HomeNode) registerCapability(cap capabilities.NodeCapability) {
@@ -177,6 +187,15 @@ func (hn *HomeNode) registerCapability(cap capabilities.NodeCapability) {
 	}
 	hn.capabilityRegistry[desc.Name] = struct{}{}
 	hn.capabilities = append(hn.capabilities, cap)
+
+	if cacheCap, ok := cap.(capabilities.CacheWithHomeStore); ok {
+		hn.cacheCapability = cacheCap
+		hn.cacheStore = cacheCap.HomeCache()
+	}
+	if dirCap, ok := cap.(capabilities.DirectoryCapability); ok {
+		hn.directoryCapability = dirCap
+		hn.directoryStore = dirCap.Directory()
+	}
 }
 
 // ConfigureCycleRuntime sets the coordinator bindings for the node.
@@ -232,47 +251,6 @@ func (hn *HomeNode) OnPacket(p *core.Packet, cycle int, ch *Link, cfg *Config) {
 	hn.mu.Unlock()
 }
 
-// checkCache checks if the cache contains data for the given address.
-// Returns true if cache hit, false if cache miss.
-func (hn *HomeNode) checkCache(addr uint64) bool {
-	hn.cacheMu.RLock()
-	defer hn.cacheMu.RUnlock()
-	line, exists := hn.cache[addr]
-	return exists && line != nil && line.Valid
-}
-
-// updateCache updates the cache with data for the given address.
-func (hn *HomeNode) updateCache(addr uint64) {
-	hn.cacheMu.Lock()
-	defer hn.cacheMu.Unlock()
-	hn.cache[addr] = &CacheLine{
-		Address: addr,
-		Valid:   true,
-	}
-}
-
-// directoryAdd adds a RequestNode to the directory for the given address.
-func (hn *HomeNode) directoryAdd(addr uint64, rnID int) {
-	hn.directoryMu.Lock()
-	defer hn.directoryMu.Unlock()
-	if hn.directory[addr] == nil {
-		hn.directory[addr] = make(map[int]bool)
-	}
-	hn.directory[addr][rnID] = true
-}
-
-// directoryRemove removes a RequestNode from the directory for the given address.
-func (hn *HomeNode) directoryRemove(addr uint64, rnID int) {
-	hn.directoryMu.Lock()
-	defer hn.directoryMu.Unlock()
-	if hn.directory[addr] != nil {
-		delete(hn.directory[addr], rnID)
-		if len(hn.directory[addr]) == 0 {
-			delete(hn.directory, addr)
-		}
-	}
-}
-
 // PendingSnoopRequest tracks a ReadOnce request waiting for Snoop responses
 type PendingSnoopRequest struct {
 	RequestingRNID int   // The RN that sent the original ReadOnce request
@@ -280,21 +258,6 @@ type PendingSnoopRequest struct {
 	TotalSnoops    int   // Total number of Snoop requests sent
 	ReceivedSnoops int   // Number of Snoop responses received
 	AllNoData      bool  // True if all received responses are SnpNoData
-}
-
-// directoryGetSharers returns the list of RequestNode IDs that have cached the given address.
-func (hn *HomeNode) directoryGetSharers(addr uint64) []int {
-	hn.directoryMu.RLock()
-	defer hn.directoryMu.RUnlock()
-	sharers, exists := hn.directory[addr]
-	if !exists || len(sharers) == 0 {
-		return nil
-	}
-	result := make([]int, 0, len(sharers))
-	for rnID := range sharers {
-		result = append(result, rnID)
-	}
-	return result
 }
 
 // generateSnoopRequest generates a Snoop request packet for the given address and target RN.
@@ -377,7 +340,10 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 				hn.ID, p.MasterID, p.TransactionID, p.Address, cycle)
 
 			// Check Directory for other sharers
-			sharers := hn.directoryGetSharers(p.Address)
+			var sharers []int
+			if hn.directoryStore != nil {
+				sharers = hn.directoryStore.Sharers(p.Address)
+			}
 			GetLogger().Infof("[MESI] HomeNode %d: Directory lookup for address 0x%x: found %d sharer(s): %v",
 				hn.ID, p.Address, len(sharers), sharers)
 
@@ -441,7 +407,13 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 				continue // Skip forwarding to SN
 			} else {
 				// No other sharers: check HN cache
-				if hn.checkCache(p.Address) {
+				cacheHit := false
+				if hn.cacheStore != nil {
+					if line, ok := hn.cacheStore.GetLine(p.Address); ok && line.Valid {
+						cacheHit = true
+					}
+				}
+				if cacheHit {
 					// Cache hit: generate CompData response directly
 					GetLogger().Infof("[Cache] HomeNode %d: CACHE HIT for address 0x%x (TxnID=%d, Cycle=%d)",
 						hn.ID, p.Address, p.TransactionID, cycle)
@@ -470,7 +442,9 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 						count++
 
 						// Update Directory: add requesting RN as sharer
-						hn.directoryAdd(p.Address, p.MasterID)
+						if hn.directoryStore != nil {
+							hn.directoryStore.Add(p.Address, p.MasterID)
+						}
 
 						// Record cache hit in transaction metadata
 						if hn.txnMgr != nil && p.TransactionID > 0 {
@@ -559,7 +533,9 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 					count++
 
 					// Update Directory: add requesting RN as sharer
-					hn.directoryAdd(p.Address, requestingRNID)
+					if hn.directoryStore != nil {
+						hn.directoryStore.Add(p.Address, requestingRNID)
+					}
 
 					// Remove from pending requests
 					hn.pendingRequestsMu.Lock()
@@ -616,10 +592,14 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 				// Update cache with the data
 				GetLogger().Infof("[Cache] HomeNode %d: Received CompData from SN, updating cache for address 0x%x (TxnID=%d, Cycle=%d, RequestingRN=%d)",
 					hn.ID, p.Address, p.TransactionID, cycle, requestingRNID)
-				hn.updateCache(p.Address)
+				if hn.cacheStore != nil {
+					hn.cacheStore.UpdateLine(p.Address, CacheLine{Valid: true})
+				}
 
 				// Update Directory: add the requesting RN as sharer
-				hn.directoryAdd(p.Address, requestingRNID)
+				if hn.directoryStore != nil {
+					hn.directoryStore.Add(p.Address, requestingRNID)
+				}
 				GetLogger().Infof("[MESI] HomeNode %d: Added RN %d to Directory for address 0x%x",
 					hn.ID, requestingRNID, p.Address)
 
@@ -787,6 +767,7 @@ func (hn *HomeNode) GetQueuePackets() []core.PacketInfo {
 			Address:         p.Address,
 			DataSize:        p.DataSize,
 			TransactionID:   p.TransactionID,
+			Metadata:        core.CloneMetadata(p.Metadata),
 		})
 	}
 	return packets

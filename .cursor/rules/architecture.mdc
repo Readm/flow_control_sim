@@ -1,0 +1,30 @@
+---
+alwaysApply: true
+---
+# CHI 协议模拟框架 - 架构约束
+
+[core]
+- Packet / Transaction / Node 只保留最小字段定义及 Metadata API。
+- 禁止在 core 中编写路由、流控、统计、激励等策略逻辑。
+- 仅通过 Metadata 或 Context 对象向外暴露扩展点。
+
+[nodes]
+- 节点实现仅负责：队列入/出队、生命周期调度、触发 Hook。
+- 禁止直接实现路由、流控、一致性、缓存或 PolicyMgr 逻辑。
+- 节点不得直接调用 PolicyMgr 接口，必须通过 Hook 触发对应能力。
+
+[hooks]
+- 所有策略决策必须经由 Hook 系统触发，Hook 可短路后续流程。
+- Hook 只允许通过 Context/Metadata 读写数据，禁止修改核心类型。
+- 优先扩展 RouteContext / MessageContext / ProcessContext，而非改动核心结构。
+
+[capabilities]
+- 负责封装默认策略（如 PolicyMgr）为 Hook 实现，并注册到 Broker。
+- 允许访问 PolicyMgr 接口，但只能在 Capability / Plugin 内包装。
+
+[plugins]
+- 面向使用者的定制逻辑，必须通过 Hook Context 或 Metadata 完成扩展。
+- 不得修改 core 结构或直接访问节点内部状态。
+
+[testing]
+- 必须验证 Hook 调用顺序：BeforeRoute → (policy) → AfterRoute；BeforeSend → (policy) → AfterSend；BeforeProcess → 处理 → AfterProcess。

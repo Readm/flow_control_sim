@@ -73,6 +73,9 @@ type Packet struct {
 
 	// Packet generation tracking
 	ParentPacketID int64 // ID of the parent packet that generated this packet (0 if no parent)
+
+	// Extension metadata, used by plugins to attach custom fields.
+	Metadata map[string]string
 }
 
 // PacketInfo represents packet information for visualization.
@@ -93,14 +96,56 @@ type PacketInfo struct {
 	Address         uint64             `json:"address"`
 	DataSize        int                `json:"dataSize"`
 	TransactionID   int64              `json:"transactionID"` // Transaction ID this packet belongs to
+	Metadata        map[string]string  `json:"metadata,omitempty"`
 }
 
 // QueueInfo represents queue information for visualization.
 type QueueInfo struct {
-	Name     string      `json:"name"`
-	Length   int         `json:"length"`
-	Capacity int         `json:"capacity"` // -1 means unlimited capacity
+	Name     string       `json:"name"`
+	Length   int          `json:"length"`
+	Capacity int          `json:"capacity"` // -1 means unlimited capacity
 	Packets  []PacketInfo `json:"packets,omitempty"`
 }
 
+// SetMetadata attaches a key/value pair to the packet metadata.
+func (p *Packet) SetMetadata(key, value string) {
+	if p == nil || key == "" {
+		return
+	}
+	if p.Metadata == nil {
+		p.Metadata = make(map[string]string)
+	}
+	p.Metadata[key] = value
+}
 
+// GetMetadata returns the value for a metadata key.
+func (p *Packet) GetMetadata(key string) (string, bool) {
+	if p == nil || key == "" || p.Metadata == nil {
+		return "", false
+	}
+	value, ok := p.Metadata[key]
+	return value, ok
+}
+
+// DeleteMetadata removes a metadata key from the packet.
+func (p *Packet) DeleteMetadata(key string) {
+	if p == nil || key == "" || p.Metadata == nil {
+		return
+	}
+	delete(p.Metadata, key)
+	if len(p.Metadata) == 0 {
+		p.Metadata = nil
+	}
+}
+
+// CloneMetadata creates a shallow copy of the metadata map.
+func CloneMetadata(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}

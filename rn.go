@@ -18,7 +18,6 @@ type RequestNode struct {
 	Node        // embedded Node base class
 	generator   RequestGenerator
 	masterIndex int // index of this master in the masters array (for generator)
-	txFactory   *TxFactory
 	broker      *hooks.PluginBroker
 	policyMgr   policy.Manager
 
@@ -43,10 +42,6 @@ type RequestNode struct {
 	// Transaction manager reference (set by Simulator)
 	txnMgr *TransactionManager
 
-	// MESI cache: map from address to cache line state
-	cache   map[uint64]core.MESIState
-	cacheMu sync.RWMutex
-
 	// PacketIDAllocator for generating snoop response packets
 	packetIDs *PacketIDAllocator
 
@@ -56,6 +51,11 @@ type RequestNode struct {
 	capabilities          []capabilities.NodeCapability
 	capabilityRegistry    map[string]struct{}
 	defaultCapsRegistered bool
+
+	cacheCapability capabilities.CacheWithRequestStore
+	cacheStore      capabilities.RequestCache
+	txnCapability   capabilities.TransactionCapability
+	txnCreator      capabilities.TransactionCreator
 }
 
 func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *RequestNode {
@@ -69,7 +69,6 @@ func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *Reques
 		generatedAtByReq: make(map[int64]int),
 		MinDelay:         int(^uint(0) >> 1), // max int
 		nextAddress:      DefaultAddressBase,
-		cache:            make(map[uint64]core.MESIState),
 		packetIDs:        nil, // will be set by simulator
 	}
 	rn.AddQueue("stimulus_queue", 0, UnlimitedQueueCapacity)
@@ -123,9 +122,22 @@ func (rn *RequestNode) dispatchDequeueHook(p *core.Packet, cycle int) {
 	rn.txnMgr.RecordPacketEvent(event)
 }
 
-// SetTxFactory assigns the transaction factory for request creation.
+// SetTxFactory installs a transaction capability backed by the provided factory.
 func (rn *RequestNode) SetTxFactory(factory *TxFactory) {
-	rn.txFactory = factory
+	if factory == nil {
+		return
+	}
+	cap := capabilities.NewTransactionCapability(
+		fmt.Sprintf("request-txn-factory-%d", rn.ID),
+		func(params capabilities.TxRequestParams) (*core.Packet, *core.Transaction, error) {
+			packet, txn := factory.CreateRequest(params)
+			if packet == nil {
+				return nil, txn, fmt.Errorf("tx factory returned nil packet")
+			}
+			return packet, txn, nil
+		},
+	)
+	rn.registerCapability(cap)
 }
 
 // SetPluginBroker assigns the hook broker for lifecycle callbacks.
@@ -168,6 +180,13 @@ func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID 
 func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, packetIDs *PacketIDAllocator, slaves []*SlaveNode, txnMgr *TransactionManager) {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
+
+	if packetIDs != nil {
+		rn.packetIDs = packetIDs
+	}
+	if txnMgr != nil {
+		rn.txnMgr = txnMgr
+	}
 
 	if homeNodeID < 0 {
 		return
@@ -213,45 +232,29 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 			}
 
 			var packet *core.Packet
-			if rn.txFactory != nil {
-				params := TxRequestParams{
-					Cycle:           cycle,
-					SrcID:           rn.ID,
-					MasterID:        rn.ID,
-					DstID:           dstSNID,
-					TransactionType: txnType,
-					Address:         address,
-					DataSize:        dataSize,
-				}
-				packet, _ = rn.txFactory.CreateRequest(params)
-			} else {
-				reqID := packetIDs.Allocate()
-
-				// Create transaction if TransactionManager is available
-				var txnID int64
-				if txnMgr != nil {
-					txn := txnMgr.CreateTransaction(txnType, address, cycle)
-					txnID = txn.Context.TransactionID
-				}
-
-				// Generate request packet
-				// SentAt is initially 0, will be set when actually sent to Link
-				packet = &core.Packet{
-					ID:              reqID,
-					Type:            "request", // legacy field
-					SrcID:           rn.ID,
-					DstID:           dstSNID,
-					GeneratedAt:     cycle,
-					SentAt:          0, // Will be set when sent to Link
-					MasterID:        rn.ID,
-					RequestID:       reqID,
-					TransactionType: txnType,
-					MessageType:     core.CHIMsgReq,
-					Address:         address,
-					DataSize:        dataSize,
-					TransactionID:   txnID,
-					ParentPacketID:  0, // Initial request has no parent packet
-				}
+			params := capabilities.TxRequestParams{
+				Cycle:           cycle,
+				SrcID:           rn.ID,
+				MasterID:        rn.ID,
+				DstID:           dstSNID,
+				TransactionType: txnType,
+				Address:         address,
+				DataSize:        dataSize,
+			}
+			creator := rn.txnCreator
+			if creator == nil {
+				rn.ensureDefaultCapabilities()
+				creator = rn.txnCreator
+			}
+			if creator == nil {
+				GetLogger().Warnf("RequestNode %d transaction capability missing", rn.ID)
+				continue
+			}
+			var err error
+			packet, _, err = creator(params)
+			if err != nil {
+				GetLogger().Warnf("RequestNode %d transaction capability failed: %v", rn.ID, err)
+				continue
 			}
 			if packet == nil {
 				continue
@@ -425,26 +428,59 @@ func (rn *RequestNode) SetPacketIDAllocator(allocator *PacketIDAllocator) {
 }
 
 func (rn *RequestNode) ensureDefaultCapabilities() {
-	if rn.defaultCapsRegistered {
+	if rn.defaultCapsRegistered && rn.policyMgr != nil {
 		return
 	}
-	if rn.policyMgr == nil || rn.broker == nil {
+	if rn.broker == nil {
 		return
 	}
-	caps := []capabilities.NodeCapability{
-		capabilities.NewRoutingCapability(
-			fmt.Sprintf("request-routing-%d", rn.ID),
-			rn.policyMgr,
-		),
-		capabilities.NewFlowControlCapability(
-			fmt.Sprintf("request-flow-%d", rn.ID),
-			rn.policyMgr,
-		),
+	caps := []capabilities.NodeCapability{}
+	if rn.cacheStore == nil {
+		caps = append(caps, capabilities.NewMESICacheCapability(
+			fmt.Sprintf("request-cache-%d", rn.ID),
+		))
+	}
+	if rn.txnCreator == nil {
+		packetAllocator := func() (int64, error) {
+			if rn.packetIDs == nil {
+				return 0, fmt.Errorf("packet allocator not configured")
+			}
+			return rn.packetIDs.Allocate(), nil
+		}
+		transactionCreator := func(txType core.CHITransactionType, addr uint64, cycle int) *core.Transaction {
+			if rn.txnMgr == nil {
+				return nil
+			}
+			txn := rn.txnMgr.CreateTransaction(txType, addr, cycle)
+			if txn == nil {
+				return nil
+			}
+			return txn
+		}
+		caps = append(caps, capabilities.NewDefaultTransactionCapability(
+			fmt.Sprintf("request-txn-default-%d", rn.ID),
+			packetAllocator,
+			transactionCreator,
+		))
+	}
+	if rn.policyMgr != nil {
+		caps = append(caps,
+			capabilities.NewRoutingCapability(
+				fmt.Sprintf("request-routing-%d", rn.ID),
+				rn.policyMgr,
+			),
+			capabilities.NewFlowControlCapability(
+				fmt.Sprintf("request-flow-%d", rn.ID),
+				rn.policyMgr,
+			),
+		)
 	}
 	for _, cap := range caps {
 		rn.registerCapability(cap)
 	}
-	rn.defaultCapsRegistered = true
+	if rn.policyMgr != nil {
+		rn.defaultCapsRegistered = true
+	}
 }
 
 func (rn *RequestNode) registerCapability(cap capabilities.NodeCapability) {
@@ -467,27 +503,14 @@ func (rn *RequestNode) registerCapability(cap capabilities.NodeCapability) {
 	}
 	rn.capabilityRegistry[desc.Name] = struct{}{}
 	rn.capabilities = append(rn.capabilities, cap)
-}
 
-// getCacheState returns the MESI state for the given address.
-func (rn *RequestNode) getCacheState(addr uint64) core.MESIState {
-	rn.cacheMu.RLock()
-	defer rn.cacheMu.RUnlock()
-	state, exists := rn.cache[addr]
-	if !exists {
-		return core.MESIInvalid
+	if cacheCap, ok := cap.(capabilities.CacheWithRequestStore); ok {
+		rn.cacheCapability = cacheCap
+		rn.cacheStore = cacheCap.RequestCache()
 	}
-	return state
-}
-
-// setCacheState sets the MESI state for the given address.
-func (rn *RequestNode) setCacheState(addr uint64, state core.MESIState) {
-	rn.cacheMu.Lock()
-	defer rn.cacheMu.Unlock()
-	if state == core.MESIInvalid {
-		delete(rn.cache, addr)
-	} else {
-		rn.cache[addr] = state
+	if txnCap, ok := cap.(capabilities.TransactionCapability); ok {
+		rn.txnCapability = txnCap
+		rn.txnCreator = txnCap.Creator()
 	}
 }
 
@@ -543,11 +566,12 @@ func (rn *RequestNode) handleResponseLocked(p *core.Packet, cycle int, txnMgr *T
 	}
 
 	// Update cache state for ReadOnce transactions
-	if p.TransactionType == core.CHITxnReadOnce && p.ResponseType == core.CHIRespCompData {
-		// ReadOnce with CompData: cache line becomes Shared
-		rn.setCacheState(p.Address, core.MESIShared)
-		GetLogger().Infof("[MESI] RequestNode %d: Cache updated to Shared for address 0x%x (TxnID=%d)",
-			rn.ID, p.Address, p.TransactionID)
+	if cacheHandler, ok := rn.cacheCapability.(capabilities.RequestCacheHandler); ok {
+		cacheHandler.HandleResponse(p)
+		if p.TransactionType == core.CHITxnReadOnce && p.ResponseType == core.CHIRespCompData {
+			GetLogger().Infof("[MESI] RequestNode %d: Cache updated to Shared for address 0x%x (TxnID=%d)",
+				rn.ID, p.Address, p.TransactionID)
+		}
 	}
 
 }
@@ -609,6 +633,7 @@ func (rn *RequestNode) GetQueuePackets() []core.PacketInfo {
 			Address:         p.Address,
 			DataSize:        p.DataSize,
 			TransactionID:   p.TransactionID,
+			Metadata:        core.CloneMetadata(p.Metadata),
 		})
 	}
 
@@ -634,6 +659,7 @@ func (rn *RequestNode) GetQueuePackets() []core.PacketInfo {
 			Address:         p.Address,
 			DataSize:        p.DataSize,
 			TransactionID:   p.TransactionID,
+			Metadata:        core.CloneMetadata(p.Metadata),
 		})
 	}
 
@@ -666,6 +692,7 @@ func (rn *RequestNode) GetStimulusQueuePackets() []core.PacketInfo {
 			Address:         p.Address,
 			DataSize:        p.DataSize,
 			TransactionID:   p.TransactionID,
+			Metadata:        core.CloneMetadata(p.Metadata),
 		})
 	}
 	return packets
@@ -697,6 +724,7 @@ func (rn *RequestNode) GetDispatchQueuePackets() []core.PacketInfo {
 			Address:         p.Address,
 			DataSize:        p.DataSize,
 			TransactionID:   p.TransactionID,
+			Metadata:        core.CloneMetadata(p.Metadata),
 		})
 	}
 	return packets
@@ -810,58 +838,33 @@ func (rn *RequestNode) handleSnoopRequestLocked(snoopReq *core.Packet, cycle int
 	GetLogger().Infof("[MESI] RequestNode %d: Received Snoop request for address 0x%x (TxnID=%d, Cycle=%d)",
 		rn.ID, snoopReq.Address, snoopReq.TransactionID, cycle)
 
-	// Check cache state
-	cacheState := rn.getCacheState(snoopReq.Address)
-
 	var snoopResp *core.Packet
-	if cacheState.CanProvideData() {
-		// Cache has data: respond with SnpData
-		// State transitions: Shared/Exclusive/Modified -> Shared (if ReadOnce snoop)
-		snoopResp = &core.Packet{
-			ID:              rn.packetIDs.Allocate(),
-			Type:            "response", // legacy
-			SrcID:           rn.ID,
-			DstID:           snoopReq.SrcID, // return to HomeNode
-			GeneratedAt:     cycle,
-			SentAt:          0, // Will be set when sent in Phase 2.5
-			MasterID:        snoopReq.SrcID,
-			RequestID:       snoopReq.ID,
-			TransactionType: snoopReq.TransactionType,
-			MessageType:     core.CHIMsgSnpResp,
-			ResponseType:    core.CHIRespSnpData,
-			Address:         snoopReq.Address,
-			DataSize:        snoopReq.DataSize,
-			TransactionID:   snoopReq.TransactionID,
-			OriginalTxnID:   snoopReq.TransactionID,
-			ParentPacketID:  snoopReq.ID,
+	if handler, ok := rn.cacheCapability.(capabilities.RequestCacheHandler); ok {
+		allocator := func() (int64, error) {
+			if rn.packetIDs == nil {
+				return 0, fmt.Errorf("packet allocator not configured")
+			}
+			return rn.packetIDs.Allocate(), nil
 		}
-
-		// For ReadOnce snoop: keep cache line in Shared state
-		if snoopReq.TransactionType == core.CHITxnReadOnce {
-			rn.setCacheState(snoopReq.Address, core.MESIShared)
-			GetLogger().Infof("[MESI] RequestNode %d: Cache state remains Shared for address 0x%x after Snoop",
-				rn.ID, snoopReq.Address)
+		resp, err := handler.BuildSnoopResponse(rn.ID, snoopReq, allocator, cycle)
+		if err != nil {
+			GetLogger().Warnf("RequestNode %d: failed to build snoop response: %v", rn.ID, err)
+			return
 		}
+		snoopResp = resp
 	} else {
-		// Cache invalid: respond with SnpNoData
-		snoopResp = &core.Packet{
-			ID:              rn.packetIDs.Allocate(),
-			Type:            "response", // legacy
-			SrcID:           rn.ID,
-			DstID:           snoopReq.SrcID, // return to HomeNode
-			GeneratedAt:     cycle,
-			SentAt:          0, // Will be set when sent in Phase 2.5
-			MasterID:        snoopReq.SrcID,
-			RequestID:       snoopReq.ID,
-			TransactionType: snoopReq.TransactionType,
-			MessageType:     core.CHIMsgSnpResp,
-			ResponseType:    core.CHIRespSnpNoData,
-			Address:         snoopReq.Address,
-			DataSize:        snoopReq.DataSize,
-			TransactionID:   snoopReq.TransactionID,
-			OriginalTxnID:   snoopReq.TransactionID,
-			ParentPacketID:  snoopReq.ID,
-		}
+		GetLogger().Warnf("RequestNode %d: cache capability missing, cannot respond to snoop", rn.ID)
+		return
+	}
+
+	if snoopResp == nil {
+		return
+	}
+
+	if snoopResp.ResponseType == core.CHIRespSnpData {
+		GetLogger().Infof("[MESI] RequestNode %d: Cache provides data for address 0x%x (TxnID=%d)",
+			rn.ID, snoopReq.Address, snoopReq.TransactionID)
+	} else {
 		GetLogger().Infof("[MESI] RequestNode %d: Cache invalid, responding with SnpNoData for address 0x%x",
 			rn.ID, snoopReq.Address)
 	}
