@@ -1,23 +1,27 @@
 package main
 
-import "context"
+import (
+	"context"
+
+	"flow_sim/visual"
+)
 
 // CommandQueue abstracts command delivery to simulator.
 type CommandQueue interface {
-	Enqueue(cmd ControlCommand) bool
-	TryDequeue() (ControlCommand, bool)
-	Next(ctx context.Context) (ControlCommand, bool)
+	Enqueue(cmd visual.ControlCommand) bool
+	TryDequeue() (visual.ControlCommand, bool)
+	Next(ctx context.Context) (visual.ControlCommand, bool)
 }
 
 type channelCommandQueue struct {
-	ch chan ControlCommand
+	ch chan visual.ControlCommand
 }
 
 func newChannelCommandQueue(buffer int) CommandQueue {
-	return &channelCommandQueue{ch: make(chan ControlCommand, buffer)}
+	return &channelCommandQueue{ch: make(chan visual.ControlCommand, buffer)}
 }
 
-func (q *channelCommandQueue) Enqueue(cmd ControlCommand) bool {
+func (q *channelCommandQueue) Enqueue(cmd visual.ControlCommand) bool {
 	select {
 	case q.ch <- cmd:
 		return true
@@ -26,21 +30,20 @@ func (q *channelCommandQueue) Enqueue(cmd ControlCommand) bool {
 	}
 }
 
-func (q *channelCommandQueue) TryDequeue() (ControlCommand, bool) {
+func (q *channelCommandQueue) TryDequeue() (visual.ControlCommand, bool) {
 	select {
 	case cmd := <-q.ch:
 		return cmd, true
 	default:
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 }
 
-func (q *channelCommandQueue) Next(ctx context.Context) (ControlCommand, bool) {
+func (q *channelCommandQueue) Next(ctx context.Context) (visual.ControlCommand, bool) {
 	select {
 	case cmd := <-q.ch:
 		return cmd, true
 	case <-ctx.Done():
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 }
-

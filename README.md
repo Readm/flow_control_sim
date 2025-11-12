@@ -18,6 +18,10 @@
   - Master 跟踪待响应请求队列（pending requests）
   - Relay 维护转发队列，支持缓冲转发
 - **事件驱动模拟**: 基于 cycle 的离散事件模拟
+- **插件化骨架**:
+  - 核心仿真由 `Node`/`Link` 骨架驱动，策略/可视化/激励通过插件装配
+  - `hooks.PluginBroker` + `hooks.Registry` 统一管理插件生命周期
+  - `capabilities/`, `plugins/visualization`, `plugins/incentives` 提供默认能力，可按需扩展
 - **节点可视化**: 
   - 统一的 Node 基类架构，Master/Slave/Relay 继承自 Node
   - Web 可视化界面（使用 Cytoscape.js）
@@ -118,31 +122,37 @@ Simulator.Run() 检查命令并执行
 
 ```
 flow_control_sim/
-├── node.go              # Node 基类定义（统一节点架构）
-├── visualization.go      # 可视化接口和数据模型
-├── web_visualizer.go     # Web 可视化器实现
-├── web_server.go         # Web 服务器和 REST API
-├── rn.go                 # RequestNode (Master) 节点实现
-├── sn.go                 # SlaveNode 节点实现
-├── hn.go                 # HomeNode (Relay) 节点实现
-├── simulator.go          # 模拟器主循环
-├── channel.go            # 通信信道 (Link)
-├── models.go             # 数据模型定义
-├── stats.go              # 统计功能
-├── request_generator.go  # 请求生成器接口和实现
-├── soc_configs.go        # 预定义网络配置
-├── benchmark.go          # 性能基准测试
-├── main.go               # 程序入口
+├── capabilities/             # 节点能力实现（路由、流控、统计等）
+├── hooks/                    # Hook Broker 与插件登记中心
+├── plugins/
+│   ├── incentives/           # 激励插件注册器与示例实现
+│   └── visualization/        # 可视化插件注册器
+├── visual/                   # Visualizer 接口与 Null 实现
+├── node.go                   # Node 基类定义（统一节点架构）
+├── visualization.go          # 可视化数据模型（帧、节点快照等）
+├── web_visualizer.go         # Web 可视化器实现
+├── web_server.go             # Web 服务器和 REST API
+├── rn.go                     # RequestNode (Master) 节点实现
+├── sn.go                     # SlaveNode 节点实现
+├── hn.go                     # HomeNode (Relay) 节点实现
+├── simulator.go              # 模拟器主循环，负责骨架与插件装配
+├── channel.go                # 通信信道 (Link)
+├── models.go                 # 数据模型与 Config 定义
+├── stats.go                  # 统计功能
+├── request_generator.go      # 请求生成器接口和实现
+├── soc_configs.go            # 预定义网络配置
+├── benchmark.go              # 性能基准测试
+├── main.go                   # 程序入口
 ├── web/
 │   └── static/
-│       └── index.html    # Cytoscape.js 前端页面
-├── go.mod                # Go 模块定义
-├── README.md             # 项目说明
-├── DEVELOPMENT_PLAN.md   # 开发计划文档
-├── TEST_RESULTS.md       # 测试结果文档
-└── TODO.md               # 待办事项
-
-详细的项目结构请参考开发计划文档。
+│       └── index.html        # Cytoscape.js 前端页面
+├── go.mod                    # Go 模块定义
+├── README.md                 # 项目说明
+├── DEVELOPMENT_PLAN.md       # 开发计划文档
+├── TEST_RESULTS.md           # 测试结果文档
+└── TODO.md                   # 待办事项
+```
+骨架组件和插件目录遵循“骨架最小化、能力可插拔”原则，详细设计请参阅 `doc/design.md`。
 
 ## 开发计划概览
 
@@ -206,6 +216,7 @@ flow_control_sim/
 - [x] 配置预设管理（支持多个预定义配置，可通过命令行或 Web 界面选择）
 - [x] 配置请求生成模式（支持概率生成和调度生成）
 - [x] 通过配置预设动态配置 Master/Slave 数量、延迟、处理速率等参数
+- [x] 插件装配配置（如 `Config.Plugins.Incentives` 声明激励插件列表）
 - [x] 命令行参数支持（`-config` 指定预设配置，`-headless` 无头模式，`-benchmark` 性能测试）
 
 ## 开发环境要求
@@ -270,6 +281,11 @@ go run *.go -config multi_master_multi_slave
 ```bash
 # 通过 API 查看（需要先启动服务器）
 curl http://127.0.0.1:8080/api/configs
+```
+
+**启用示例激励插件**:
+- 在自定义配置初始化阶段设置 `cfg.Plugins.Incentives = []string{"random"}`
+- 或在 Web 控制命令中选择 Reset 并提交包含上述字段的配置
 ```
 
 **Web 界面功能**:

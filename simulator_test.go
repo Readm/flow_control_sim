@@ -4,18 +4,20 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"flow_sim/visual"
 )
 
 // mockVisualizer implements the Visualizer interface for unit testing control flow.
 type mockVisualizer struct {
 	headless  bool
-	commandCh chan ControlCommand
+	commandCh chan visual.ControlCommand
 	frameCh   chan *SimulationFrame
 }
 
 func newMockVisualizer() *mockVisualizer {
 	return &mockVisualizer{
-		commandCh: make(chan ControlCommand, 16),
+		commandCh: make(chan visual.ControlCommand, 16),
 		frameCh:   make(chan *SimulationFrame, 64),
 	}
 }
@@ -28,47 +30,48 @@ func (m *mockVisualizer) IsHeadless() bool {
 	return m.headless
 }
 
-func (m *mockVisualizer) PublishFrame(frame *SimulationFrame) {
-	if frame == nil {
+func (m *mockVisualizer) PublishFrame(frame any) {
+	sf, _ := frame.(*SimulationFrame)
+	if sf == nil {
 		return
 	}
 	select {
-	case m.frameCh <- frame:
+	case m.frameCh <- sf:
 	default:
 		// Drop oldest frame to keep buffer fresh, then push latest.
 		select {
 		case <-m.frameCh:
 		default:
 		}
-		m.frameCh <- frame
+		m.frameCh <- sf
 	}
 }
 
-func (m *mockVisualizer) NextCommand() (ControlCommand, bool) {
+func (m *mockVisualizer) NextCommand() (visual.ControlCommand, bool) {
 	select {
 	case cmd, ok := <-m.commandCh:
 		if !ok {
-			return ControlCommand{Type: CommandNone}, false
+			return visual.ControlCommand{Type: visual.CommandNone}, false
 		}
 		return cmd, true
 	default:
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 }
 
-func (m *mockVisualizer) WaitCommand(ctx context.Context) (ControlCommand, bool) {
+func (m *mockVisualizer) WaitCommand(ctx context.Context) (visual.ControlCommand, bool) {
 	select {
 	case cmd, ok := <-m.commandCh:
 		if !ok {
-			return ControlCommand{Type: CommandNone}, false
+			return visual.ControlCommand{Type: visual.CommandNone}, false
 		}
 		return cmd, true
 	case <-ctx.Done():
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 }
 
-func (m *mockVisualizer) pushCommand(cmd ControlCommand) {
+func (m *mockVisualizer) pushCommand(cmd visual.ControlCommand) {
 	m.commandCh <- cmd
 }
 
@@ -533,14 +536,14 @@ func TestSimulatorControlFlowStepResume(t *testing.T) {
 
 	viz.waitForCycle(t, 0, time.Second)
 
-	viz.pushCommand(ControlCommand{Type: CommandStep})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandStep})
 	viz.waitForCycle(t, 1, time.Second)
 	viz.assertNoAdvanceBeyond(t, 1, 150*time.Millisecond)
 
-	viz.pushCommand(ControlCommand{Type: CommandStep})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandStep})
 	viz.waitForCycle(t, 2, time.Second)
 
-	viz.pushCommand(ControlCommand{Type: CommandResume})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandResume})
 	viz.waitForCycle(t, cfg.TotalCycles, 2*time.Second)
 
 	if reset := <-done; reset {
@@ -568,11 +571,11 @@ func TestSimulatorControlFlowReset(t *testing.T) {
 
 	viz.waitForCycle(t, 0, time.Second)
 
-	viz.pushCommand(ControlCommand{Type: CommandStep})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandStep})
 	viz.waitForCycle(t, 1, time.Second)
 
 	newCfg := newInteractiveConfig(4)
-	viz.pushCommand(ControlCommand{Type: CommandReset, ConfigOverride: newCfg})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandReset, ConfigOverride: newCfg})
 
 	if reset := <-resetCh; !reset {
 		t.Fatalf("expected runCycles to request reset")
@@ -597,7 +600,7 @@ func TestSimulatorControlFlowReset(t *testing.T) {
 		done <- sim.runCycles()
 	}()
 
-	viz.pushCommand(ControlCommand{Type: CommandResume})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandResume})
 	viz.waitForCycle(t, sim.cfg.TotalCycles, 2*time.Second)
 
 	if reset := <-done; reset {

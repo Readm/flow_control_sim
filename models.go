@@ -90,6 +90,11 @@ const (
 	NodeTypeSN core.NodeType = core.NodeTypeSN
 )
 
+// PluginConfig describes optional plugin selections.
+type PluginConfig struct {
+	Incentives []string `json:"incentives,omitempty"`
+}
+
 // Config holds simulation configuration values.
 type Config struct {
 	NumMasters int
@@ -134,6 +139,8 @@ type Config struct {
 	// visualization settings
 	Headless   bool   // true to run without visualization
 	VisualMode string // "gui" | "web" | "none" (default: "gui" if Headless is false)
+
+	Plugins PluginConfig
 
 	// Initial cache state (for test scenarios)
 	// Format: map[nodeID]map[address]CacheState

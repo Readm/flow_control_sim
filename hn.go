@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"flow_sim/capabilities"
 	"flow_sim/core"
 	"flow_sim/hooks"
 	"flow_sim/policy"
@@ -46,6 +47,10 @@ type HomeNode struct {
 
 	// PacketIDAllocator for generating response packet IDs
 	packetIDs *PacketIDAllocator
+
+	capabilities          []capabilities.NodeCapability
+	capabilityRegistry    map[string]struct{}
+	defaultCapsRegistered bool
 }
 
 func NewHomeNode(id int) *HomeNode {
@@ -54,8 +59,8 @@ func NewHomeNode(id int) *HomeNode {
 			ID:   id,
 			Type: core.NodeTypeHN,
 		},
-		txnMgr:   nil, // will be set by simulator
-		bindings: NewNodeCycleBindings(),
+		txnMgr:          nil, // will be set by simulator
+		bindings:        NewNodeCycleBindings(),
 		cache:           make(map[uint64]*CacheLine),
 		directory:       make(map[uint64]map[int]bool),
 		pendingRequests: make(map[int64]*PendingSnoopRequest),
@@ -115,16 +120,63 @@ func (hn *HomeNode) SetTransactionManager(txnMgr *TransactionManager) {
 // SetPluginBroker assigns the hook broker for routing and sending stages.
 func (hn *HomeNode) SetPluginBroker(b *hooks.PluginBroker) {
 	hn.broker = b
+	hn.ensureDefaultCapabilities()
 }
 
 // SetPolicyManager assigns the policy manager used during routing decisions.
 func (hn *HomeNode) SetPolicyManager(m policy.Manager) {
 	hn.policyMgr = m
+	hn.ensureDefaultCapabilities()
 }
 
 // SetPacketIDAllocator assigns the packet ID allocator for generating response packets.
 func (hn *HomeNode) SetPacketIDAllocator(allocator *PacketIDAllocator) {
 	hn.packetIDs = allocator
+}
+
+func (hn *HomeNode) ensureDefaultCapabilities() {
+	if hn.defaultCapsRegistered {
+		return
+	}
+	if hn.policyMgr == nil || hn.broker == nil {
+		return
+	}
+	caps := []capabilities.NodeCapability{
+		capabilities.NewRoutingCapability(
+			fmt.Sprintf("home-routing-%d", hn.ID),
+			hn.policyMgr,
+		),
+		capabilities.NewFlowControlCapability(
+			fmt.Sprintf("home-flow-%d", hn.ID),
+			hn.policyMgr,
+		),
+	}
+	for _, cap := range caps {
+		hn.registerCapability(cap)
+	}
+	hn.defaultCapsRegistered = true
+}
+
+func (hn *HomeNode) registerCapability(cap capabilities.NodeCapability) {
+	if cap == nil || hn.broker == nil {
+		return
+	}
+	desc := cap.Descriptor()
+	if desc.Name == "" {
+		desc.Name = fmt.Sprintf("home-capability-%d-%d", hn.ID, len(hn.capabilities))
+	}
+	if hn.capabilityRegistry == nil {
+		hn.capabilityRegistry = make(map[string]struct{})
+	}
+	if _, exists := hn.capabilityRegistry[desc.Name]; exists {
+		return
+	}
+	if err := cap.Register(hn.broker); err != nil {
+		GetLogger().Warnf("HomeNode %d capability %s registration failed: %v", hn.ID, desc.Name, err)
+		return
+	}
+	hn.capabilityRegistry[desc.Name] = struct{}{}
+	hn.capabilities = append(hn.capabilities, cap)
 }
 
 // ConfigureCycleRuntime sets the coordinator bindings for the node.
@@ -223,11 +275,11 @@ func (hn *HomeNode) directoryRemove(addr uint64, rnID int) {
 
 // PendingSnoopRequest tracks a ReadOnce request waiting for Snoop responses
 type PendingSnoopRequest struct {
-	RequestingRNID  int   // The RN that sent the original ReadOnce request
-	OriginalReqID   int64 // The RequestID of the original ReadOnce request
-	TotalSnoops     int   // Total number of Snoop requests sent
-	ReceivedSnoops  int   // Number of Snoop responses received
-	AllNoData       bool  // True if all received responses are SnpNoData
+	RequestingRNID int   // The RN that sent the original ReadOnce request
+	OriginalReqID  int64 // The RequestID of the original ReadOnce request
+	TotalSnoops    int   // Total number of Snoop requests sent
+	ReceivedSnoops int   // Number of Snoop responses received
+	AllNoData      bool  // True if all received responses are SnpNoData
 }
 
 // directoryGetSharers returns the list of RequestNode IDs that have cached the given address.
@@ -300,6 +352,7 @@ func (hn *HomeNode) generateCacheHitResponse(req *core.Packet, cycle int) *core.
 // For ReadOnce transactions:
 //   - If cache hit: generate CompData response directly to RN (Alternative 1)
 //   - If cache miss: forward request to SN, then update cache when response arrives
+//
 // For ReadNoSnp transactions:
 //   - Requests from RN: forward to target SN
 //   - CompData responses from SN: forward back to originating RN
@@ -320,14 +373,14 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 
 		// Handle ReadOnce requests with Directory lookup and Snoop
 		if p.MessageType == core.CHIMsgReq && p.TransactionType == core.CHITxnReadOnce {
-			GetLogger().Infof("[MESI] HomeNode %d: Received ReadOnce request from RN %d (TxnID=%d, Addr=0x%x, Cycle=%d)", 
+			GetLogger().Infof("[MESI] HomeNode %d: Received ReadOnce request from RN %d (TxnID=%d, Addr=0x%x, Cycle=%d)",
 				hn.ID, p.MasterID, p.TransactionID, p.Address, cycle)
-			
+
 			// Check Directory for other sharers
 			sharers := hn.directoryGetSharers(p.Address)
-			GetLogger().Infof("[MESI] HomeNode %d: Directory lookup for address 0x%x: found %d sharer(s): %v", 
+			GetLogger().Infof("[MESI] HomeNode %d: Directory lookup for address 0x%x: found %d sharer(s): %v",
 				hn.ID, p.Address, len(sharers), sharers)
-			
+
 			// Exclude the requesting RN from sharers list
 			filteredSharers := make([]int, 0)
 			for _, rnID := range sharers {
@@ -335,14 +388,14 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 					filteredSharers = append(filteredSharers, rnID)
 				}
 			}
-			GetLogger().Infof("[MESI] HomeNode %d: After filtering (excluding RN %d): %d sharer(s) to snoop: %v", 
+			GetLogger().Infof("[MESI] HomeNode %d: After filtering (excluding RN %d): %d sharer(s) to snoop: %v",
 				hn.ID, p.MasterID, len(filteredSharers), filteredSharers)
-			
+
 			if len(filteredSharers) > 0 {
 				// Other RNs have cached this address: send Snoop requests
-				GetLogger().Infof("[MESI] HomeNode %d: Found %d sharer(s) for address 0x%x, sending Snoop requests", 
+				GetLogger().Infof("[MESI] HomeNode %d: Found %d sharer(s) for address 0x%x, sending Snoop requests",
 					hn.ID, len(filteredSharers), p.Address)
-				
+
 				// Store the original request to track which RN is waiting for Snoop responses
 				hn.pendingRequestsMu.Lock()
 				hn.pendingRequests[p.TransactionID] = &PendingSnoopRequest{
@@ -353,7 +406,7 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 					AllNoData:      true, // Assume all are NoData until we get SnpData
 				}
 				hn.pendingRequestsMu.Unlock()
-				
+
 				// Send Snoop requests to all sharers
 				for _, sharerID := range filteredSharers {
 					snoopReq := hn.generateSnoopRequest(p.Address, sharerID, p.TransactionID, p.TransactionType, cycle)
@@ -371,26 +424,26 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 							}
 							hn.txnMgr.RecordPacketEvent(event)
 						}
-						
+
 						// Send Snoop request to sharer RN
 						snoopReq.SentAt = cycle
 						ch.Send(snoopReq, hn.ID, sharerID, cycle, cfg.RelayMasterLatency)
 						count++
-						GetLogger().Infof("[MESI] HomeNode %d: Sent Snoop request (PacketID=%d) to RN %d for address 0x%x", 
+						GetLogger().Infof("[MESI] HomeNode %d: Sent Snoop request (PacketID=%d) to RN %d for address 0x%x",
 							hn.ID, snoopReq.ID, sharerID, p.Address)
 					}
 				}
-				
+
 				// Wait for Snoop responses - do NOT forward to SN yet
 				// The request will be handled when Snoop response arrives
-				GetLogger().Infof("[MESI] HomeNode %d: Waiting for Snoop responses, NOT forwarding to SN", 
+				GetLogger().Infof("[MESI] HomeNode %d: Waiting for Snoop responses, NOT forwarding to SN",
 					hn.ID)
 				continue // Skip forwarding to SN
 			} else {
 				// No other sharers: check HN cache
 				if hn.checkCache(p.Address) {
 					// Cache hit: generate CompData response directly
-					GetLogger().Infof("[Cache] HomeNode %d: CACHE HIT for address 0x%x (TxnID=%d, Cycle=%d)", 
+					GetLogger().Infof("[Cache] HomeNode %d: CACHE HIT for address 0x%x (TxnID=%d, Cycle=%d)",
 						hn.ID, p.Address, p.TransactionID, cycle)
 					resp := hn.generateCacheHitResponse(p, cycle)
 					if resp != nil {
@@ -411,7 +464,7 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 						// Send response directly to RN
 						latency := cfg.RelayMasterLatency
 						resp.SentAt = cycle
-						GetLogger().Infof("[Cache] HomeNode %d: Sending CompData response directly to RN %d (TxnID=%d, PacketID=%d, Cycle=%d)", 
+						GetLogger().Infof("[Cache] HomeNode %d: Sending CompData response directly to RN %d (TxnID=%d, PacketID=%d, Cycle=%d)",
 							hn.ID, resp.DstID, p.TransactionID, resp.ID, cycle)
 						ch.Send(resp, hn.ID, resp.DstID, cycle, latency)
 						count++
@@ -434,7 +487,7 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 					}
 				} else {
 					// Cache miss: record and continue with normal forwarding to SN
-					GetLogger().Infof("[Cache] HomeNode %d: CACHE MISS for address 0x%x (TxnID=%d, Cycle=%d) - forwarding to SN", 
+					GetLogger().Infof("[Cache] HomeNode %d: CACHE MISS for address 0x%x (TxnID=%d, Cycle=%d) - forwarding to SN",
 						hn.ID, p.Address, p.TransactionID, cycle)
 					if hn.txnMgr != nil && p.TransactionID > 0 {
 						txn := hn.txnMgr.GetTransaction(p.TransactionID)
@@ -452,9 +505,9 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 
 		// Handle Snoop responses from RNs
 		if p.MessageType == core.CHIMsgSnpResp {
-			GetLogger().Infof("[MESI] HomeNode %d: Received Snoop response %s from RN %d for address 0x%x (TxnID=%d, Cycle=%d)", 
+			GetLogger().Infof("[MESI] HomeNode %d: Received Snoop response %s from RN %d for address 0x%x (TxnID=%d, Cycle=%d)",
 				hn.ID, p.ResponseType, p.SrcID, p.Address, p.TransactionID, cycle)
-			
+
 			// Find the original ReadOnce request that triggered this Snoop
 			hn.pendingRequestsMu.Lock()
 			pendingReq, hasPending := hn.pendingRequests[p.TransactionID]
@@ -463,12 +516,12 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 				GetLogger().Warnf("[MESI] HomeNode %d: Received Snoop response for unknown TxnID=%d", hn.ID, p.TransactionID)
 			} else {
 				pendingReq.ReceivedSnoops++
-				
+
 				if p.ResponseType == core.CHIRespSnpData {
 					// Snoop response with data: forward as CompData to the original requesting RN
 					requestingRNID := pendingReq.RequestingRNID
 					hn.pendingRequestsMu.Unlock()
-					
+
 					resp := &core.Packet{
 						ID:              hn.packetIDs.Allocate(),
 						Type:            "response", // legacy
@@ -486,7 +539,7 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 						TransactionID:   p.TransactionID,
 						ParentPacketID:  p.ID,
 					}
-					
+
 					// Record response generation
 					if hn.txnMgr != nil && p.TransactionID > 0 {
 						event := &core.PacketEvent{
@@ -500,34 +553,34 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 						}
 						hn.txnMgr.RecordPacketEvent(event)
 					}
-					
+
 					// Send CompData to requesting RN
 					ch.Send(resp, hn.ID, requestingRNID, cycle, cfg.RelayMasterLatency)
 					count++
-					
+
 					// Update Directory: add requesting RN as sharer
 					hn.directoryAdd(p.Address, requestingRNID)
-					
+
 					// Remove from pending requests
 					hn.pendingRequestsMu.Lock()
 					delete(hn.pendingRequests, p.TransactionID)
 					hn.pendingRequestsMu.Unlock()
-					
-					GetLogger().Infof("[MESI] HomeNode %d: Forwarded Snoop data as CompData to RN %d (TxnID=%d, PacketID=%d)", 
+
+					GetLogger().Infof("[MESI] HomeNode %d: Forwarded Snoop data as CompData to RN %d (TxnID=%d, PacketID=%d)",
 						hn.ID, requestingRNID, p.TransactionID, resp.ID)
 					continue
 				} else if p.ResponseType == core.CHIRespSnpNoData {
 					// Snoop response without data: mark as NoData
 					pendingReq.AllNoData = pendingReq.AllNoData && true // stays true
-					GetLogger().Infof("[MESI] HomeNode %d: Snoop response has no data (%d/%d received)", 
+					GetLogger().Infof("[MESI] HomeNode %d: Snoop response has no data (%d/%d received)",
 						hn.ID, pendingReq.ReceivedSnoops, pendingReq.TotalSnoops)
-					
+
 					// Check if all Snoop responses have been received
 					if pendingReq.ReceivedSnoops >= pendingReq.TotalSnoops {
 						// All Snoop responses received, all are NoData: need to forward to SN
 						// For now, we'll log this case - in a full implementation, we'd store the original
 						// request packet and forward it to SN here
-						GetLogger().Infof("[MESI] HomeNode %d: All Snoop responses are NoData (%d/%d), should forward to SN (not implemented yet)", 
+						GetLogger().Infof("[MESI] HomeNode %d: All Snoop responses are NoData (%d/%d), should forward to SN (not implemented yet)",
 							hn.ID, pendingReq.ReceivedSnoops, pendingReq.TotalSnoops)
 						// Remove from pending - transaction will timeout or be handled elsewhere
 						delete(hn.pendingRequests, p.TransactionID)
@@ -550,27 +603,27 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 					requestingRNID = pendingReq.RequestingRNID
 					// Remove from pending - we got data from SN (Snoop didn't provide data or we got SN data first)
 					delete(hn.pendingRequests, p.TransactionID)
-					GetLogger().Infof("[MESI] HomeNode %d: Removed TxnID=%d from pending requests (got data from SN), requesting RN=%d", 
+					GetLogger().Infof("[MESI] HomeNode %d: Removed TxnID=%d from pending requests (got data from SN), requesting RN=%d",
 						hn.ID, p.TransactionID, requestingRNID)
 				} else {
 					// Not in pending requests, use MasterID (should be the original RN)
 					requestingRNID = p.MasterID
-					GetLogger().Infof("[MESI] HomeNode %d: TxnID=%d not in pending requests, using MasterID=%d", 
+					GetLogger().Infof("[MESI] HomeNode %d: TxnID=%d not in pending requests, using MasterID=%d",
 						hn.ID, p.TransactionID, requestingRNID)
 				}
 				hn.pendingRequestsMu.Unlock()
-				
+
 				// Update cache with the data
-				GetLogger().Infof("[Cache] HomeNode %d: Received CompData from SN, updating cache for address 0x%x (TxnID=%d, Cycle=%d, RequestingRN=%d)", 
+				GetLogger().Infof("[Cache] HomeNode %d: Received CompData from SN, updating cache for address 0x%x (TxnID=%d, Cycle=%d, RequestingRN=%d)",
 					hn.ID, p.Address, p.TransactionID, cycle, requestingRNID)
 				hn.updateCache(p.Address)
-				
+
 				// Update Directory: add the requesting RN as sharer
 				hn.directoryAdd(p.Address, requestingRNID)
-				GetLogger().Infof("[MESI] HomeNode %d: Added RN %d to Directory for address 0x%x", 
+				GetLogger().Infof("[MESI] HomeNode %d: Added RN %d to Directory for address 0x%x",
 					hn.ID, requestingRNID, p.Address)
-				
-				GetLogger().Infof("[Cache] HomeNode %d: Cache and Directory updated for address 0x%x (TxnID=%d)", 
+
+				GetLogger().Infof("[Cache] HomeNode %d: Cache and Directory updated for address 0x%x (TxnID=%d)",
 					hn.ID, p.Address, p.TransactionID)
 				// Record cache update event
 				if hn.txnMgr != nil && p.TransactionID > 0 {
@@ -607,15 +660,6 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 			finalTarget = routeCtx.TargetID
 		}
 
-		if hn.policyMgr != nil {
-			resolvedTarget, err := hn.policyMgr.ResolveRoute(p, hn.ID, finalTarget)
-			if err != nil {
-				GetLogger().Warnf("HomeNode %d policy route failed: %v", hn.ID, err)
-				continue
-			}
-			finalTarget = resolvedTarget
-		}
-
 		if hn.broker != nil {
 			routeCtx := &hooks.RouteContext{
 				Packet:        p,
@@ -631,19 +675,13 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 
 		if hn.broker != nil {
 			sendCtx := &hooks.MessageContext{
-				Packet: p,
-				NodeID: hn.ID,
-				Cycle:  cycle,
+				Packet:   p,
+				NodeID:   hn.ID,
+				TargetID: finalTarget,
+				Cycle:    cycle,
 			}
 			if err := hn.broker.EmitBeforeSend(sendCtx); err != nil {
 				GetLogger().Warnf("HomeNode %d OnBeforeSend hook failed: %v", hn.ID, err)
-				continue
-			}
-		}
-
-		if hn.policyMgr != nil {
-			if err := hn.policyMgr.CheckFlowControl(p, hn.ID, finalTarget); err != nil {
-				GetLogger().Warnf("HomeNode %d flow control blocked packet: %v", hn.ID, err)
 				continue
 			}
 		}
@@ -656,9 +694,10 @@ func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
 
 		if hn.broker != nil {
 			sendCtx := &hooks.MessageContext{
-				Packet: p,
-				NodeID: hn.ID,
-				Cycle:  cycle,
+				Packet:   p,
+				NodeID:   hn.ID,
+				TargetID: finalTarget,
+				Cycle:    cycle,
 			}
 			if err := hn.broker.EmitAfterSend(sendCtx); err != nil {
 				GetLogger().Warnf("HomeNode %d OnAfterSend hook failed: %v", hn.ID, err)

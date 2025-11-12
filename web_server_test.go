@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"flow_sim/visual"
 )
 
 func TestWebServer_FrameEndpoint(t *testing.T) {
 	server := NewWebServer("127.0.0.1:0", nil)
-	
+
 	// Test empty frame
 	req := httptest.NewRequest("GET", "/api/frame", nil)
 	w := httptest.NewRecorder()
@@ -71,7 +73,7 @@ func TestWebServer_StatsEndpoint(t *testing.T) {
 	stats := &SimulationStats{
 		Global: &GlobalStats{
 			TotalRequests: 100,
-			Completed:      50,
+			Completed:     50,
 		},
 	}
 	frame := &SimulationFrame{
@@ -113,7 +115,7 @@ func TestWebServer_ControlEndpoint(t *testing.T) {
 	if !ok {
 		t.Fatal("Expected command, got none")
 	}
-	if cmd.Type != CommandPause {
+	if cmd.Type != visual.CommandPause {
 		t.Errorf("Expected pause command, got %s", cmd.Type)
 	}
 
@@ -131,17 +133,17 @@ func TestWebServer_ControlEndpoint(t *testing.T) {
 	if !ok {
 		t.Fatal("Expected command, got none")
 	}
-	if cmd.Type != CommandResume {
+	if cmd.Type != visual.CommandResume {
 		t.Errorf("Expected resume command, got %s", cmd.Type)
 	}
 
 	// Test reset command with config
 	cfg := &Config{
-		NumMasters: 2,
-		NumSlaves:  2,
-		TotalCycles: 100,
+		NumMasters:        2,
+		NumSlaves:         2,
+		TotalCycles:       100,
 		RequestRateConfig: 0.5,
-		SlaveWeights: []int{1, 1},
+		SlaveWeights:      []int{1, 1},
 	}
 	cfgJSON, _ := json.Marshal(map[string]interface{}{
 		"type":   "reset",
@@ -159,14 +161,18 @@ func TestWebServer_ControlEndpoint(t *testing.T) {
 	if !ok {
 		t.Fatal("Expected command, got none")
 	}
-	if cmd.Type != CommandReset {
+	if cmd.Type != visual.CommandReset {
 		t.Errorf("Expected reset command, got %s", cmd.Type)
 	}
 	if cmd.ConfigOverride == nil {
 		t.Fatal("Expected config override, got nil")
 	}
-	if cmd.ConfigOverride.NumMasters != 2 {
-		t.Errorf("Expected 2 masters, got %d", cmd.ConfigOverride.NumMasters)
+	override, ok := cmd.ConfigOverride.(*Config)
+	if !ok {
+		t.Fatal("Expected *Config override type")
+	}
+	if override.NumMasters != 2 {
+		t.Errorf("Expected 2 masters, got %d", override.NumMasters)
 	}
 
 	// Test invalid command type
@@ -221,7 +227,7 @@ func TestWebServer_NextCommand_NonBlocking(t *testing.T) {
 	if ok {
 		t.Errorf("Expected no command, got %v", cmd)
 	}
-	if cmd.Type != CommandNone {
+	if cmd.Type != visual.CommandNone {
 		t.Errorf("Expected CommandNone, got %s", cmd.Type)
 	}
 
@@ -237,8 +243,7 @@ func TestWebServer_NextCommand_NonBlocking(t *testing.T) {
 	if !ok {
 		t.Fatal("Expected command, got none")
 	}
-	if cmd.Type != CommandPause {
+	if cmd.Type != visual.CommandPause {
 		t.Errorf("Expected pause command, got %s", cmd.Type)
 	}
 }
-

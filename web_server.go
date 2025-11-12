@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"sync"
+
+	"flow_sim/visual"
 )
 
 // WebServer provides HTTP endpoints for visualization and control.
@@ -74,7 +76,7 @@ func (ws *WebServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // queueCommand queues a control command. Returns true if queued successfully.
-func (ws *WebServer) queueCommand(cmd ControlCommand) bool {
+func (ws *WebServer) queueCommand(cmd visual.ControlCommand) bool {
 	if ws.commands == nil {
 		return false
 	}
@@ -82,17 +84,17 @@ func (ws *WebServer) queueCommand(cmd ControlCommand) bool {
 }
 
 // NextCommand returns the next control command if available, non-blocking.
-func (ws *WebServer) NextCommand() (ControlCommand, bool) {
+func (ws *WebServer) NextCommand() (visual.ControlCommand, bool) {
 	if ws.commands == nil {
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 	return ws.commands.TryDequeue()
 }
 
 // WaitCommand blocks until a control command is available or the context is cancelled.
-func (ws *WebServer) WaitCommand(ctx context.Context) (ControlCommand, bool) {
+func (ws *WebServer) WaitCommand(ctx context.Context) (visual.ControlCommand, bool) {
 	if ws.commands == nil {
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 	return ws.commands.Next(ctx)
 }
@@ -106,16 +108,16 @@ type controlRequest struct {
 
 // processControlRequest processes a control request and returns a ControlCommand.
 // Returns (command, error). If error is not nil, the command is invalid.
-func (ws *WebServer) processControlRequest(req *controlRequest) (*ControlCommand, error) {
-	var cmd ControlCommand
+func (ws *WebServer) processControlRequest(req *controlRequest) (*visual.ControlCommand, error) {
+	var cmd visual.ControlCommand
 
 	switch req.Type {
 	case "pause":
-		cmd.Type = CommandPause
+		cmd.Type = visual.CommandPause
 	case "resume":
-		cmd.Type = CommandResume
+		cmd.Type = visual.CommandResume
 	case "reset":
-		cmd.Type = CommandReset
+		cmd.Type = visual.CommandReset
 		if req.ConfigName != "" {
 			predefinedCfg := GetConfigByName(req.ConfigName)
 			if predefinedCfg == nil {
@@ -132,7 +134,7 @@ func (ws *WebServer) processControlRequest(req *controlRequest) (*ControlCommand
 			cmd.ConfigOverride = req.Config
 		}
 	case "step":
-		cmd.Type = CommandStep
+		cmd.Type = visual.CommandStep
 	default:
 		return nil, &validationError{msg: "Invalid command type: " + req.Type}
 	}

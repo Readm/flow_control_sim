@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+
+	"flow_sim/visual"
 )
 
 func (ws *WebServer) handleControl(w http.ResponseWriter, r *http.Request) {
@@ -35,11 +37,11 @@ func (ws *WebServer) handleControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if cmd.Type == CommandReset {
+	if cmd.Type == visual.CommandReset {
 		GetLogger().Debugf("Processing reset command, ConfigName=%s", req.ConfigName)
-		if cmd.ConfigOverride != nil {
+		if cfg, ok := cmd.ConfigOverride.(*Config); ok {
 			GetLogger().Debugf("Found config '%s': NumMasters=%d, NumSlaves=%d, TotalCycles=%d",
-				req.ConfigName, cmd.ConfigOverride.NumMasters, cmd.ConfigOverride.NumSlaves, cmd.ConfigOverride.TotalCycles)
+				req.ConfigName, cfg.NumMasters, cfg.NumSlaves, cfg.TotalCycles)
 		}
 	}
 

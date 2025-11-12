@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+
+	"flow_sim/visual"
 )
 
 // WebVisualizer bridges the simulator with the web server.
@@ -46,28 +48,29 @@ func (w *WebVisualizer) IsHeadless() bool {
 }
 
 // PublishFrame updates the server with the latest frame.
-func (w *WebVisualizer) PublishFrame(frame *SimulationFrame) {
-	if w.server != nil {
-		w.server.UpdateFrame(frame)
+func (w *WebVisualizer) PublishFrame(frame any) {
+	sf, _ := frame.(*SimulationFrame)
+	if w.server != nil && sf != nil {
+		w.server.UpdateFrame(sf)
 	}
 }
 
 // NextCommand returns the next control command if available, non-blocking.
-func (w *WebVisualizer) NextCommand() (ControlCommand, bool) {
+func (w *WebVisualizer) NextCommand() (visual.ControlCommand, bool) {
 	if w.server == nil {
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 	cmd, ok := w.server.NextCommand()
 	if !ok {
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 	return cmd, true
 }
 
 // WaitCommand blocks until a command is available or the context is cancelled.
-func (w *WebVisualizer) WaitCommand(ctx context.Context) (ControlCommand, bool) {
+func (w *WebVisualizer) WaitCommand(ctx context.Context) (visual.ControlCommand, bool) {
 	if w.server == nil {
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 	return w.server.WaitCommand(ctx)
 }

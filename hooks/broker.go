@@ -6,6 +6,38 @@ import (
 	"flow_sim/core"
 )
 
+// PluginCategory represents the high-level role of a plugin.
+type PluginCategory string
+
+const (
+	// PluginCategoryCapability covers node or link behavioural extensions.
+	PluginCategoryCapability PluginCategory = "capability"
+	// PluginCategoryVisualization covers UI, timeline, or monitoring plugins.
+	PluginCategoryVisualization PluginCategory = "visualization"
+	// PluginCategoryPolicy covers routing, flow control, or consistency policies.
+	PluginCategoryPolicy PluginCategory = "policy"
+	// PluginCategoryInstrumentation covers metrics, tracing, and diagnostics.
+	PluginCategoryInstrumentation PluginCategory = "instrumentation"
+)
+
+// PluginDescriptor describes a plugin registered with the broker.
+type PluginDescriptor struct {
+	Name        string
+	Category    PluginCategory
+	Description string
+}
+
+// HookBundle groups multiple hook handlers that belong to one plugin.
+type HookBundle struct {
+	TxCreated     []TxCreatedHook
+	BeforeRoute   []BeforeRouteHook
+	AfterRoute    []AfterRouteHook
+	BeforeSend    []BeforeSendHook
+	AfterSend     []AfterSendHook
+	BeforeProcess []BeforeProcessHook
+	AfterProcess  []AfterProcessHook
+}
+
 // TxCreatedContext carries information for transaction creation hooks.
 type TxCreatedContext struct {
 	Packet      *core.Packet
@@ -27,6 +59,9 @@ type PluginBroker struct {
 	afterSendHooks     []AfterSendHook
 	beforeProcessHooks []BeforeProcessHook
 	afterProcessHooks  []AfterProcessHook
+
+	pluginCatalog map[PluginCategory][]PluginDescriptor
+	pluginIndex   map[string]PluginDescriptor
 }
 
 // NewPluginBroker creates an empty broker instance.
@@ -39,6 +74,8 @@ func NewPluginBroker() *PluginBroker {
 		afterSendHooks:     make([]AfterSendHook, 0),
 		beforeProcessHooks: make([]BeforeProcessHook, 0),
 		afterProcessHooks:  make([]AfterProcessHook, 0),
+		pluginCatalog:      make(map[PluginCategory][]PluginDescriptor),
+		pluginIndex:        make(map[string]PluginDescriptor),
 	}
 }
 
@@ -61,9 +98,10 @@ type RouteContext struct {
 
 // MessageContext provides data for send/receive hook handlers.
 type MessageContext struct {
-	Packet *core.Packet
-	NodeID int
-	Cycle  int
+	Packet   *core.Packet
+	NodeID   int
+	TargetID int
+	Cycle    int
 }
 
 // ProcessContext provides data for process stage hooks.
@@ -251,7 +289,6 @@ func (p *PluginBroker) EmitTxCreated(ctx *TxCreatedContext) error {
 	if p == nil || ctx == nil {
 		return nil
 	}
-
 	p.mu.RLock()
 	handlers := make([]TxCreatedHook, len(p.txCreatedHooks))
 	copy(handlers, p.txCreatedHooks)
@@ -263,4 +300,91 @@ func (p *PluginBroker) EmitTxCreated(ctx *TxCreatedContext) error {
 		}
 	}
 	return nil
+}
+
+// RegisterBundle registers a plugin descriptor together with all hook handlers.
+func (p *PluginBroker) RegisterBundle(desc PluginDescriptor, bundle HookBundle) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.registerDescriptorLocked(desc)
+
+	if len(bundle.TxCreated) > 0 {
+		p.txCreatedHooks = append(p.txCreatedHooks, bundle.TxCreated...)
+	}
+	if len(bundle.BeforeRoute) > 0 {
+		p.beforeRouteHooks = append(p.beforeRouteHooks, bundle.BeforeRoute...)
+	}
+	if len(bundle.AfterRoute) > 0 {
+		p.afterRouteHooks = append(p.afterRouteHooks, bundle.AfterRoute...)
+	}
+	if len(bundle.BeforeSend) > 0 {
+		p.beforeSendHooks = append(p.beforeSendHooks, bundle.BeforeSend...)
+	}
+	if len(bundle.AfterSend) > 0 {
+		p.afterSendHooks = append(p.afterSendHooks, bundle.AfterSend...)
+	}
+	if len(bundle.BeforeProcess) > 0 {
+		p.beforeProcessHooks = append(p.beforeProcessHooks, bundle.BeforeProcess...)
+	}
+	if len(bundle.AfterProcess) > 0 {
+		p.afterProcessHooks = append(p.afterProcessHooks, bundle.AfterProcess...)
+	}
+}
+
+// RegisterPluginMetadata stores plugin metadata without registering hooks.
+func (p *PluginBroker) RegisterPluginMetadata(desc PluginDescriptor) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.registerDescriptorLocked(desc)
+}
+
+// ListPlugins returns descriptors for plugins in the requested category.
+func (p *PluginBroker) ListPlugins(category PluginCategory) []PluginDescriptor {
+	if p == nil {
+		return nil
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	catalog := p.pluginCatalog[category]
+	if len(catalog) == 0 {
+		return nil
+	}
+	out := make([]PluginDescriptor, len(catalog))
+	copy(out, catalog)
+	return out
+}
+
+// ListAllPlugins returns descriptors of every registered plugin.
+func (p *PluginBroker) ListAllPlugins() []PluginDescriptor {
+	if p == nil {
+		return nil
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	out := make([]PluginDescriptor, 0, len(p.pluginIndex))
+	for _, desc := range p.pluginIndex {
+		out = append(out, desc)
+	}
+	return out
+}
+
+func (p *PluginBroker) registerDescriptorLocked(desc PluginDescriptor) {
+	if desc.Name == "" {
+		return
+	}
+	if _, exists := p.pluginIndex[desc.Name]; exists {
+		return
+	}
+	p.pluginIndex[desc.Name] = desc
+	category := desc.Category
+	p.pluginCatalog[category] = append(p.pluginCatalog[category], desc)
 }

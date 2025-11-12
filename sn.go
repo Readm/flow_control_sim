@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 
+	"flow_sim/capabilities"
 	"flow_sim/hooks"
 	"flow_sim/queue"
 )
@@ -24,6 +26,10 @@ type SlaveNode struct {
 
 	mu       sync.Mutex
 	bindings *NodeCycleBindings
+
+	capabilities          []capabilities.NodeCapability
+	capabilityRegistry    map[string]struct{}
+	defaultCapsRegistered bool
 }
 
 func NewSlaveNode(id int, rate int) *SlaveNode {
@@ -88,11 +94,87 @@ func (sn *SlaveNode) dequeueHook(p *Packet, cycle int) {
 // SetTransactionManager sets the transaction manager for event recording
 func (sn *SlaveNode) SetTransactionManager(txnMgr *TransactionManager) {
 	sn.txnMgr = txnMgr
+	sn.ensureDefaultCapabilities()
 }
 
 // SetPluginBroker assigns the hook broker for process lifecycle callbacks.
 func (sn *SlaveNode) SetPluginBroker(b *hooks.PluginBroker) {
 	sn.broker = b
+	sn.ensureDefaultCapabilities()
+}
+
+func (sn *SlaveNode) ensureDefaultCapabilities() {
+	if sn.defaultCapsRegistered {
+		return
+	}
+	if sn.broker == nil {
+		return
+	}
+	before := func(ctx *hooks.ProcessContext) error {
+		if sn.txnMgr == nil || ctx == nil || ctx.Packet == nil || ctx.Packet.TransactionID == 0 {
+			return nil
+		}
+		event := &PacketEvent{
+			TransactionID:  ctx.Packet.TransactionID,
+			PacketID:       ctx.Packet.ID,
+			ParentPacketID: ctx.Packet.ParentPacketID,
+			NodeID:         ctx.NodeID,
+			EventType:      PacketProcessingStart,
+			Cycle:          ctx.Cycle,
+			EdgeKey:        nil,
+		}
+		sn.txnMgr.RecordPacketEvent(event)
+		return nil
+	}
+	after := func(ctx *hooks.ProcessContext) error {
+		if sn.txnMgr == nil || ctx == nil || ctx.Packet == nil || ctx.Packet.TransactionID == 0 {
+			return nil
+		}
+		event := &PacketEvent{
+			TransactionID:  ctx.Packet.TransactionID,
+			PacketID:       ctx.Packet.ID,
+			ParentPacketID: ctx.Packet.ParentPacketID,
+			NodeID:         ctx.NodeID,
+			EventType:      PacketProcessingEnd,
+			Cycle:          ctx.Cycle,
+			EdgeKey:        nil,
+		}
+		sn.txnMgr.RecordPacketEvent(event)
+		return nil
+	}
+	cap := capabilities.NewHookCapability(
+		fmt.Sprintf("slave-processing-%d", sn.ID),
+		hooks.PluginCategoryInstrumentation,
+		"default slave processing instrumentation",
+		hooks.HookBundle{
+			BeforeProcess: []hooks.BeforeProcessHook{before},
+			AfterProcess:  []hooks.AfterProcessHook{after},
+		},
+	)
+	sn.registerCapability(cap)
+	sn.defaultCapsRegistered = true
+}
+
+func (sn *SlaveNode) registerCapability(cap capabilities.NodeCapability) {
+	if cap == nil || sn.broker == nil {
+		return
+	}
+	desc := cap.Descriptor()
+	if desc.Name == "" {
+		desc.Name = fmt.Sprintf("slave-capability-%d-%d", sn.ID, len(sn.capabilities))
+	}
+	if sn.capabilityRegistry == nil {
+		sn.capabilityRegistry = make(map[string]struct{})
+	}
+	if _, exists := sn.capabilityRegistry[desc.Name]; exists {
+		return
+	}
+	if err := cap.Register(sn.broker); err != nil {
+		GetLogger().Warnf("SlaveNode %d capability %s registration failed: %v", sn.ID, desc.Name, err)
+		return
+	}
+	sn.capabilityRegistry[desc.Name] = struct{}{}
+	sn.capabilities = append(sn.capabilities, cap)
 }
 
 // ConfigureCycleRuntime sets the coordinator bindings for the node.
@@ -183,40 +265,12 @@ func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 
 	responses := make([]*Packet, 0, len(processed))
 	for _, req := range processed {
-		// Record PacketProcessingStart event
-		if sn.txnMgr != nil && req.TransactionID > 0 {
-			event := &PacketEvent{
-				TransactionID:  req.TransactionID,
-				PacketID:       req.ID,
-				ParentPacketID: req.ParentPacketID,
-				NodeID:         sn.ID,
-				EventType:      PacketProcessingStart,
-				Cycle:          cycle,
-				EdgeKey:        nil, // in-node event
-			}
-			sn.txnMgr.RecordPacketEvent(event)
-		}
-
 		req.CompletedAt = cycle
 		sn.ProcessedCount++
 
 		// Generate CHI protocol response
 		// For ReadNoSnp, generate CompData (Completion with Data)
 		resp := sn.generateCHIResponse(req, cycle, packetIDs)
-
-		// Record PacketProcessingEnd event
-		if sn.txnMgr != nil && req.TransactionID > 0 {
-			event := &PacketEvent{
-				TransactionID:  req.TransactionID,
-				PacketID:       req.ID,
-				ParentPacketID: req.ParentPacketID,
-				NodeID:         sn.ID,
-				EventType:      PacketProcessingEnd,
-				Cycle:          cycle,
-				EdgeKey:        nil, // in-node event
-			}
-			sn.txnMgr.RecordPacketEvent(event)
-		}
 
 		// Record PacketGenerated event for the response
 		if sn.txnMgr != nil && resp.TransactionID > 0 {

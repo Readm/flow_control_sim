@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 
+	"flow_sim/capabilities"
 	"flow_sim/core"
 	"flow_sim/hooks"
 	"flow_sim/policy"
@@ -50,6 +52,10 @@ type RequestNode struct {
 
 	mu       sync.Mutex
 	bindings *NodeCycleBindings
+
+	capabilities          []capabilities.NodeCapability
+	capabilityRegistry    map[string]struct{}
+	defaultCapsRegistered bool
 }
 
 func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *RequestNode {
@@ -125,11 +131,13 @@ func (rn *RequestNode) SetTxFactory(factory *TxFactory) {
 // SetPluginBroker assigns the hook broker for lifecycle callbacks.
 func (rn *RequestNode) SetPluginBroker(b *hooks.PluginBroker) {
 	rn.broker = b
+	rn.ensureDefaultCapabilities()
 }
 
 // SetPolicyManager assigns the policy manager for routing decisions.
 func (rn *RequestNode) SetPolicyManager(m policy.Manager) {
 	rn.policyMgr = m
+	rn.ensureDefaultCapabilities()
 }
 
 // GenerateReadNoSnpRequest creates a CHI ReadNoSnp transaction request packet.
@@ -291,15 +299,6 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 			targetID = routeCtx.TargetID
 		}
 
-		if rn.policyMgr != nil {
-			resolvedTarget, err := rn.policyMgr.ResolveRoute(p, rn.ID, targetID)
-			if err != nil {
-				GetLogger().Warnf("RequestNode %d policy route failed: %v", rn.ID, err)
-				continue
-			}
-			targetID = resolvedTarget
-		}
-
 		if rn.broker != nil {
 			routeCtx := &hooks.RouteContext{
 				Packet:        p,
@@ -315,19 +314,13 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 
 		if rn.broker != nil {
 			ctx := &hooks.MessageContext{
-				Packet: p,
-				NodeID: rn.ID,
-				Cycle:  cycle,
+				Packet:   p,
+				NodeID:   rn.ID,
+				TargetID: targetID,
+				Cycle:    cycle,
 			}
 			if err := rn.broker.EmitBeforeSend(ctx); err != nil {
 				GetLogger().Warnf("RequestNode %d OnBeforeSend hook failed: %v", rn.ID, err)
-				continue
-			}
-		}
-
-		if rn.policyMgr != nil {
-			if err := rn.policyMgr.CheckFlowControl(p, rn.ID, targetID); err != nil {
-				GetLogger().Warnf("RequestNode %d flow control blocked packet: %v", rn.ID, err)
 				continue
 			}
 		}
@@ -344,9 +337,10 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 		}
 		if rn.broker != nil {
 			ctx := &hooks.MessageContext{
-				Packet: p,
-				NodeID: rn.ID,
-				Cycle:  cycle,
+				Packet:   p,
+				NodeID:   rn.ID,
+				TargetID: targetID,
+				Cycle:    cycle,
 			}
 			if err := rn.broker.EmitAfterSend(ctx); err != nil {
 				GetLogger().Warnf("RequestNode %d OnAfterSend hook failed: %v", rn.ID, err)
@@ -428,6 +422,51 @@ func (rn *RequestNode) SetTransactionManager(txnMgr *TransactionManager) {
 // SetPacketIDAllocator assigns the packet ID allocator for generating snoop response packets.
 func (rn *RequestNode) SetPacketIDAllocator(allocator *PacketIDAllocator) {
 	rn.packetIDs = allocator
+}
+
+func (rn *RequestNode) ensureDefaultCapabilities() {
+	if rn.defaultCapsRegistered {
+		return
+	}
+	if rn.policyMgr == nil || rn.broker == nil {
+		return
+	}
+	caps := []capabilities.NodeCapability{
+		capabilities.NewRoutingCapability(
+			fmt.Sprintf("request-routing-%d", rn.ID),
+			rn.policyMgr,
+		),
+		capabilities.NewFlowControlCapability(
+			fmt.Sprintf("request-flow-%d", rn.ID),
+			rn.policyMgr,
+		),
+	}
+	for _, cap := range caps {
+		rn.registerCapability(cap)
+	}
+	rn.defaultCapsRegistered = true
+}
+
+func (rn *RequestNode) registerCapability(cap capabilities.NodeCapability) {
+	if cap == nil || rn.broker == nil {
+		return
+	}
+	desc := cap.Descriptor()
+	if desc.Name == "" {
+		desc.Name = fmt.Sprintf("request-capability-%d-%d", rn.ID, len(rn.capabilities))
+	}
+	if rn.capabilityRegistry == nil {
+		rn.capabilityRegistry = make(map[string]struct{})
+	}
+	if _, exists := rn.capabilityRegistry[desc.Name]; exists {
+		return
+	}
+	if err := cap.Register(rn.broker); err != nil {
+		GetLogger().Warnf("RequestNode %d capability %s registration failed: %v", rn.ID, desc.Name, err)
+		return
+	}
+	rn.capabilityRegistry[desc.Name] = struct{}{}
+	rn.capabilities = append(rn.capabilities, cap)
 }
 
 // getCacheState returns the MESI state for the given address.

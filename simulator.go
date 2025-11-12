@@ -8,8 +8,11 @@ import (
 	"time"
 
 	"flow_sim/hooks"
+	incentiveplugin "flow_sim/plugins/incentives"
+	visualplugin "flow_sim/plugins/visualization"
 	"flow_sim/policy"
 	simruntime "flow_sim/simulator"
+	"flow_sim/visual"
 )
 
 type Simulator struct {
@@ -28,9 +31,9 @@ type Simulator struct {
 	pktIDs      *PacketIDAllocator
 	txnMgr      *TransactionManager // Transaction manager for tracking transaction relationships
 	current     int
-	visualizer  Visualizer
-	commandLoop *simruntime.CommandLoop[ControlCommand]
-	runner      *simruntime.Runner[ControlCommand, *SimulationFrame]
+	visualizer  visual.Visualizer
+	commandLoop *simruntime.CommandLoop[visual.ControlCommand]
+	runner      *simruntime.Runner[visual.ControlCommand, *SimulationFrame]
 
 	isPaused  bool
 	isRunning bool
@@ -42,9 +45,12 @@ type Simulator struct {
 	pendingReset *Config
 	stepOnce     bool
 
-	pluginBroker *hooks.PluginBroker
-	txFactory    *TxFactory
-	policyMgr    policy.Manager
+	pluginBroker        *hooks.PluginBroker
+	pluginReg           *hooks.Registry
+	vizRegistered       bool
+	incentiveRegistered bool
+	txFactory           *TxFactory
+	policyMgr           policy.Manager
 }
 
 type cycleSignaler interface {
@@ -53,19 +59,19 @@ type cycleSignaler interface {
 }
 
 type visualizerCommandSource struct {
-	visualizer Visualizer
+	visualizer visual.Visualizer
 }
 
-func (s *visualizerCommandSource) NextCommand() (ControlCommand, bool) {
+func (s *visualizerCommandSource) NextCommand() (visual.ControlCommand, bool) {
 	if s == nil || s.visualizer == nil {
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 	return s.visualizer.NextCommand()
 }
 
-func (s *visualizerCommandSource) WaitCommand(ctx context.Context) (ControlCommand, bool) {
+func (s *visualizerCommandSource) WaitCommand(ctx context.Context) (visual.ControlCommand, bool) {
 	if s == nil || s.visualizer == nil {
-		return ControlCommand{Type: CommandNone}, false
+		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 	return s.visualizer.WaitCommand(ctx)
 }
@@ -205,19 +211,19 @@ func (s *Simulator) rebuildRuntimeHelpers() {
 		})
 	}
 
-	var commandLoop *simruntime.CommandLoop[ControlCommand]
+	var commandLoop *simruntime.CommandLoop[visual.ControlCommand]
 	if s.visualizer != nil {
-		commandLoop = simruntime.NewCommandLoop[ControlCommand](
+		commandLoop = simruntime.NewCommandLoop[visual.ControlCommand](
 			&visualizerCommandSource{visualizer: s.visualizer},
-			simruntime.CommandHandlerFunc[ControlCommand](s.handleCommand),
+			simruntime.CommandHandlerFunc[visual.ControlCommand](s.handleCommand),
 		)
 	} else {
-		commandLoop = simruntime.NewCommandLoop[ControlCommand](nil, simruntime.CommandHandlerFunc[ControlCommand](s.handleCommand))
+		commandLoop = simruntime.NewCommandLoop[visual.ControlCommand](nil, simruntime.CommandHandlerFunc[visual.ControlCommand](s.handleCommand))
 	}
 
 	s.commandLoop = commandLoop
 	if s.runner == nil {
-		s.runner = simruntime.NewRunner[ControlCommand, *SimulationFrame](commandLoop, visualBridge)
+		s.runner = simruntime.NewRunner[visual.ControlCommand, *SimulationFrame](commandLoop, visualBridge)
 	} else {
 		s.runner.UpdateCommandLoop(commandLoop)
 		s.runner.UpdateVisualBridge(visualBridge)
@@ -226,6 +232,140 @@ func (s *Simulator) rebuildRuntimeHelpers() {
 
 func (s *Simulator) visualEnabled() bool {
 	return s.runner != nil && s.runner.VisualEnabled()
+}
+
+func (s *Simulator) setVisualizer(v visual.Visualizer) {
+	s.visualizer = v
+}
+
+func (s *Simulator) configureVisualizer() {
+	if s.pluginReg == nil {
+		if s.visualizer == nil {
+			v := visual.NewNullVisualizer()
+			v.SetHeadless(true)
+			s.setVisualizer(v)
+		}
+		s.rebuildRuntimeHelpers()
+		return
+	}
+
+	if !s.vizRegistered {
+		factories := map[string]visualplugin.Factory{
+			"web": func() (visual.Visualizer, error) {
+				v := NewWebVisualizer(s.txnMgr)
+				v.SetHeadless(false)
+				v.SetTransactionManager(s.txnMgr)
+				return v, nil
+			},
+			"none": func() (visual.Visualizer, error) {
+				v := visual.NewNullVisualizer()
+				v.SetHeadless(true)
+				return v, nil
+			},
+		}
+
+		if err := visualplugin.Register(s.pluginReg, visualplugin.Options{
+			Factories:     factories,
+			SetVisualizer: s.setVisualizer,
+		}); err != nil {
+			GetLogger().Warnf("visualization plugin registration failed: %v", err)
+			v := visual.NewNullVisualizer()
+			v.SetHeadless(true)
+			s.setVisualizer(v)
+			s.rebuildRuntimeHelpers()
+			return
+		}
+		s.vizRegistered = true
+	}
+
+	mode := s.cfg.VisualMode
+	if mode == "" {
+		mode = "web"
+	}
+	if s.cfg.Headless || mode == "none" {
+		mode = "none"
+	}
+
+	if err := s.pluginReg.LoadGlobal([]string{"visualization/" + mode}); err != nil {
+		GetLogger().Warnf("visualization plugin load failed: %v", err)
+		v := visual.NewNullVisualizer()
+		v.SetHeadless(true)
+		s.setVisualizer(v)
+	}
+
+	if s.visualizer == nil {
+		v := visual.NewNullVisualizer()
+		v.SetHeadless(true)
+		s.setVisualizer(v)
+	}
+
+	if viz, ok := s.visualizer.(interface{ SetTransactionManager(*TransactionManager) }); ok {
+		viz.SetTransactionManager(s.txnMgr)
+	}
+
+	s.rebuildRuntimeHelpers()
+}
+
+func (s *Simulator) configureIncentives() {
+	if s.pluginReg == nil {
+		return
+	}
+	if !s.incentiveRegistered {
+		factories := map[string]incentiveplugin.Factory{
+			"random": s.randomIncentiveFactory(),
+			"noop": func(b *hooks.PluginBroker) error {
+				desc := hooks.PluginDescriptor{
+					Name:        "incentive/noop",
+					Category:    hooks.PluginCategoryInstrumentation,
+					Description: "no-op incentive plugin",
+				}
+				b.RegisterPluginMetadata(desc)
+				return nil
+			},
+		}
+		if err := incentiveplugin.Register(s.pluginReg, incentiveplugin.Options{
+			Factories: factories,
+		}); err != nil {
+			GetLogger().Warnf("incentive plugin registration failed: %v", err)
+			return
+		}
+		s.incentiveRegistered = true
+	}
+	if len(s.cfg.Plugins.Incentives) == 0 {
+		return
+	}
+	names := make([]string, 0, len(s.cfg.Plugins.Incentives))
+	for _, name := range s.cfg.Plugins.Incentives {
+		names = append(names, "incentive/"+name)
+	}
+	if err := s.pluginReg.LoadGlobal(names); err != nil {
+		GetLogger().Warnf("incentive plugin load failed: %v", err)
+	}
+}
+
+func (s *Simulator) randomIncentiveFactory() incentiveplugin.Factory {
+	return func(b *hooks.PluginBroker) error {
+		desc := hooks.PluginDescriptor{
+			Name:        "incentive/random",
+			Category:    hooks.PluginCategoryInstrumentation,
+			Description: "random incentive sampler",
+		}
+		bundle := hooks.HookBundle{
+			AfterProcess: []hooks.AfterProcessHook{
+				func(ctx *hooks.ProcessContext) error {
+					if ctx == nil || ctx.Packet == nil || s.rng == nil {
+						return nil
+					}
+					if s.rng.Intn(100) < 5 {
+						GetLogger().Debugf("[incentive] reward triggered node=%d packet=%d", ctx.NodeID, ctx.Packet.ID)
+					}
+					return nil
+				},
+			},
+		}
+		b.RegisterBundle(desc, bundle)
+		return nil
+	}
 }
 
 func NewSimulator(cfg *Config) *Simulator {
@@ -241,6 +381,7 @@ func NewSimulator(cfg *Config) *Simulator {
 	pktAlloc := NewPacketIDAllocator()
 	txnMgr := NewTransactionManager()
 	broker := hooks.NewPluginBroker()
+	registry := hooks.NewRegistry(broker)
 	txFactory := NewTxFactory(broker, txnMgr, pktAlloc)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(cfg, rng)
@@ -261,6 +402,7 @@ func NewSimulator(cfg *Config) *Simulator {
 		pluginBroker: broker,
 		txFactory:    txFactory,
 		policyMgr:    policy.NewDefaultManager(),
+		pluginReg:    registry,
 	}
 
 	for _, m := range sim.Masters {
@@ -279,12 +421,8 @@ func NewSimulator(cfg *Config) *Simulator {
 	}
 
 	sim.edges = sim.buildEdges()
-	sim.visualizer = sim.initVisualizer()
-	if viz, ok := sim.visualizer.(*WebVisualizer); ok {
-		viz.SetTransactionManager(sim.txnMgr)
-	}
-
-	sim.rebuildRuntimeHelpers()
+	sim.configureVisualizer()
+	sim.configureIncentives()
 
 	if sim.visualEnabled() {
 		sim.isPaused = true
@@ -479,21 +617,6 @@ func (s *Simulator) updateCoordinatorLimit() {
 	}
 
 	s.coordinator.SetMaxTarget(limit)
-}
-
-func (s *Simulator) initVisualizer() Visualizer {
-	mode := s.cfg.VisualMode
-	if mode == "" {
-		mode = "web"
-	}
-	if s.cfg.Headless || mode == "none" {
-		viz := NewNullVisualizer()
-		viz.SetHeadless(true)
-		return viz
-	}
-	viz := NewWebVisualizer(s.txnMgr)
-	viz.SetHeadless(false)
-	return viz
 }
 
 func (s *Simulator) buildEdges() []EdgeSnapshot {
@@ -831,10 +954,6 @@ func (s *Simulator) reset(newCfg *Config) {
 	}
 	s.txnMgr.SetHistoryConfig(historyConfig)
 
-	if viz, ok := s.visualizer.(*WebVisualizer); ok {
-		viz.SetTransactionManager(s.txnMgr)
-	}
-
 	s.rebuildRuntimeHelpers()
 
 	// If web frontend is available, pause at cycle 0 after reset
@@ -861,30 +980,33 @@ func (s *Simulator) stopRuntimes() {
 	s.coordinator = nil
 }
 
-func (s *Simulator) handleCommand(cmd ControlCommand) bool {
-	if cmd.Type == CommandNone {
+func (s *Simulator) handleCommand(cmd visual.ControlCommand) bool {
+	if cmd.Type == visual.CommandNone {
 		return true
 	}
 
 	switch cmd.Type {
-	case CommandPause:
+	case visual.CommandPause:
 		s.stepOnce = false
 		s.isPaused = true
 		s.updateCoordinatorLimit()
-	case CommandResume:
+	case visual.CommandResume:
 		s.stepOnce = false
 		s.isPaused = false
 		s.updateCoordinatorLimit()
-	case CommandStep:
+	case visual.CommandStep:
 		if s.isPaused {
 			s.stepOnce = true
 			s.isPaused = false
 			s.updateCoordinatorLimit()
 		}
-	case CommandReset:
+	case visual.CommandReset:
 		if s.pendingReset == nil {
-			cfg := cmd.ConfigOverride
-			if cfg == nil {
+			var cfg *Config
+			if provided, ok := cmd.ConfigOverride.(*Config); ok && provided != nil {
+				cfgCopy := *provided
+				cfg = &cfgCopy
+			} else {
 				cfgCopy := *s.cfg
 				cfg = &cfgCopy
 			}

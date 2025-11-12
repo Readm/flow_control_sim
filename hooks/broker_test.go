@@ -138,3 +138,67 @@ func TestTxCreatedHook(t *testing.T) {
 		t.Fatalf("expected hook to be called")
 	}
 }
+
+func TestRegisterBundle(t *testing.T) {
+	b := NewPluginBroker()
+
+	desc := PluginDescriptor{
+		Name:        "test-bundle",
+		Category:    PluginCategoryCapability,
+		Description: "sample bundle",
+	}
+
+	beforeSendCalled := 0
+	afterProcessCalled := 0
+
+	bundle := HookBundle{
+		BeforeSend: []BeforeSendHook{
+			func(ctx *MessageContext) error {
+				beforeSendCalled++
+				return nil
+			},
+		},
+		AfterProcess: []AfterProcessHook{
+			func(ctx *ProcessContext) error {
+				afterProcessCalled++
+				return nil
+			},
+		},
+	}
+
+	b.RegisterBundle(desc, bundle)
+
+	if plugins := b.ListPlugins(PluginCategoryCapability); len(plugins) != 1 {
+		t.Fatalf("expected 1 plugin descriptor, got %d", len(plugins))
+	}
+
+	if err := b.EmitBeforeSend(&MessageContext{}); err != nil {
+		t.Fatalf("EmitBeforeSend returned error: %v", err)
+	}
+	if err := b.EmitAfterProcess(&ProcessContext{}); err != nil {
+		t.Fatalf("EmitAfterProcess returned error: %v", err)
+	}
+
+	if beforeSendCalled != 1 {
+		t.Fatalf("expected before send hook to be called once, got %d", beforeSendCalled)
+	}
+	if afterProcessCalled != 1 {
+		t.Fatalf("expected after process hook to be called once, got %d", afterProcessCalled)
+	}
+}
+
+func TestRegisterPluginMetadata(t *testing.T) {
+	b := NewPluginBroker()
+
+	desc := PluginDescriptor{
+		Name:     "test-metadata",
+		Category: PluginCategoryVisualization,
+	}
+	b.RegisterPluginMetadata(desc)
+	b.RegisterPluginMetadata(desc)
+
+	all := b.ListAllPlugins()
+	if len(all) != 1 {
+		t.Fatalf("expected 1 descriptor, got %d", len(all))
+	}
+}
