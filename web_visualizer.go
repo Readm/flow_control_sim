@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/Readm/flow_sim/hooks"
 	"github.com/Readm/flow_sim/visual"
 )
 
@@ -73,4 +74,13 @@ func (w *WebVisualizer) WaitCommand(ctx context.Context) (visual.ControlCommand,
 		return visual.ControlCommand{Type: visual.CommandNone}, false
 	}
 	return w.server.WaitCommand(ctx)
+}
+
+func (w *WebVisualizer) SetPluginRegistry(reg *hooks.Registry) {
+	if w == nil {
+		return
+	}
+	if w.server != nil {
+		w.server.SetPluginRegistry(reg)
+	}
 }

@@ -5,18 +5,25 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/Readm/flow_sim/hooks"
 	"github.com/Readm/flow_sim/visual"
 )
 
 // WebServer provides HTTP endpoints for visualization and control.
 type WebServer struct {
-	mu          sync.RWMutex
-	latestFrame *SimulationFrame
-	latestStats *SimulationStats
-	commands    CommandQueue
-	server      *http.Server
-	hub         *wsHub
-	txnMgr      *TransactionManager // for transaction timeline API
+	mu             sync.RWMutex
+	latestFrame    *SimulationFrame
+	latestStats    *SimulationStats
+	commands       CommandQueue
+	server         *http.Server
+	hub            *wsHub
+	txnMgr         *TransactionManager // for transaction timeline API
+	pluginRegistry *hooks.Registry
+	topologyMu     sync.RWMutex
+	topologyDraft  *TopologyDraft
+	topologyCached *TopologyDraft
+	policyMu       sync.RWMutex
+	policyDraft    *PolicyDraft
 }
 
 // NewWebServer creates a new web server instance.
@@ -51,6 +58,8 @@ func (ws *WebServer) registerHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/stats", ws.handleStats)
 	mux.HandleFunc("/api/control", ws.handleControl)
 	mux.HandleFunc("/api/configs", ws.handleConfigs)
+	mux.HandleFunc("/api/topology", ws.handleTopology)
+	mux.HandleFunc("/api/policy", ws.handlePolicy)
 	mux.HandleFunc("/api/transactions", ws.handleTransactions)
 	mux.HandleFunc("/api/transaction/", ws.handleTransactionTimeline)
 	mux.HandleFunc("/api/transactions/timelines", ws.handleTransactionTimelines)
@@ -126,11 +135,13 @@ func (ws *WebServer) processControlRequest(req *controlRequest) (*visual.Control
 			if req.TotalCycles != nil && *req.TotalCycles > 0 {
 				predefinedCfg.TotalCycles = *req.TotalCycles
 			}
+			ws.applyPolicyDraftToConfig(predefinedCfg)
 			cmd.ConfigOverride = predefinedCfg
 		} else if req.Config != nil {
 			if err := ws.validateConfig(req.Config); err != nil {
 				return nil, err
 			}
+			ws.applyPolicyDraftToConfig(req.Config)
 			cmd.ConfigOverride = req.Config
 		}
 	case "step":
@@ -140,6 +151,19 @@ func (ws *WebServer) processControlRequest(req *controlRequest) (*visual.Control
 	}
 
 	return &cmd, nil
+}
+
+func (ws *WebServer) applyPolicyDraftToConfig(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	ws.policyMu.RLock()
+	draft := ws.policyDraft
+	ws.policyMu.RUnlock()
+	if draft == nil {
+		return
+	}
+	cfg.Plugins.Incentives = append([]string{}, draft.Incentives...)
 }
 
 func (ws *WebServer) validateConfig(cfg *Config) error {
@@ -170,5 +194,11 @@ func (e *validationError) Error() string {
 func (ws *WebServer) SetTransactionManager(txnMgr *TransactionManager) {
 	ws.mu.Lock()
 	ws.txnMgr = txnMgr
+	ws.mu.Unlock()
+}
+
+func (ws *WebServer) SetPluginRegistry(reg *hooks.Registry) {
+	ws.mu.Lock()
+	ws.pluginRegistry = reg
 	ws.mu.Unlock()
 }

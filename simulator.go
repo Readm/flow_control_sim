@@ -255,6 +255,7 @@ func (s *Simulator) configureVisualizer() {
 				v := NewWebVisualizer(s.txnMgr)
 				v.SetHeadless(false)
 				v.SetTransactionManager(s.txnMgr)
+				v.SetPluginRegistry(s.pluginReg)
 				return v, nil
 			},
 			"none": func() (visual.Visualizer, error) {

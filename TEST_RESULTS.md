@@ -11,6 +11,12 @@
 - 执行命令：`go test ./... -timeout 60s`
 - 当前环境运行结果：全部测试通过
 
+### 2025-11-13 Web 多视图改造回归测试
+
+- 执行命令：`go test ./... -timeout 60s`
+- 当前环境：WSL2 + Go 1.21（依赖系统默认版本）
+- 结果：全部测试通过（core/hooks/policy/capabilities 等子模块均无失败用例）
+
 ## 测试配置
 
 ### 基础测试 (TestBasicFlow)
