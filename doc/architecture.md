@@ -42,7 +42,7 @@
 - **Metadata Map**：`Packet`、`Transaction` 等核心对象提供 `map[string]string` 的 Metadata 字段，以及 `Set/Get/Delete` 封装方法。插件或能力可在不修改核心结构的情况下附加自定义信息。
 - **Context 扩展**：当扩展场景需要更多信息时，应优先在 `RouteContext`、`MessageContext`、`ProcessContext` 中补充字段，而非修改核心结构体。
 - **能力注入**：默认策略以 Capability 的形式注册为 Hook，形成“核心 -> Hook -> 能力”链路，方便替换或禁用。
-- **原子能力**：缓存（`NewMESICacheCapability` / `NewHomeCacheCapability`）、目录（`NewDirectoryCapability`）与事务（`NewTransactionCapability`）均通过能力封装，节点仅保存接口引用，禁止直接维护内部 map。
+- **原子能力**：缓存（`NewCacheCapability` 及其包装 `NewMESICacheCapability` / `NewHomeCacheCapability`）、目录（`NewDirectoryCapability`）与事务（`NewTransactionCapability`）均通过能力封装，节点仅保存接口引用，禁止直接维护内部 map。
 - **外部桥接**：若需要对接外部模拟器或可视化系统，应通过 `OnAfterProcess`、`OnAfterSend` 等 Hook 输出事件，而不是直接耦合在核心代码中。
 
 ## 约束摘要

@@ -19,11 +19,11 @@
 
 | Node 类型 | 能力名称 | 说明 |
 |-----------|----------|------|
-| RequestNode | `NewMESICacheCapability` | 提供本地 MESI 缓存映射（可选，可替换或禁用）。 |
+| RequestNode | `NewMESICacheCapability` | 提供本地 MESI 缓存映射，基于通用缓存能力按需开启。 |
 |            | `NewTransactionCapability` | 封装 TxFactory / TransactionManager，负责生成请求与事务。 |
 |            | `NewRoutingCapability` | 在 `OnBeforeRoute` 阶段通过 `policy.Manager.ResolveRoute` 决策下一跳。 |
 |            | `NewFlowControlCapability` | 在 `OnBeforeSend` 阶段执行 `policy.Manager.CheckFlowControl`。 |
-| HomeNode   | `NewHomeCacheCapability` | 维护地址级缓存命中状态，可根据需要替换实现。 |
+| HomeNode   | `NewHomeCacheCapability` | 维护地址级缓存命中状态，可复用到其他组合场景。 |
 |            | `NewDirectoryCapability` | 维护地址 -> RN 集合的目录，支持动态增删。 |
 |            | `NewRoutingCapability` | HN 内部路由决策。 |
 |            | `NewFlowControlCapability` | 控制 HN→SN/HN→RN 出站流量。 |
@@ -50,8 +50,9 @@
 ## 4. Capability 库现状
 
 - **缓存类**：
-  - `NewMESICacheCapability`：提供请求侧 MESI 状态读写接口 `RequestCache`。
-  - `NewHomeCacheCapability`：提供主节点缓存行管理接口 `HomeCache`。
+  - `NewCacheCapability`：统一的缓存能力构造器，通过 `CacheConfig` 控制是否启用 MESI 状态或缓存行管理。
+  - `NewMESICacheCapability`：基于 `NewCacheCapability` 的包装，仅启用请求侧 MESI 状态读写接口 `RequestCache`。
+  - `NewHomeCacheCapability`：基于 `NewCacheCapability` 的包装，仅启用缓存行管理接口 `HomeCache`。
 - **目录类**：
   - `NewDirectoryCapability`：维护地址到节点集合的映射，暴露 `DirectoryStore`。
 - **事务类**：
@@ -67,10 +68,10 @@
 ## 5. 缓存与一致性实现
 
 - **RequestNode 缓存**：
-  - 由 `NewMESICacheCapability` 提供的 `RequestCache` 管理 MESI 状态，节点只调用 `GetState/SetState`。
+  - 由 `NewMESICacheCapability`（或自定义 `NewCacheCapability` 配置）提供的 `RequestCache` 管理 MESI 状态，节点只调用 `GetState/SetState`。
   - 能力内置 `HandleResponse` / `BuildSnoopResponse`，Snoop 响应与状态迁移完全由能力负责，可按需替换实现。
 - **HomeNode 缓存与目录**：
-  - `NewHomeCacheCapability` 管理缓存命中与失效，命中时直接返回 CompData。
+  - `NewHomeCacheCapability` 管理缓存命中与失效，缓存行包含 `State` / `Metadata`，命中时直接返回 CompData。
   - `NewDirectoryCapability` 维护 sharer 集合，驱动 Snoop 路径。
 - **SlaveNode 数据出口**：
   - 当前仍专注于 CompData/CompAck 响应，可通过新增 Capability 扩展写入延迟或 QoS。

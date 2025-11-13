@@ -110,6 +110,9 @@ func TestHomeCacheCapabilityUpdatesLines(t *testing.T) {
 	if !ok || !line.Valid {
 		t.Fatalf("expected valid cache line after update")
 	}
+	if line.State != core.MESIModified {
+		t.Fatalf("expected default state Modified, got %v", line.State)
+	}
 	if line.Address != addr {
 		t.Fatalf("expected stored address %x, got %x", addr, line.Address)
 	}
@@ -117,5 +120,46 @@ func TestHomeCacheCapabilityUpdatesLines(t *testing.T) {
 	store.Invalidate(addr)
 	if line, ok := store.GetLine(addr); ok && line.Valid {
 		t.Fatalf("expected cache line to be invalidated")
+	}
+}
+
+func TestUnifiedCacheCapabilitySupportsBothStores(t *testing.T) {
+	cap := NewCacheCapability("unified-cache-test", CacheConfig{
+		EnableRequest: true,
+		EnableLine:    true,
+		DefaultState:  core.MESIExclusive,
+	})
+
+	reqCap, ok := cap.(CacheWithRequestStore)
+	if !ok {
+		t.Fatalf("expected capability to support request cache")
+	}
+	homeCap, ok := cap.(CacheWithHomeStore)
+	if !ok {
+		t.Fatalf("expected capability to support home cache")
+	}
+
+	reqStore := reqCap.RequestCache()
+	if reqStore == nil {
+		t.Fatalf("expected non-nil request store")
+	}
+	homeStore := homeCap.HomeCache()
+	if homeStore == nil {
+		t.Fatalf("expected non-nil home store")
+	}
+
+	addr := uint64(0x3000)
+	reqStore.SetState(addr, core.MESIModified)
+	if state := reqStore.GetState(addr); state != core.MESIModified {
+		t.Fatalf("expected MESIModified state, got %v", state)
+	}
+
+	homeStore.UpdateLine(addr, HomeCacheLine{Valid: true})
+	line, ok := homeStore.GetLine(addr)
+	if !ok || !line.Valid {
+		t.Fatalf("expected valid line from home store")
+	}
+	if line.State != core.MESIExclusive {
+		t.Fatalf("expected default state Exclusive, got %v", line.State)
 	}
 }

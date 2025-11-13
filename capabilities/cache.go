@@ -7,17 +7,7 @@ import (
 	"github.com/Readm/flow_sim/hooks"
 )
 
-// CacheRole represents the intended owner of the cache capability.
-type CacheRole string
-
-const (
-	// CacheRoleRequest is used by request nodes to maintain MESI states.
-	CacheRoleRequest CacheRole = "request"
-	// CacheRoleHome is used by home nodes to maintain simple cache lines.
-	CacheRoleHome CacheRole = "home"
-)
-
-// RequestCache exposes MESI cache helpers for RequestNode.
+// RequestCache exposes MESI cache helpers.
 type RequestCache interface {
 	GetState(addr uint64) core.MESIState
 	SetState(addr uint64, state core.MESIState)
@@ -25,14 +15,15 @@ type RequestCache interface {
 	Clear()
 }
 
-// HomeCacheLine represents cache metadata maintained by HomeNode.
+// HomeCacheLine represents cache metadata maintained by cache capability users.
 type HomeCacheLine struct {
 	Address  uint64
+	State    core.MESIState
 	Valid    bool
 	Metadata map[string]string
 }
 
-// HomeCache exposes cache helpers for HomeNode.
+// HomeCache exposes cache helpers that operate on cache lines.
 type HomeCache interface {
 	GetLine(addr uint64) (HomeCacheLine, bool)
 	UpdateLine(addr uint64, line HomeCacheLine)
@@ -43,7 +34,14 @@ type HomeCache interface {
 // CacheCapability is a NodeCapability that also exposes cache helpers.
 type CacheCapability interface {
 	NodeCapability
-	Role() CacheRole
+}
+
+// CacheConfig configures cache capability features.
+type CacheConfig struct {
+	Description   string
+	EnableRequest bool
+	EnableLine    bool
+	DefaultState  core.MESIState
 }
 
 // PacketAllocator allocates unique packet IDs.
@@ -69,30 +67,61 @@ type CacheWithHomeStore interface {
 }
 
 type cacheCapability struct {
-	name        string
-	description string
-	role        CacheRole
+	name         string
+	description  string
+	cfg          CacheConfig
+	store        *cacheStore
+	requestStore RequestCache
+	homeStore    HomeCache
+}
 
-	requestStore *mesiCacheStore
-	homeStore    *homeCacheStore
+func NewCacheCapability(name string, cfg CacheConfig) CacheCapability {
+	if cfg.DefaultState == "" {
+		cfg.DefaultState = core.MESIModified
+	}
+	desc := cfg.Description
+	if desc == "" {
+		switch {
+		case cfg.EnableRequest && cfg.EnableLine:
+			desc = "unified cache capability"
+		case cfg.EnableRequest:
+			desc = "MESI cache capability"
+		case cfg.EnableLine:
+			desc = "cache line capability"
+		default:
+			desc = "cache capability"
+		}
+	}
+
+	store := newCacheStore()
+	cap := &cacheCapability{
+		name:        name,
+		description: desc,
+		cfg:         cfg,
+		store:       store,
+	}
+	if cfg.EnableRequest {
+		cap.requestStore = &requestCacheAdapter{store: store}
+	}
+	if cfg.EnableLine {
+		cap.homeStore = &homeCacheAdapter{store: store, defaultState: cfg.DefaultState}
+	}
+	return cap
 }
 
 func NewMESICacheCapability(name string) CacheWithRequestStore {
-	return &cacheCapability{
-		name:         name,
-		description:  "MESI cache capability",
-		role:         CacheRoleRequest,
-		requestStore: newMESICacheStore(),
-	}
+	return NewCacheCapability(name, CacheConfig{
+		Description:   "MESI cache capability",
+		EnableRequest: true,
+	}).(CacheWithRequestStore)
 }
 
 func NewHomeCacheCapability(name string) CacheWithHomeStore {
-	return &cacheCapability{
-		name:        name,
-		description: "home cache capability",
-		role:        CacheRoleHome,
-		homeStore:   newHomeCacheStore(),
-	}
+	return NewCacheCapability(name, CacheConfig{
+		Description:  "cache line capability",
+		EnableLine:   true,
+		DefaultState: core.MESIModified,
+	}).(CacheWithHomeStore)
 }
 
 func (c *cacheCapability) Descriptor() hooks.PluginDescriptor {
@@ -111,10 +140,6 @@ func (c *cacheCapability) Register(broker *hooks.PluginBroker) error {
 	return nil
 }
 
-func (c *cacheCapability) Role() CacheRole {
-	return c.role
-}
-
 func (c *cacheCapability) RequestCache() RequestCache {
 	return c.requestStore
 }
@@ -124,7 +149,7 @@ func (c *cacheCapability) HomeCache() HomeCache {
 }
 
 func (c *cacheCapability) HandleResponse(packet *core.Packet) {
-	if c.role != CacheRoleRequest || c.requestStore == nil || packet == nil {
+	if c.requestStore == nil || packet == nil {
 		return
 	}
 	if packet.TransactionType == core.CHITxnReadOnce && packet.ResponseType == core.CHIRespCompData {
@@ -133,7 +158,7 @@ func (c *cacheCapability) HandleResponse(packet *core.Packet) {
 }
 
 func (c *cacheCapability) BuildSnoopResponse(nodeID int, req *core.Packet, alloc PacketAllocator, cycle int) (*core.Packet, error) {
-	if c.role != CacheRoleRequest || c.requestStore == nil || req == nil || alloc == nil {
+	if c.requestStore == nil || req == nil || alloc == nil {
 		return nil, nil
 	}
 
@@ -173,81 +198,153 @@ func (c *cacheCapability) BuildSnoopResponse(nodeID int, req *core.Packet, alloc
 	return resp, nil
 }
 
-type mesiCacheStore struct {
+type cacheEntry struct {
+	State    core.MESIState
+	Valid    bool
+	Metadata map[string]string
+}
+
+type cacheStore struct {
 	mu    sync.RWMutex
-	state map[uint64]core.MESIState
+	lines map[uint64]cacheEntry
 }
 
-func newMESICacheStore() *mesiCacheStore {
-	return &mesiCacheStore{
-		state: make(map[uint64]core.MESIState),
-	}
+func newCacheStore() *cacheStore {
+	return &cacheStore{lines: make(map[uint64]cacheEntry)}
 }
 
-func (s *mesiCacheStore) GetState(addr uint64) core.MESIState {
+func (s *cacheStore) getEntry(addr uint64) (cacheEntry, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if state, ok := s.state[addr]; ok {
-		return state
+	entry, ok := s.lines[addr]
+	if !ok {
+		return cacheEntry{}, false
 	}
-	return core.MESIInvalid
+	return cacheEntry{
+		State:    entry.State,
+		Valid:    entry.Valid,
+		Metadata: core.CloneMetadata(entry.Metadata),
+	}, true
 }
 
-func (s *mesiCacheStore) SetState(addr uint64, state core.MESIState) {
+func (s *cacheStore) setEntry(addr uint64, entry cacheEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if state == core.MESIInvalid {
-		delete(s.state, addr)
-		return
-	}
-	s.state[addr] = state
-}
-
-func (s *mesiCacheStore) Invalidate(addr uint64) {
-	s.SetState(addr, core.MESIInvalid)
-}
-
-func (s *mesiCacheStore) Clear() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	clear(s.state)
-}
-
-type homeCacheStore struct {
-	mu    sync.RWMutex
-	lines map[uint64]HomeCacheLine
-}
-
-func newHomeCacheStore() *homeCacheStore {
-	return &homeCacheStore{
-		lines: make(map[uint64]HomeCacheLine),
-	}
-}
-
-func (s *homeCacheStore) GetLine(addr uint64) (HomeCacheLine, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	line, ok := s.lines[addr]
-	return line, ok
-}
-
-func (s *homeCacheStore) UpdateLine(addr uint64, line HomeCacheLine) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !line.Valid {
+	if !entry.Valid {
 		delete(s.lines, addr)
 		return
 	}
-	line.Address = addr
-	s.lines[addr] = line
+	entry.Metadata = core.CloneMetadata(entry.Metadata)
+	s.lines[addr] = entry
 }
 
-func (s *homeCacheStore) Invalidate(addr uint64) {
-	s.UpdateLine(addr, HomeCacheLine{Valid: false})
+func (s *cacheStore) setState(addr uint64, state core.MESIState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if state == core.MESIInvalid {
+		delete(s.lines, addr)
+		return
+	}
+	entry := s.lines[addr]
+	entry.State = state
+	entry.Valid = true
+	if entry.Metadata == nil {
+		entry.Metadata = map[string]string{}
+	}
+	s.lines[addr] = entry
 }
 
-func (s *homeCacheStore) Clear() {
+func (s *cacheStore) getState(addr uint64) core.MESIState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entry, ok := s.lines[addr]
+	if !ok || !entry.Valid {
+		return core.MESIInvalid
+	}
+	return entry.State
+}
+
+func (s *cacheStore) invalidate(addr uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.lines, addr)
+}
+
+func (s *cacheStore) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	clear(s.lines)
 }
+
+type requestCacheAdapter struct {
+	store *cacheStore
+}
+
+func (a *requestCacheAdapter) GetState(addr uint64) core.MESIState {
+	return a.store.getState(addr)
+}
+
+func (a *requestCacheAdapter) SetState(addr uint64, state core.MESIState) {
+	a.store.setState(addr, state)
+}
+
+func (a *requestCacheAdapter) Invalidate(addr uint64) {
+	a.store.invalidate(addr)
+}
+
+func (a *requestCacheAdapter) Clear() {
+	a.store.clear()
+}
+
+type homeCacheAdapter struct {
+	store        *cacheStore
+	defaultState core.MESIState
+}
+
+func (a *homeCacheAdapter) GetLine(addr uint64) (HomeCacheLine, bool) {
+	entry, ok := a.store.getEntry(addr)
+	if !ok || !entry.Valid {
+		return HomeCacheLine{}, false
+	}
+	state := entry.State
+	if state == "" {
+		state = a.defaultState
+	}
+	return HomeCacheLine{
+		Address:  addr,
+		State:    state,
+		Valid:    true,
+		Metadata: entry.Metadata,
+	}, true
+}
+
+func (a *homeCacheAdapter) UpdateLine(addr uint64, line HomeCacheLine) {
+	if !line.Valid {
+		a.store.invalidate(addr)
+		return
+	}
+	state := line.State
+	if state == "" {
+		state = a.defaultState
+	}
+	a.store.setEntry(addr, cacheEntry{
+		State:    state,
+		Valid:    true,
+		Metadata: line.Metadata,
+	})
+}
+
+func (a *homeCacheAdapter) Invalidate(addr uint64) {
+	a.store.invalidate(addr)
+}
+
+func (a *homeCacheAdapter) Clear() {
+	a.store.clear()
+}
+
+var (
+	_ CacheCapability       = (*cacheCapability)(nil)
+	_ CacheWithRequestStore = (*cacheCapability)(nil)
+	_ CacheWithHomeStore    = (*cacheCapability)(nil)
+	_ RequestCacheHandler   = (*cacheCapability)(nil)
+)
