@@ -22,7 +22,15 @@ type policyOption struct {
 }
 
 type policyResponse struct {
-	Incentives policySection `json:"incentives"`
+	Config     policyConfigSection `json:"config"`
+	Incentives policySection       `json:"incentives"`
+}
+
+type policyConfigSection struct {
+	EnablePacketHistory   bool   `json:"EnablePacketHistory"`
+	MaxPacketHistorySize  int    `json:"MaxPacketHistorySize"`
+	MaxTransactionHistory int    `json:"MaxTransactionHistory"`
+	HistoryOverflowMode   string `json:"HistoryOverflowMode"`
 }
 
 type policySection struct {
@@ -112,7 +120,15 @@ func (ws *WebServer) buildPolicyResponse() policyResponse {
 		updatedAt = draft.UpdatedAt
 	}
 
+	cfg := ws.snapshotHistoryConfig()
+
 	return policyResponse{
+		Config: policyConfigSection{
+			EnablePacketHistory:   cfg.EnablePacketHistory,
+			MaxPacketHistorySize:  cfg.MaxPacketHistorySize,
+			MaxTransactionHistory: cfg.MaxTransactionHistory,
+			HistoryOverflowMode:   cfg.HistoryOverflowMode,
+		},
 		Incentives: policySection{
 			Available: options,
 			Selected:  selected,
@@ -151,4 +167,24 @@ func (ws *WebServer) listIncentiveOptions() []policyOption {
 		return options[i].Name < options[j].Name
 	})
 	return options
+}
+
+func (ws *WebServer) snapshotHistoryConfig() PacketHistoryConfig {
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+	if ws.txnMgr == nil || ws.txnMgr.historyConfig == nil {
+		return PacketHistoryConfig{
+			EnablePacketHistory:   true,
+			MaxPacketHistorySize:  0,
+			MaxTransactionHistory: 1000,
+			HistoryOverflowMode:   "circular",
+		}
+	}
+	cfg := ws.txnMgr.historyConfig
+	return PacketHistoryConfig{
+		EnablePacketHistory:   cfg.EnablePacketHistory,
+		MaxPacketHistorySize:  cfg.MaxPacketHistorySize,
+		HistoryOverflowMode:   cfg.HistoryOverflowMode,
+		MaxTransactionHistory: cfg.MaxTransactionHistory,
+	}
 }

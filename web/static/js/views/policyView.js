@@ -5,6 +5,13 @@ const STATUS_COLORS = {
     error: '#c33',
 };
 
+const CONFIG_KEYS = [
+    { key: 'EnablePacketHistory', label: 'Enable Packet History', format: (v) => String(v) },
+    { key: 'MaxPacketHistorySize', label: 'Max Packet History Size', format: (v) => String(v) },
+    { key: 'MaxTransactionHistory', label: 'Max Transaction History', format: (v) => String(v) },
+    { key: 'HistoryOverflowMode', label: 'History Overflow Mode', format: (v) => v || 'circular' },
+];
+
 export function createPolicyView({
     panelElement,
     containerElement,
@@ -21,6 +28,7 @@ export function createPolicyView({
         version: 0,
         updatedAt: null,
         loading: false,
+        config: {},
     };
 
     buttons.refresh?.addEventListener('click', loadPolicies);
@@ -57,7 +65,8 @@ export function createPolicyView({
                 state.selected = new Set(Array.isArray(incentives.selected) ? incentives.selected : []);
                 state.version = incentives.version || 0;
                 state.updatedAt = incentives.updatedAt || null;
-                renderOptions();
+                state.config = data?.config || {};
+                renderView();
                 setStatus('Policies loaded.', 'success');
             })
             .catch((error) => {
@@ -95,7 +104,8 @@ export function createPolicyView({
                 state.selected = new Set(Array.isArray(incentives.selected) ? incentives.selected : []);
                 state.version = incentives.version || state.version;
                 state.updatedAt = incentives.updatedAt || state.updatedAt;
-                renderOptions();
+                state.config = data?.config || state.config;
+                renderView();
                 setStatus('Policy draft saved. Apply by issuing a reset command.', 'success');
             })
             .catch((error) => {
@@ -107,14 +117,59 @@ export function createPolicyView({
             });
     }
 
-    function renderOptions() {
+    function renderView() {
         containerElement.innerHTML = '';
+        containerElement.appendChild(renderConfigSection());
+        containerElement.appendChild(renderPolicySection());
+    }
+
+    function renderConfigSection() {
+        const wrapper = document.createElement('div');
+        wrapper.style.marginBottom = '16px';
+        const title = document.createElement('h3');
+        title.textContent = 'Config & Policy';
+        title.style.marginBottom = '8px';
+        wrapper.appendChild(title);
+
+        const table = document.createElement('table');
+        table.style.width = '100%';
+        table.style.borderCollapse = 'collapse';
+        const tbody = document.createElement('tbody');
+
+        CONFIG_KEYS.forEach(({ key, label, format }) => {
+            const tr = document.createElement('tr');
+            const nameTd = document.createElement('td');
+            nameTd.textContent = label;
+            nameTd.style.fontWeight = '600';
+            nameTd.style.padding = '4px 8px';
+            const valueTd = document.createElement('td');
+            const raw = state.config[key];
+            valueTd.textContent = format(raw);
+            valueTd.style.padding = '4px 8px';
+            valueTd.style.color = '#555';
+            tr.appendChild(nameTd);
+            tr.appendChild(valueTd);
+            tbody.appendChild(tr);
+        });
+
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+        return wrapper;
+    }
+
+    function renderPolicySection() {
+        const wrapper = document.createElement('div');
+        const title = document.createElement('h3');
+        title.textContent = 'Incentive Plugins';
+        title.style.margin = '16px 0 8px';
+        wrapper.appendChild(title);
+
         if (!state.options.length) {
             const empty = document.createElement('div');
             empty.className = 'empty-state';
             empty.textContent = 'No incentive plugins registered. Please check simulator configuration.';
-            containerElement.appendChild(empty);
-            return;
+            wrapper.appendChild(empty);
+            return wrapper;
         }
 
         const list = document.createElement('div');
@@ -141,15 +196,15 @@ export function createPolicyView({
             });
 
             const content = document.createElement('div');
-            const title = document.createElement('div');
-            title.textContent = option.name;
-            title.style.fontWeight = '600';
+            const heading = document.createElement('div');
+            heading.textContent = option.name;
+            heading.style.fontWeight = '600';
             const desc = document.createElement('div');
             desc.textContent = option.description || 'No description provided.';
             desc.style.fontSize = '12px';
             desc.style.color = '#666';
 
-            content.appendChild(title);
+            content.appendChild(heading);
             content.appendChild(desc);
 
             item.appendChild(checkbox);
@@ -157,7 +212,8 @@ export function createPolicyView({
             list.appendChild(item);
         });
 
-        containerElement.appendChild(list);
+        wrapper.appendChild(list);
+        return wrapper;
     }
 
     function setStatus(message, level = 'info') {
