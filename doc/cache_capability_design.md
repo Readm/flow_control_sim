@@ -39,6 +39,9 @@
 - 可以在 `HomeCacheLine.Metadata` 中挂载写策略、统计信息等扩展字段。
 - 若后续需要支持 write-through / write-back，可在 hooks 或能力包装层读取状态并实现数据回写策略。
 - 统一存储为后续引入替换实现（如 LRU/LFU、分层缓存）提供了更清晰的扩展边界。
+- 2025-12 新增 `capabilities.NewLRUEvictionCapability`，RequestNode/HomeNode 默认挂载 LRU 能力：
+  - `LRUEvictionConfig.Capacity` 控制缓存行上限，超限时通过能力自动调用 `Invalidate`。
+  - `RequestCacheCapacity` / `HomeCacheCapacity` 支持按配置覆写容量，方便模拟不同缓存规模。
 
 ## 验证
 

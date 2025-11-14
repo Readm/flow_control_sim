@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"strconv"
 	"sync"
 
 	"github.com/Readm/flow_sim/capabilities"
@@ -21,10 +22,13 @@ type RequestNode struct {
 	broker      *hooks.PluginBroker
 	policyMgr   policy.Manager
 
-	// queues for request management
-	stimulusQueue  *queue.TrackedQueue[*core.Packet] // stimulus_queue: infinite capacity, stores generated requests
-	dispatchQueue  *queue.TrackedQueue[*core.Packet] // dispatch_queue: limited capacity, stores requests ready to send
-	snoopRespQueue *queue.TrackedQueue[*core.Packet] // snoop response queue: stores snoop responses to send
+	pipeline          *PacketPipeline
+	dispatchByRequest map[int64]queue.EntryID
+	outInFlightBlock  queue.BlockIndex
+	cacheCapacity     int
+	cacheEvictor      capabilities.CacheEvictor
+	addrMapper        AddressMapper
+	routerID          int
 
 	// track request generation times by request id (for statistics)
 	generatedAtByReq map[int64]int
@@ -64,40 +68,56 @@ func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *Reques
 			ID:   id,
 			Type: core.NodeTypeRN,
 		},
-		generator:        generator,
-		masterIndex:      masterIndex,
-		generatedAtByReq: make(map[int64]int),
-		MinDelay:         int(^uint(0) >> 1), // max int
-		nextAddress:      DefaultAddressBase,
-		packetIDs:        nil, // will be set by simulator
+		generator:         generator,
+		masterIndex:       masterIndex,
+		generatedAtByReq:  make(map[int64]int),
+		dispatchByRequest: make(map[int64]queue.EntryID),
+		MinDelay:          int(^uint(0) >> 1),
+		nextAddress:       DefaultAddressBase,
+		packetIDs:         nil,
+		cacheCapacity:     DefaultRequestCacheCapacity,
 	}
-	rn.AddQueue("stimulus_queue", 0, UnlimitedQueueCapacity)
-	rn.AddQueue("dispatch_queue", 0, DefaultDispatchQueueCapacity)
-	rn.AddQueue("snoop_resp_queue", 0, UnlimitedQueueCapacity)
-	rn.bindings = NewNodeCycleBindings()
-	rn.stimulusQueue = queue.NewTrackedQueue("stimulus_queue", queue.UnlimitedCapacity, rn.makeQueueMutator("stimulus_queue"), queue.QueueHooks[*core.Packet]{})
-	rn.dispatchQueue = queue.NewTrackedQueue("dispatch_queue", DefaultDispatchQueueCapacity, rn.makeQueueMutator("dispatch_queue"), queue.QueueHooks[*core.Packet]{
-		OnEnqueue: rn.dispatchEnqueueHook,
-		OnDequeue: rn.dispatchDequeueHook,
+
+	rn.AddQueue(string(pipelineStageIn), 0, queue.UnlimitedCapacity)
+	rn.AddQueue(string(pipelineStageProcess), 0, DefaultDispatchQueueCapacity)
+	rn.AddQueue(string(pipelineStageOut), 0, queue.UnlimitedCapacity)
+
+	rn.pipeline = newPacketPipeline(rn.makeStageMutator, PipelineCapacities{
+		In:      queue.UnlimitedCapacity,
+		Process: DefaultDispatchQueueCapacity,
+		Out:     queue.UnlimitedCapacity,
+	}, PipelineHooks{
+		Process: queue.StageQueueHooks[*PipelineMessage]{
+			OnEnqueue: rn.dispatchEnqueueHook,
+			OnDequeue: rn.dispatchDequeueHook,
+		},
 	})
-	rn.snoopRespQueue = queue.NewTrackedQueue("snoop_resp_queue", queue.UnlimitedCapacity, rn.makeQueueMutator("snoop_resp_queue"), queue.QueueHooks[*core.Packet]{})
+
+	if blockIdx, err := rn.pipeline.registerBlockReason("rn_out_inflight"); err == nil {
+		rn.outInFlightBlock = blockIdx
+	} else {
+		rn.outInFlightBlock = queue.InvalidBlockIndex
+		GetLogger().Warnf("RequestNode %d: failed to register out queue block bit: %v", rn.ID, err)
+	}
+
+	rn.bindings = NewNodeCycleBindings()
 	return rn
 }
 
-func (rn *RequestNode) makeQueueMutator(queueName string) queue.MutateFunc {
+func (rn *RequestNode) makeStageMutator(stage pipelineStageName) queue.MutateFunc {
 	return func(length int, capacity int) {
-		rn.UpdateQueueState(queueName, length, capacity)
+		rn.UpdateQueueState(string(stage), length, capacity)
 	}
 }
 
-func (rn *RequestNode) dispatchEnqueueHook(p *core.Packet, cycle int) {
-	if rn.txnMgr == nil || p == nil || p.TransactionID == 0 {
+func (rn *RequestNode) dispatchEnqueueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
+	if rn.txnMgr == nil || msg == nil || msg.Packet == nil || msg.Packet.TransactionID == 0 {
 		return
 	}
 	event := &core.PacketEvent{
-		TransactionID:  p.TransactionID,
-		PacketID:       p.ID,
-		ParentPacketID: p.ParentPacketID,
+		TransactionID:  msg.Packet.TransactionID,
+		PacketID:       msg.Packet.ID,
+		ParentPacketID: msg.Packet.ParentPacketID,
 		NodeID:         rn.ID,
 		EventType:      core.PacketEnqueued,
 		Cycle:          cycle,
@@ -106,20 +126,33 @@ func (rn *RequestNode) dispatchEnqueueHook(p *core.Packet, cycle int) {
 	rn.txnMgr.RecordPacketEvent(event)
 }
 
-func (rn *RequestNode) dispatchDequeueHook(p *core.Packet, cycle int) {
-	if rn.txnMgr == nil || p == nil || p.TransactionID == 0 {
+func (rn *RequestNode) dispatchDequeueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
+	if rn.txnMgr == nil || msg == nil || msg.Packet == nil || msg.Packet.TransactionID == 0 {
 		return
 	}
 	event := &core.PacketEvent{
-		TransactionID:  p.TransactionID,
-		PacketID:       p.ID,
-		ParentPacketID: p.ParentPacketID,
+		TransactionID:  msg.Packet.TransactionID,
+		PacketID:       msg.Packet.ID,
+		ParentPacketID: msg.Packet.ParentPacketID,
 		NodeID:         rn.ID,
 		EventType:      core.PacketDequeued,
 		Cycle:          cycle,
 		EdgeKey:        nil,
 	}
 	rn.txnMgr.RecordPacketEvent(event)
+}
+
+// SetCacheCapacity overrides the request cache capacity before capabilities are initialised.
+func (rn *RequestNode) SetCacheCapacity(capacity int) {
+	if capacity <= 0 {
+		capacity = DefaultRequestCacheCapacity
+	}
+	rn.cacheCapacity = capacity
+}
+
+// SetAddressMapper configures the address mapper used for slave selection.
+func (rn *RequestNode) SetAddressMapper(mapper AddressMapper) {
+	rn.addrMapper = mapper
 }
 
 // SetTxFactory installs a transaction capability backed by the provided factory.
@@ -152,6 +185,13 @@ func (rn *RequestNode) SetPolicyManager(m policy.Manager) {
 	rn.ensureDefaultCapabilities()
 }
 
+// SetRouterID sets the router node used for ring forwarding.
+func (rn *RequestNode) SetRouterID(id int) {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	rn.routerID = id
+}
+
 // GenerateReadNoSnpRequest creates a CHI ReadNoSnp transaction request packet.
 // ReadNoSnp is a simple read request that does not require snoop operations.
 func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID int, homeNodeID int) *core.Packet {
@@ -175,8 +215,7 @@ func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID 
 }
 
 // Tick may generate request(s) per cycle based on the configured RequestGenerator.
-// Supports generating multiple requests in the same cycle.
-// Implements three-phase logic: generate -> send -> release
+// Implements unified pipeline phases: generate -> in_queue -> process_queue -> out_queue.
 func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, packetIDs *PacketIDAllocator, slaves []*SlaveNode, txnMgr *TransactionManager) {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
@@ -192,215 +231,21 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 		return
 	}
 
-	// Initialize dispatch queue capacity from config (first time or if config changed)
 	capacity := cfg.DispatchQueueCapacity
 	if capacity <= 0 || capacity == -1 {
 		capacity = DefaultDispatchQueueCapacity
 	}
-	rn.dispatchQueue.SetCapacity(capacity)
+	rn.pipeline.setCapacity(pipelineStageProcess, capacity)
 
-	// Phase 1: Generate requests and add to stimulus_queue
-	if rn.generator != nil {
-		results := rn.generator.ShouldGenerate(cycle, rn.masterIndex, len(slaves))
-		for _, result := range results {
-			if !result.ShouldGenerate {
-				continue
-			}
-			if result.SlaveIndex < 0 || result.SlaveIndex >= len(slaves) {
-				continue
-			}
-
-			// Get actual slave node ID from the slaves array
-			dstSNID := slaves[result.SlaveIndex].ID
-
-			// Determine address and data size
-			address := result.Address
-			if address == 0 {
-				address = rn.nextAddress
-				rn.nextAddress += DefaultCacheLineSize
-			}
-
-			dataSize := result.DataSize
-			if dataSize == 0 {
-				dataSize = DefaultCacheLineSize
-			}
-
-			// Determine transaction type
-			txnType := result.TransactionType
-			if txnType == "" {
-				txnType = core.CHITxnReadNoSnp
-			}
-
-			var packet *core.Packet
-			params := capabilities.TxRequestParams{
-				Cycle:           cycle,
-				SrcID:           rn.ID,
-				MasterID:        rn.ID,
-				DstID:           dstSNID,
-				TransactionType: txnType,
-				Address:         address,
-				DataSize:        dataSize,
-			}
-			creator := rn.txnCreator
-			if creator == nil {
-				rn.ensureDefaultCapabilities()
-				creator = rn.txnCreator
-			}
-			if creator == nil {
-				GetLogger().Warnf("RequestNode %d transaction capability missing", rn.ID)
-				continue
-			}
-			var err error
-			packet, _, err = creator(params)
-			if err != nil {
-				GetLogger().Warnf("RequestNode %d transaction capability failed: %v", rn.ID, err)
-				continue
-			}
-			if packet == nil {
-				continue
-			}
-
-			rn.TotalRequests++
-			rn.generatedAtByReq[packet.RequestID] = cycle
-
-			// Mark transaction as in-flight when packet is sent
-			if txnMgr != nil && packet.TransactionID > 0 {
-				// Will be marked in-flight when actually sent
-			}
-
-			// Add to stimulus_queue
-			rn.stimulusQueue.Enqueue(packet, cycle)
-		}
-	}
-
-	// Phase 2: Send requests from dispatch_queue to Link (max BandwidthLimit per cycle)
-	// Only send packets that haven't been sent yet (SentAt == 0)
 	bandwidth := cfg.BandwidthLimit
 	if bandwidth <= 0 {
 		bandwidth = 1
 	}
-	sentThisCycle := 0
-	dispatchItems := rn.dispatchQueue.Items()
-	for i := 0; i < len(dispatchItems) && sentThisCycle < bandwidth; i++ {
-		p := dispatchItems[i]
-		if p.SentAt > 0 {
-			continue
-		}
 
-		targetID := homeNodeID
-		if rn.broker != nil {
-			routeCtx := &hooks.RouteContext{
-				Packet:        p,
-				SourceNodeID:  rn.ID,
-				DefaultTarget: homeNodeID,
-				TargetID:      homeNodeID,
-			}
-			if err := rn.broker.EmitBeforeRoute(routeCtx); err != nil {
-				GetLogger().Warnf("RequestNode %d OnBeforeRoute hook failed: %v", rn.ID, err)
-				continue
-			}
-			targetID = routeCtx.TargetID
-		}
-
-		if rn.broker != nil {
-			routeCtx := &hooks.RouteContext{
-				Packet:        p,
-				SourceNodeID:  rn.ID,
-				DefaultTarget: homeNodeID,
-				TargetID:      targetID,
-			}
-			if err := rn.broker.EmitAfterRoute(routeCtx); err != nil {
-				GetLogger().Warnf("RequestNode %d OnAfterRoute hook failed: %v", rn.ID, err)
-			}
-			targetID = routeCtx.TargetID
-		}
-
-		if rn.broker != nil {
-			ctx := &hooks.MessageContext{
-				Packet:   p,
-				NodeID:   rn.ID,
-				TargetID: targetID,
-				Cycle:    cycle,
-			}
-			if err := rn.broker.EmitBeforeSend(ctx); err != nil {
-				GetLogger().Warnf("RequestNode %d OnBeforeSend hook failed: %v", rn.ID, err)
-				continue
-			}
-		}
-
-		if targetID <= 0 {
-			targetID = homeNodeID
-		}
-
-		ch.Send(p, rn.ID, targetID, cycle, cfg.MasterRelayLatency)
-		p.SentAt = cycle
-		// Mark transaction as in-flight when packet is sent
-		if txnMgr != nil && p.TransactionID > 0 {
-			txnMgr.MarkTransactionInFlight(p.TransactionID, cycle)
-		}
-		if rn.broker != nil {
-			ctx := &hooks.MessageContext{
-				Packet:   p,
-				NodeID:   rn.ID,
-				TargetID: targetID,
-				Cycle:    cycle,
-			}
-			if err := rn.broker.EmitAfterSend(ctx); err != nil {
-				GetLogger().Warnf("RequestNode %d OnAfterSend hook failed: %v", rn.ID, err)
-			}
-		}
-		sentThisCycle++
-		// Packet remains in dispatchQueue, will be removed when Comp response arrives
-	}
-
-	// Phase 2.5: Send snoop responses from snoop_resp_queue to HomeNode
-	snoopRespItems := rn.snoopRespQueue.Items()
-	for _, snoopResp := range snoopRespItems {
-		if snoopResp.SentAt > 0 {
-			continue
-		}
-		// Send snoop response to HomeNode
-		snoopResp.SentAt = cycle
-		ch.Send(snoopResp, rn.ID, homeNodeID, cycle, cfg.MasterRelayLatency)
-		// Remove from queue after sending
-		rn.snoopRespQueue.RemoveMatch(func(p *core.Packet) bool {
-			return p != nil && p.ID == snoopResp.ID
-		}, cycle)
-		GetLogger().Infof("[MESI] RequestNode %d: Sent Snoop response %s (PacketID=%d) to HomeNode %d",
-			rn.ID, snoopResp.ResponseType, snoopResp.ID, homeNodeID)
-	}
-
-	// Phase 3: Release requests from stimulus_queue to dispatch_queue (max BandwidthLimit per cycle)
-	// Check dispatch_queue capacity before releasing
-	dispatchLen := rn.dispatchQueue.Len()
-	dispatchCap := rn.dispatchQueue.Capacity()
-	availableCapacity := rn.stimulusQueue.Len()
-	if dispatchCap >= 0 {
-		availableCapacity = dispatchCap - dispatchLen
-		if availableCapacity < 0 {
-			availableCapacity = 0
-		}
-	}
-	if availableCapacity > 0 {
-		releaseCount := bandwidth
-		if releaseCount > rn.stimulusQueue.Len() {
-			releaseCount = rn.stimulusQueue.Len()
-		}
-		if releaseCount > availableCapacity {
-			releaseCount = availableCapacity
-		}
-
-		// Move packets from stimulus_queue to dispatch_queue
-		for i := 0; i < releaseCount; i++ {
-			p, ok := rn.stimulusQueue.PopFront(cycle)
-			if !ok {
-				break
-			}
-			if !rn.dispatchQueue.Enqueue(p, cycle) {
-				break
-			}
-		}
-	}
+	rn.generateRequests(cycle, slaves)
+	rn.releaseToProcess(bandwidth, cycle)
+	rn.processStage(bandwidth, cycle, cfg, homeNodeID)
+	rn.sendFromOutQueue(bandwidth, cycle, cfg, ch, homeNodeID)
 }
 
 // CanReceive checks if the RequestNode can receive packets from the given edge.
@@ -478,6 +323,16 @@ func (rn *RequestNode) ensureDefaultCapabilities() {
 	for _, cap := range caps {
 		rn.registerCapability(cap)
 	}
+	if rn.cacheStore != nil && rn.cacheEvictor == nil {
+		lruCap := capabilities.NewLRUEvictionCapability(
+			fmt.Sprintf("request-cache-lru-%d", rn.ID),
+			capabilities.LRUEvictionConfig{
+				Capacity:     rn.cacheCapacity,
+				RequestCache: rn.cacheStore,
+			},
+		)
+		rn.registerCapability(lruCap)
+	}
 	if rn.policyMgr != nil {
 		rn.defaultCapsRegistered = true
 	}
@@ -508,6 +363,9 @@ func (rn *RequestNode) registerCapability(cap capabilities.NodeCapability) {
 		rn.cacheCapability = cacheCap
 		rn.cacheStore = cacheCap.RequestCache()
 	}
+	if evictCap, ok := cap.(capabilities.CacheEvictor); ok {
+		rn.cacheEvictor = evictCap
+	}
 	if txnCap, ok := cap.(capabilities.TransactionCapability); ok {
 		rn.txnCapability = txnCap
 		rn.txnCreator = txnCap.Creator()
@@ -527,27 +385,47 @@ func (rn *RequestNode) handleResponseLocked(p *core.Packet, cycle int, txnMgr *T
 	if p == nil {
 		return
 	}
-	// Check for CHI response or legacy response type
 	isCHIResponse := p.MessageType == core.CHIMsgComp || p.MessageType == core.CHIMsgResp
 	isLegacyResponse := p.Type == "response"
 	if !isCHIResponse && !isLegacyResponse {
 		return
 	}
 
-	requestID := p.RequestID
-	_, found := rn.dispatchQueue.RemoveMatch(func(reqPkt *core.Packet) bool {
-		return reqPkt != nil && reqPkt.RequestID == requestID
-	}, cycle)
+	rn.emitProcessHook(p, cycle, true)
+	defer rn.emitProcessHook(p, cycle, false)
 
-	if !found {
-		// Packet not found in dispatch_queue, might have been already removed or never added
-		// This can happen in edge cases, just return
+	requestID := p.RequestID
+	outQ := rn.outQueue()
+	var matched bool
+	if outQ != nil {
+		if entryID, ok := rn.dispatchByRequest[requestID]; ok {
+			if _, ok := outQ.Remove(entryID, cycle); ok {
+				matched = true
+			} else {
+				if _, ok := outQ.RemoveMatch(func(msg *PipelineMessage) bool {
+					return msg != nil && msg.Packet != nil && msg.Packet.RequestID == requestID
+				}, cycle); ok {
+					matched = true
+				}
+			}
+		} else {
+			if _, ok := outQ.RemoveMatch(func(msg *PipelineMessage) bool {
+				return msg != nil && msg.Packet != nil && msg.Packet.RequestID == requestID
+			}, cycle); ok {
+				matched = true
+			}
+		}
+	}
+
+	if matched {
+		delete(rn.dispatchByRequest, requestID)
+	}
+
+	if !matched {
 		return
 	}
 
-	// Update statistics
-	gen, ok := rn.generatedAtByReq[requestID]
-	if ok {
+	if gen, ok := rn.generatedAtByReq[requestID]; ok {
 		delay := cycle - gen
 		rn.CompletedCount++
 		rn.TotalDelay += int64(delay)
@@ -560,12 +438,10 @@ func (rn *RequestNode) handleResponseLocked(p *core.Packet, cycle int, txnMgr *T
 		delete(rn.generatedAtByReq, requestID)
 	}
 
-	// Mark transaction as completed
 	if txnMgr != nil && p.TransactionID > 0 {
 		txnMgr.MarkTransactionCompleted(p.TransactionID, cycle)
 	}
 
-	// Update cache state for ReadOnce transactions
 	if cacheHandler, ok := rn.cacheCapability.(capabilities.RequestCacheHandler); ok {
 		cacheHandler.HandleResponse(p)
 		if p.TransactionType == core.CHITxnReadOnce && p.ResponseType == core.CHIRespCompData {
@@ -574,6 +450,9 @@ func (rn *RequestNode) handleResponseLocked(p *core.Packet, cycle int, txnMgr *T
 		}
 	}
 
+	if rn.cacheEvictor != nil && p.ResponseType == core.CHIRespCompData {
+		rn.cacheEvictor.Fill(p.Address)
+	}
 }
 
 type RequestNodeStats struct {
@@ -604,130 +483,66 @@ func (rn *RequestNode) SnapshotStats() *RequestNodeStats {
 	}
 }
 
-// GetQueuePackets returns packet information for stimulus_queue and dispatch_queue
-// Returns packets from both queues for visualization
+// GetQueuePackets returns packet information across in/process/out queues for visualization
 func (rn *RequestNode) GetQueuePackets() []core.PacketInfo {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
-	packets := make([]core.PacketInfo, 0, rn.stimulusQueue.Len()+rn.dispatchQueue.Len())
-
-	// Add packets from stimulus_queue
-	for _, p := range rn.stimulusQueue.Items() {
-		if p == nil {
-			continue
-		}
-		packets = append(packets, core.PacketInfo{
-			ID:              p.ID,
-			RequestID:       p.RequestID,
-			Type:            p.Type,
-			SrcID:           p.SrcID,
-			DstID:           p.DstID,
-			GeneratedAt:     p.GeneratedAt,
-			SentAt:          p.SentAt,
-			ReceivedAt:      p.ReceivedAt,
-			CompletedAt:     p.CompletedAt,
-			MasterID:        p.MasterID,
-			TransactionType: p.TransactionType,
-			MessageType:     p.MessageType,
-			ResponseType:    p.ResponseType,
-			Address:         p.Address,
-			DataSize:        p.DataSize,
-			TransactionID:   p.TransactionID,
-			Metadata:        core.CloneMetadata(p.Metadata),
-		})
-	}
-
-	// Add packets from dispatch_queue
-	for _, p := range rn.dispatchQueue.Items() {
-		if p == nil {
-			continue
-		}
-		packets = append(packets, core.PacketInfo{
-			ID:              p.ID,
-			RequestID:       p.RequestID,
-			Type:            p.Type,
-			SrcID:           p.SrcID,
-			DstID:           p.DstID,
-			GeneratedAt:     p.GeneratedAt,
-			SentAt:          p.SentAt,
-			ReceivedAt:      p.ReceivedAt,
-			CompletedAt:     p.CompletedAt,
-			MasterID:        p.MasterID,
-			TransactionType: p.TransactionType,
-			MessageType:     p.MessageType,
-			ResponseType:    p.ResponseType,
-			Address:         p.Address,
-			DataSize:        p.DataSize,
-			TransactionID:   p.TransactionID,
-			Metadata:        core.CloneMetadata(p.Metadata),
-		})
-	}
-
+	packets := make([]core.PacketInfo, 0)
+	packets = rn.appendStagePackets(packets, rn.inQueue())
+	packets = rn.appendStagePackets(packets, rn.processQueue())
+	packets = rn.appendStagePackets(packets, rn.outQueue())
 	return packets
 }
 
-// GetStimulusQueuePackets returns packet information for stimulus_queue only
 func (rn *RequestNode) GetStimulusQueuePackets() []core.PacketInfo {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
-	packets := make([]core.PacketInfo, 0, rn.stimulusQueue.Len())
-	for _, p := range rn.stimulusQueue.Items() {
-		if p == nil {
-			continue
-		}
-		packets = append(packets, core.PacketInfo{
-			ID:              p.ID,
-			RequestID:       p.RequestID,
-			Type:            p.Type,
-			SrcID:           p.SrcID,
-			DstID:           p.DstID,
-			GeneratedAt:     p.GeneratedAt,
-			SentAt:          p.SentAt,
-			ReceivedAt:      p.ReceivedAt,
-			CompletedAt:     p.CompletedAt,
-			MasterID:        p.MasterID,
-			TransactionType: p.TransactionType,
-			MessageType:     p.MessageType,
-			ResponseType:    p.ResponseType,
-			Address:         p.Address,
-			DataSize:        p.DataSize,
-			TransactionID:   p.TransactionID,
-			Metadata:        core.CloneMetadata(p.Metadata),
-		})
-	}
-	return packets
+	return rn.appendStagePackets(nil, rn.inQueue())
 }
 
-// GetDispatchQueuePackets returns packet information for dispatch_queue only
 func (rn *RequestNode) GetDispatchQueuePackets() []core.PacketInfo {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
-	packets := make([]core.PacketInfo, 0, rn.dispatchQueue.Len())
-	for _, p := range rn.dispatchQueue.Items() {
-		if p == nil {
-			continue
-		}
-		packets = append(packets, core.PacketInfo{
-			ID:              p.ID,
-			RequestID:       p.RequestID,
-			Type:            p.Type,
-			SrcID:           p.SrcID,
-			DstID:           p.DstID,
-			GeneratedAt:     p.GeneratedAt,
-			SentAt:          p.SentAt,
-			ReceivedAt:      p.ReceivedAt,
-			CompletedAt:     p.CompletedAt,
-			MasterID:        p.MasterID,
-			TransactionType: p.TransactionType,
-			MessageType:     p.MessageType,
-			ResponseType:    p.ResponseType,
-			Address:         p.Address,
-			DataSize:        p.DataSize,
-			TransactionID:   p.TransactionID,
-			Metadata:        core.CloneMetadata(p.Metadata),
-		})
+	return rn.appendStagePackets(nil, rn.outQueue())
+}
+
+func (rn *RequestNode) appendStagePackets(dst []core.PacketInfo, q *queue.StageQueue[*PipelineMessage]) []core.PacketInfo {
+	if q == nil {
+		return dst
 	}
-	return packets
+	stageName := q.Name()
+	q.ForEach(func(_ queue.EntryID, msg *PipelineMessage, ready bool) {
+		if msg == nil || msg.Packet == nil {
+			return
+		}
+		metadata := core.CloneMetadata(msg.Packet.Metadata)
+		if metadata == nil {
+			metadata = map[string]string{}
+		}
+		metadata["node_queue_ready"] = fmt.Sprintf("%t", ready)
+		metadata["node_queue_stage"] = stageName
+		metadata["node_message_kind"] = msg.Kind
+		dst = append(dst, core.PacketInfo{
+			ID:              msg.Packet.ID,
+			RequestID:       msg.Packet.RequestID,
+			Type:            msg.Packet.Type,
+			SrcID:           msg.Packet.SrcID,
+			DstID:           msg.Packet.DstID,
+			GeneratedAt:     msg.Packet.GeneratedAt,
+			SentAt:          msg.Packet.SentAt,
+			ReceivedAt:      msg.Packet.ReceivedAt,
+			CompletedAt:     msg.Packet.CompletedAt,
+			MasterID:        msg.Packet.MasterID,
+			TransactionType: msg.Packet.TransactionType,
+			MessageType:     msg.Packet.MessageType,
+			ResponseType:    msg.Packet.ResponseType,
+			Address:         msg.Packet.Address,
+			DataSize:        msg.Packet.DataSize,
+			TransactionID:   msg.Packet.TransactionID,
+			Metadata:        metadata,
+		})
+	})
+	return dst
 }
 
 // GetPendingRequests is a legacy method kept for backward compatibility
@@ -884,7 +699,16 @@ func (rn *RequestNode) handleSnoopRequestLocked(snoopReq *core.Packet, cycle int
 	}
 
 	// Queue snoop response to be sent in next Tick
-	rn.snoopRespQueue.Enqueue(snoopResp, cycle)
+	if inQ := rn.inQueue(); inQ != nil {
+		msg := &PipelineMessage{Packet: snoopResp, Kind: "snoop_response"}
+		if _, ok := inQ.Enqueue(msg, cycle); !ok {
+			GetLogger().Warnf("RequestNode %d: in_queue full, cannot enqueue snoop response %d", rn.ID, snoopResp.ID)
+			return
+		}
+	} else {
+		GetLogger().Warnf("RequestNode %d: pipeline not initialized, dropping snoop response %d", rn.ID, snoopResp.ID)
+		return
+	}
 	GetLogger().Infof("[MESI] RequestNode %d: Generated Snoop response %s (PacketID=%d) for TxnID=%d, queued for sending",
 		rn.ID, snoopResp.ResponseType, snoopResp.ID, snoopReq.TransactionID)
 }
@@ -929,4 +753,377 @@ func weightedChoose(rng *rand.Rand, weights []int) int {
 		}
 	}
 	return len(weights) - 1
+}
+
+func (rn *RequestNode) stageQueue(stage pipelineStageName) *queue.StageQueue[*PipelineMessage] {
+	if rn == nil || rn.pipeline == nil {
+		return nil
+	}
+	return rn.pipeline.queue(stage)
+}
+
+func (rn *RequestNode) inQueue() *queue.StageQueue[*PipelineMessage] {
+	return rn.stageQueue(pipelineStageIn)
+}
+
+func (rn *RequestNode) processQueue() *queue.StageQueue[*PipelineMessage] {
+	return rn.stageQueue(pipelineStageProcess)
+}
+
+func (rn *RequestNode) outQueue() *queue.StageQueue[*PipelineMessage] {
+	return rn.stageQueue(pipelineStageOut)
+}
+
+func (rn *RequestNode) generateRequests(cycle int, slaves []*SlaveNode) {
+	if rn.generator == nil {
+		return
+	}
+	results := rn.generator.ShouldGenerate(cycle, rn.masterIndex, len(slaves))
+	inQ := rn.inQueue()
+	for _, result := range results {
+		if !result.ShouldGenerate {
+			continue
+		}
+
+		address := result.Address
+		if address == 0 {
+			address = rn.nextAddress
+			rn.nextAddress += DefaultCacheLineSize
+		}
+
+		dataSize := result.DataSize
+		if dataSize == 0 {
+			dataSize = DefaultCacheLineSize
+		}
+
+		txnType := result.TransactionType
+		if txnType == "" {
+			txnType = core.CHITxnReadNoSnp
+		}
+
+		if rn.cacheEvictor != nil {
+			rn.cacheEvictor.Touch(address)
+		}
+
+		var targetSlave *SlaveNode
+		if rn.addrMapper != nil {
+			targetSlave = rn.addrMapper.TargetSlave(address)
+		}
+		if targetSlave == nil {
+			if result.SlaveIndex < 0 || result.SlaveIndex >= len(slaves) {
+				continue
+			}
+			targetSlave = slaves[result.SlaveIndex]
+		}
+		if targetSlave == nil {
+			continue
+		}
+
+		params := capabilities.TxRequestParams{
+			Cycle:           cycle,
+			SrcID:           rn.ID,
+			MasterID:        rn.ID,
+			DstID:           targetSlave.ID,
+			TransactionType: txnType,
+			Address:         address,
+			DataSize:        dataSize,
+		}
+
+		creator := rn.txnCreator
+		if creator == nil {
+			rn.ensureDefaultCapabilities()
+			creator = rn.txnCreator
+		}
+		if creator == nil {
+			GetLogger().Warnf("RequestNode %d transaction capability missing", rn.ID)
+			continue
+		}
+
+		packet, _, err := creator(params)
+		if err != nil {
+			GetLogger().Warnf("RequestNode %d transaction capability failed: %v", rn.ID, err)
+			continue
+		}
+		if packet == nil {
+			continue
+		}
+
+		rn.TotalRequests++
+		packet.SetMetadata(capabilities.RingFinalTargetMetadataKey, strconv.Itoa(targetSlave.ID))
+		rn.generatedAtByReq[packet.RequestID] = cycle
+
+		msg := &PipelineMessage{Packet: packet, Kind: "request"}
+		if inQ == nil {
+			continue
+		}
+		if _, ok := inQ.Enqueue(msg, cycle); !ok {
+			GetLogger().Warnf("RequestNode %d in_queue full, dropping request %d", rn.ID, packet.RequestID)
+		}
+	}
+}
+
+func (rn *RequestNode) releaseToProcess(limit int, cycle int) {
+	inQ := rn.inQueue()
+	procQ := rn.processQueue()
+	if inQ == nil || procQ == nil {
+		return
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	moved := 0
+	for moved < limit {
+		entryID, msg, ok := inQ.PeekNext()
+		if !ok {
+			break
+		}
+		if msg == nil {
+			inQ.Complete(entryID, cycle)
+			moved++
+			continue
+		}
+		if _, ok := procQ.Enqueue(msg, cycle); !ok {
+			inQ.ResetPending(entryID)
+			break
+		}
+		inQ.Complete(entryID, cycle)
+		moved++
+	}
+}
+
+func (rn *RequestNode) processStage(limit int, cycle int, cfg *Config, homeNodeID int) {
+	procQ := rn.processQueue()
+	if procQ == nil {
+		return
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	outQ := rn.outQueue()
+	processed := 0
+	for processed < limit {
+		entryID, msg, ok := procQ.PeekNext()
+		if !ok {
+			break
+		}
+		if msg == nil || msg.Packet == nil {
+			procQ.Complete(entryID, cycle)
+			processed++
+			continue
+		}
+
+		packet := msg.Packet
+		rn.emitProcessHook(packet, cycle, true)
+		targetID := homeNodeID
+		if cfg != nil && cfg.RingEnabled && rn.routerID != 0 {
+			targetID = rn.routerID
+		}
+		latency := cfg.MasterRelayLatency
+
+		switch msg.Kind {
+		case "request":
+			msg.Kind = "request_prepared"
+			msg.DefaultTarget = targetID
+		case "snoop_response":
+			msg.Kind = "snoop_response_prepared"
+			msg.DefaultTarget = targetID
+		default:
+			GetLogger().Warnf("RequestNode %d: unsupported pipeline message kind %q", rn.ID, msg.Kind)
+			procQ.Complete(entryID, cycle)
+			rn.emitProcessHook(packet, cycle, false)
+			processed++
+			continue
+		}
+
+		msg.TargetID = targetID
+		msg.Latency = latency
+
+		procQ.Complete(entryID, cycle)
+
+		if outQ != nil {
+			outEntry, ok := outQ.Enqueue(msg, cycle)
+			if !ok {
+				GetLogger().Warnf("RequestNode %d: out_queue full, dropping packet %d", rn.ID, packet.ID)
+				processed++
+				continue
+			}
+			if rn.outInFlightBlock != queue.InvalidBlockIndex {
+				_ = outQ.SetBlocked(outEntry, rn.outInFlightBlock, false, cycle)
+			}
+			if msg.Kind == "request_prepared" {
+				rn.dispatchByRequest[packet.RequestID] = outEntry
+			}
+		}
+		rn.emitProcessHook(packet, cycle, false)
+		processed++
+	}
+}
+
+func (rn *RequestNode) sendFromOutQueue(limit int, cycle int, cfg *Config, ch *Link, homeNodeID int) {
+	outQ := rn.outQueue()
+	if outQ == nil {
+		return
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	sent := 0
+	for sent < limit {
+		entryID, msg, ok := outQ.PeekNext()
+		if !ok {
+			break
+		}
+		if msg == nil || msg.Packet == nil {
+			outQ.Complete(entryID, cycle)
+			continue
+		}
+
+		packet := msg.Packet
+		defaultTarget := msg.TargetID
+		if defaultTarget <= 0 {
+			defaultTarget = msg.DefaultTarget
+		}
+		if defaultTarget <= 0 {
+			targetRouter := homeNodeID
+			if cfg != nil && cfg.RingEnabled && rn.routerID != 0 {
+				targetRouter = rn.routerID
+			}
+			defaultTarget = targetRouter
+		}
+		latency := msg.Latency
+		if latency <= 0 {
+			latency = cfg.MasterRelayLatency
+		}
+
+		switch msg.Kind {
+		case "request_prepared":
+			finalTarget, ok := rn.resolveRoute(packet, defaultTarget)
+			if !ok {
+				outQ.ResetPending(entryID)
+				continue
+			}
+			msg.TargetID = finalTarget
+			if !rn.emitBeforeSend(packet, finalTarget, cycle) {
+				outQ.ResetPending(entryID)
+				continue
+			}
+			ch.Send(packet, rn.ID, finalTarget, cycle, latency)
+			packet.SentAt = cycle
+			if rn.txnMgr != nil && packet.TransactionID > 0 {
+				rn.txnMgr.MarkTransactionInFlight(packet.TransactionID, cycle)
+			}
+			rn.emitAfterSend(packet, finalTarget, cycle)
+			rn.dispatchByRequest[packet.RequestID] = entryID
+			msg.Kind = "request_inflight"
+			if rn.outInFlightBlock != queue.InvalidBlockIndex {
+				_ = outQ.SetBlocked(entryID, rn.outInFlightBlock, true, cycle)
+			}
+		case "snoop_response_prepared":
+			msg.TargetID = defaultTarget
+			if !rn.emitBeforeSend(packet, defaultTarget, cycle) {
+				outQ.ResetPending(entryID)
+				continue
+			}
+			ch.Send(packet, rn.ID, defaultTarget, cycle, latency)
+			packet.SentAt = cycle
+			rn.emitAfterSend(packet, defaultTarget, cycle)
+			outQ.Complete(entryID, cycle)
+		case "request_inflight":
+			outQ.ResetPending(entryID)
+			sent++
+			continue
+		default:
+			GetLogger().Warnf("RequestNode %d: unexpected out_queue message kind %q", rn.ID, msg.Kind)
+			outQ.Complete(entryID, cycle)
+		}
+
+		sent++
+	}
+}
+
+func (rn *RequestNode) resolveRoute(packet *core.Packet, defaultTarget int) (int, bool) {
+	targetID := defaultTarget
+	if rn.broker == nil || packet == nil {
+		return targetID, true
+	}
+	beforeCtx := &hooks.RouteContext{
+		Packet:        packet,
+		SourceNodeID:  rn.ID,
+		DefaultTarget: defaultTarget,
+		TargetID:      defaultTarget,
+	}
+	if err := rn.broker.EmitBeforeRoute(beforeCtx); err != nil {
+		GetLogger().Warnf("RequestNode %d OnBeforeRoute hook failed: %v", rn.ID, err)
+		return 0, false
+	}
+	targetID = beforeCtx.TargetID
+	afterCtx := &hooks.RouteContext{
+		Packet:        packet,
+		SourceNodeID:  rn.ID,
+		DefaultTarget: defaultTarget,
+		TargetID:      targetID,
+	}
+	if err := rn.broker.EmitAfterRoute(afterCtx); err != nil {
+		GetLogger().Warnf("RequestNode %d OnAfterRoute hook failed: %v", rn.ID, err)
+	}
+	if afterCtx.TargetID > 0 {
+		targetID = afterCtx.TargetID
+	}
+	if targetID <= 0 {
+		targetID = defaultTarget
+	}
+	return targetID, true
+}
+
+func (rn *RequestNode) emitBeforeSend(packet *core.Packet, targetID int, cycle int) bool {
+	if rn.broker == nil || packet == nil {
+		return true
+	}
+	ctx := &hooks.MessageContext{
+		Packet:   packet,
+		NodeID:   rn.ID,
+		TargetID: targetID,
+		Cycle:    cycle,
+	}
+	if err := rn.broker.EmitBeforeSend(ctx); err != nil {
+		GetLogger().Warnf("RequestNode %d OnBeforeSend hook failed: %v", rn.ID, err)
+		return false
+	}
+	return true
+}
+
+func (rn *RequestNode) emitAfterSend(packet *core.Packet, targetID int, cycle int) {
+	if rn.broker == nil || packet == nil {
+		return
+	}
+	ctx := &hooks.MessageContext{
+		Packet:   packet,
+		NodeID:   rn.ID,
+		TargetID: targetID,
+		Cycle:    cycle,
+	}
+	if err := rn.broker.EmitAfterSend(ctx); err != nil {
+		GetLogger().Warnf("RequestNode %d OnAfterSend hook failed: %v", rn.ID, err)
+	}
+}
+
+func (rn *RequestNode) emitProcessHook(packet *core.Packet, cycle int, before bool) {
+	if rn.broker == nil || packet == nil {
+		return
+	}
+	ctx := &hooks.ProcessContext{
+		Packet: packet,
+		Node:   rn,
+		NodeID: rn.ID,
+		Cycle:  cycle,
+	}
+	var err error
+	if before {
+		err = rn.broker.EmitBeforeProcess(ctx)
+	} else {
+		err = rn.broker.EmitAfterProcess(ctx)
+	}
+	if err != nil {
+		GetLogger().Warnf("RequestNode %d process hook failed: %v", rn.ID, err)
+	}
 }

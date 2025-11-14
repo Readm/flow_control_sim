@@ -21,6 +21,9 @@ const (
 	DefaultRequestQueueCapacity  = 1024 // Default capacity for dispatch queue (changed from -1)
 	DefaultForwardQueueCapacity  = -1   // Unlimited for forward queue
 	DefaultDispatchQueueCapacity = 1024 // Default capacity for dispatch queue
+	DefaultRequestCacheCapacity  = 64   // Default number of cache lines for RequestNode
+	DefaultHomeCacheCapacity     = 128  // Default number of cache lines for HomeNode
+	DefaultRingInterleaveStride  = 1    // Adjacent cache lines map to different slaves
 
 	// Link and bandwidth constants
 	DefaultBandwidthLimit = 1 // Default maximum packets per slot in pipeline
@@ -88,6 +91,7 @@ const (
 	NodeTypeRN core.NodeType = core.NodeTypeRN
 	NodeTypeHN core.NodeType = core.NodeTypeHN
 	NodeTypeSN core.NodeType = core.NodeTypeSN
+	NodeTypeRT core.NodeType = core.NodeTypeRT
 )
 
 // PluginConfig describes optional plugin selections.
@@ -135,6 +139,14 @@ type Config struct {
 
 	// weighting for choosing destination slave (length == NumSlaves)
 	SlaveWeights []int
+
+	// Cache configuration
+	RequestCacheCapacity int // max cache lines per RequestNode (LRU eviction), <=0 uses default
+	HomeCacheCapacity    int // max cache lines for HomeNode (LRU eviction), <=0 uses default
+
+	// Ring topology configuration
+	RingEnabled          bool // enable ring routing/topology
+	RingInterleaveStride int  // cache line stride for slave interleave (>=1)
 
 	// visualization settings
 	Headless   bool   // true to run without visualization

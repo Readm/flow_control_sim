@@ -15,7 +15,7 @@ import (
 type SlaveNode struct {
 	Node        // embedded Node base class
 	ProcessRate int
-	queue       *queue.TrackedQueue[*Packet]
+	pipeline    *PacketPipeline
 	txnMgr      *TransactionManager // for recording packet events
 	broker      *hooks.PluginBroker
 
@@ -43,31 +43,42 @@ func NewSlaveNode(id int, rate int) *SlaveNode {
 		txnMgr:      nil, // will be set by simulator
 		bindings:    NewNodeCycleBindings(),
 	}
-	sn.AddQueue("request_queue", 0, DefaultSlaveQueueCapacity)
-	sn.queue = queue.NewTrackedQueue("request_queue", DefaultSlaveQueueCapacity, sn.makeQueueMutator(), queue.QueueHooks[*Packet]{
-		OnEnqueue: sn.enqueueHook,
-		OnDequeue: sn.dequeueHook,
+
+	sn.AddQueue(string(pipelineStageIn), 0, queue.UnlimitedCapacity)
+	sn.AddQueue(string(pipelineStageProcess), 0, DefaultSlaveQueueCapacity)
+	sn.AddQueue(string(pipelineStageOut), 0, queue.UnlimitedCapacity)
+
+	sn.pipeline = newPacketPipeline(sn.makeStageMutator, PipelineCapacities{
+		In:      DefaultSlaveQueueCapacity,
+		Process: DefaultSlaveQueueCapacity,
+		Out:     queue.UnlimitedCapacity,
+	}, PipelineHooks{
+		Process: queue.StageQueueHooks[*PipelineMessage]{
+			OnEnqueue: sn.enqueueHook,
+			OnDequeue: sn.dequeueHook,
+		},
 	})
+
 	return sn
 }
 
-func (sn *SlaveNode) makeQueueMutator() queue.MutateFunc {
+func (sn *SlaveNode) makeStageMutator(stage pipelineStageName) queue.MutateFunc {
 	return func(length int, capacity int) {
-		sn.UpdateQueueState("request_queue", length, capacity)
-		if length > sn.MaxQueueLength {
+		sn.UpdateQueueState(string(stage), length, capacity)
+		if stage == pipelineStageProcess && length > sn.MaxQueueLength {
 			sn.MaxQueueLength = length
 		}
 	}
 }
 
-func (sn *SlaveNode) enqueueHook(p *Packet, cycle int) {
-	if sn.txnMgr == nil || p == nil || p.TransactionID == 0 {
+func (sn *SlaveNode) enqueueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
+	if sn.txnMgr == nil || msg == nil || msg.Packet == nil || msg.Packet.TransactionID == 0 {
 		return
 	}
 	event := &PacketEvent{
-		TransactionID:  p.TransactionID,
-		PacketID:       p.ID,
-		ParentPacketID: p.ParentPacketID,
+		TransactionID:  msg.Packet.TransactionID,
+		PacketID:       msg.Packet.ID,
+		ParentPacketID: msg.Packet.ParentPacketID,
 		NodeID:         sn.ID,
 		EventType:      PacketEnqueued,
 		Cycle:          cycle,
@@ -76,14 +87,14 @@ func (sn *SlaveNode) enqueueHook(p *Packet, cycle int) {
 	sn.txnMgr.RecordPacketEvent(event)
 }
 
-func (sn *SlaveNode) dequeueHook(p *Packet, cycle int) {
-	if sn.txnMgr == nil || p == nil || p.TransactionID == 0 {
+func (sn *SlaveNode) dequeueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
+	if sn.txnMgr == nil || msg == nil || msg.Packet == nil || msg.Packet.TransactionID == 0 {
 		return
 	}
 	event := &PacketEvent{
-		TransactionID:  p.TransactionID,
-		PacketID:       p.ID,
-		ParentPacketID: p.ParentPacketID,
+		TransactionID:  msg.Packet.TransactionID,
+		PacketID:       msg.Packet.ID,
+		ParentPacketID: msg.Packet.ParentPacketID,
 		NodeID:         sn.ID,
 		EventType:      PacketDequeued,
 		Cycle:          cycle,
@@ -204,11 +215,19 @@ func (sn *SlaveNode) RegisterOutgoingSignal(edge EdgeKey, signal *CycleSignal) {
 }
 
 // CanReceive checks if the SlaveNode can receive packets from the given edge.
-// Checks if the request_queue has capacity.
+// Checks if the in_queue has capacity.
 func (sn *SlaveNode) CanReceive(edgeKey EdgeKey, packetCount int) bool {
 	sn.mu.Lock()
 	defer sn.mu.Unlock()
-	return sn.queue.CanAccept(packetCount)
+	inQ := sn.inQueue()
+	if inQ == nil {
+		return true
+	}
+	capacity := inQ.Capacity()
+	if capacity < 0 {
+		return true
+	}
+	return inQ.Len()+packetCount <= capacity
 }
 
 // OnPackets receives packets from the channel and enqueues them.
@@ -224,39 +243,94 @@ func (sn *SlaveNode) EnqueueRequest(p *Packet) {
 	}
 	sn.mu.Lock()
 	defer sn.mu.Unlock()
-
-	sn.queue.Enqueue(p, p.ReceivedAt)
+	if inQ := sn.inQueue(); inQ != nil {
+		msg := &PipelineMessage{Packet: p, Kind: "incoming"}
+		if _, ok := inQ.Enqueue(msg, p.ReceivedAt); !ok {
+			GetLogger().Warnf("SlaveNode %d: in_queue full, dropping packet %d", sn.ID, p.ID)
+		}
+	}
 }
 
-// Tick processes up to ProcessRate requests from the head of queue and returns generated CHI responses.
-// For ReadNoSnp transactions, generates CompData responses.
+// Tick processes up to ProcessRate requests from the pipeline and returns generated responses.
 func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 	sn.mu.Lock()
-	queueLen := sn.queue.Len()
+	defer sn.mu.Unlock()
+
+	queueLen := 0
+	if inQ := sn.inQueue(); inQ != nil {
+		queueLen += inQ.Len()
+	}
+	if procQ := sn.processQueue(); procQ != nil {
+		queueLen += procQ.Len()
+	}
 	sn.TotalQueueSum += int64(queueLen)
 	sn.Samples++
+	if queueLen > sn.MaxQueueLength {
+		sn.MaxQueueLength = queueLen
+	}
 
-	if sn.ProcessRate <= 0 || queueLen == 0 {
-		sn.mu.Unlock()
-		return nil
+	sn.releaseToProcess(sn.ProcessRate, cycle)
+	sn.processStage(cycle, packetIDs)
+
+	responses := sn.flushOutQueue(cycle)
+	return responses
+}
+
+func (sn *SlaveNode) releaseToProcess(limit int, cycle int) {
+	inQ := sn.inQueue()
+	procQ := sn.processQueue()
+	if inQ == nil || procQ == nil {
+		return
 	}
-	n := sn.ProcessRate
-	if n > queueLen {
-		n = queueLen
+	if limit == 0 {
+		return
 	}
-	processed := make([]*Packet, 0, n)
-	for i := 0; i < n; i++ {
-		pkt, ok := sn.queue.PopFront(cycle)
+	moved := 0
+	for limit < 0 || moved < limit {
+		entryID, msg, ok := inQ.PeekNext()
 		if !ok {
 			break
 		}
+		if msg == nil || msg.Packet == nil {
+			inQ.Complete(entryID, cycle)
+			moved++
+			continue
+		}
+		if _, ok := procQ.Enqueue(msg, cycle); !ok {
+			inQ.ResetPending(entryID)
+			break
+		}
+		inQ.Complete(entryID, cycle)
+		moved++
+	}
+}
+
+func (sn *SlaveNode) processStage(cycle int, packetIDs *PacketIDAllocator) {
+	procQ := sn.processQueue()
+	if procQ == nil || sn.ProcessRate <= 0 {
+		return
+	}
+	processed := 0
+	outQ := sn.outQueue()
+	for processed < sn.ProcessRate {
+		entryID, msg, ok := procQ.PeekNext()
+		if !ok {
+			break
+		}
+		if msg == nil || msg.Packet == nil {
+			procQ.Complete(entryID, cycle)
+			continue
+		}
+		pkt := msg.Packet
+		req := (*Packet)(pkt)
+
+		var txn *Transaction
+		if sn.txnMgr != nil && pkt.TransactionID > 0 {
+			txn = sn.txnMgr.GetTransaction(pkt.TransactionID)
+		}
 		if sn.broker != nil {
-			var txn *Transaction
-			if sn.txnMgr != nil && pkt != nil && pkt.TransactionID > 0 {
-				txn = sn.txnMgr.GetTransaction(pkt.TransactionID)
-			}
 			ctx := &hooks.ProcessContext{
-				Packet:      pkt,
+				Packet:      req,
 				Transaction: txn,
 				Node:        &sn.Node,
 				NodeID:      sn.ID,
@@ -266,38 +340,27 @@ func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 				GetLogger().Warnf("SlaveNode %d OnBeforeProcess hook failed: %v", sn.ID, err)
 			}
 		}
-		processed = append(processed, pkt)
-	}
-	sn.mu.Unlock()
 
-	responses := make([]*Packet, 0, len(processed))
-	for _, req := range processed {
+		procQ.Complete(entryID, cycle)
+
 		req.CompletedAt = cycle
 		sn.ProcessedCount++
 
-		// Generate CHI protocol response
-		// For ReadNoSnp, generate CompData (Completion with Data)
 		resp := sn.generateCHIResponse(req, cycle, packetIDs)
-
-		// Record PacketGenerated event for the response
-		if sn.txnMgr != nil && resp.TransactionID > 0 {
+		if sn.txnMgr != nil && resp != nil && resp.TransactionID > 0 {
 			event := &PacketEvent{
 				TransactionID:  resp.TransactionID,
 				PacketID:       resp.ID,
-				ParentPacketID: req.ID, // parent is the request packet
+				ParentPacketID: req.ID,
 				NodeID:         sn.ID,
 				EventType:      PacketGenerated,
 				Cycle:          cycle,
-				EdgeKey:        nil, // in-node event
+				EdgeKey:        nil,
 			}
 			sn.txnMgr.RecordPacketEvent(event)
 		}
 
 		if sn.broker != nil {
-			var txn *Transaction
-			if sn.txnMgr != nil && req != nil && req.TransactionID > 0 {
-				txn = sn.txnMgr.GetTransaction(req.TransactionID)
-			}
 			ctx := &hooks.ProcessContext{
 				Packet:      req,
 				Transaction: txn,
@@ -310,13 +373,34 @@ func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 			}
 		}
 
-		responses = append(responses, resp)
+		if resp != nil && outQ != nil {
+			if _, ok := outQ.Enqueue(&PipelineMessage{Packet: resp, Kind: "response_ready"}, cycle); !ok {
+				GetLogger().Warnf("SlaveNode %d: out_queue full, dropping response %d", sn.ID, resp.ID)
+			}
+		}
+
+		processed++
 	}
+}
 
-	sn.mu.Lock()
-	sn.ProcessedCount += len(processed)
-	sn.mu.Unlock()
-
+func (sn *SlaveNode) flushOutQueue(cycle int) []*Packet {
+	outQ := sn.outQueue()
+	if outQ == nil {
+		return nil
+	}
+	responses := make([]*Packet, 0, outQ.Len())
+	for {
+		entryID, msg, ok := outQ.PeekNext()
+		if !ok {
+			break
+		}
+		if msg == nil || msg.Packet == nil {
+			outQ.Complete(entryID, cycle)
+			continue
+		}
+		responses = append(responses, (*Packet)(msg.Packet))
+		outQ.Complete(entryID, cycle)
+	}
 	return responses
 }
 
@@ -395,39 +479,64 @@ func (sn *SlaveNode) generateCHIResponse(req *Packet, cycle int, packetIDs *Pack
 func (sn *SlaveNode) QueueLength() int {
 	sn.mu.Lock()
 	defer sn.mu.Unlock()
-	return sn.queue.Len()
+	total := 0
+	if inQ := sn.inQueue(); inQ != nil {
+		total += inQ.Len()
+	}
+	if procQ := sn.processQueue(); procQ != nil {
+		total += procQ.Len()
+	}
+	return total
 }
 
-// GetQueuePackets returns packet information for the request_queue
+// GetQueuePackets returns packet information across in/process/out queues
 func (sn *SlaveNode) GetQueuePackets() []PacketInfo {
 	sn.mu.Lock()
 	defer sn.mu.Unlock()
-	packets := make([]PacketInfo, 0, sn.queue.Len())
-	for _, p := range sn.queue.Items() {
-		if p == nil {
-			continue
-		}
-		packets = append(packets, PacketInfo{
-			ID:              p.ID,
-			Type:            p.Type,
-			SrcID:           p.SrcID,
-			DstID:           p.DstID,
-			GeneratedAt:     p.GeneratedAt,
-			SentAt:          p.SentAt,
-			ReceivedAt:      p.ReceivedAt,
-			CompletedAt:     p.CompletedAt,
-			MasterID:        p.MasterID,
-			RequestID:       p.RequestID,
-			TransactionType: p.TransactionType,
-			MessageType:     p.MessageType,
-			ResponseType:    p.ResponseType,
-			Address:         p.Address,
-			DataSize:        p.DataSize,
-			TransactionID:   p.TransactionID,
-			Metadata:        core.CloneMetadata(p.Metadata),
-		})
-	}
+	packets := make([]PacketInfo, 0)
+	packets = sn.appendStagePackets(packets, sn.inQueue())
+	packets = sn.appendStagePackets(packets, sn.processQueue())
+	packets = sn.appendStagePackets(packets, sn.outQueue())
 	return packets
+}
+
+func (sn *SlaveNode) appendStagePackets(dst []PacketInfo, q *queue.StageQueue[*PipelineMessage]) []PacketInfo {
+	if q == nil {
+		return dst
+	}
+	stageName := q.Name()
+	q.ForEach(func(_ queue.EntryID, msg *PipelineMessage, ready bool) {
+		if msg == nil || msg.Packet == nil {
+			return
+		}
+		metadata := core.CloneMetadata(msg.Packet.Metadata)
+		if metadata == nil {
+			metadata = map[string]string{}
+		}
+		metadata["node_queue_ready"] = fmt.Sprintf("%t", ready)
+		metadata["node_queue_stage"] = stageName
+		metadata["node_message_kind"] = msg.Kind
+		dst = append(dst, PacketInfo{
+			ID:              msg.Packet.ID,
+			Type:            msg.Packet.Type,
+			SrcID:           msg.Packet.SrcID,
+			DstID:           msg.Packet.DstID,
+			GeneratedAt:     msg.Packet.GeneratedAt,
+			SentAt:          msg.Packet.SentAt,
+			ReceivedAt:      msg.Packet.ReceivedAt,
+			CompletedAt:     msg.Packet.CompletedAt,
+			MasterID:        msg.Packet.MasterID,
+			RequestID:       msg.Packet.RequestID,
+			TransactionType: msg.Packet.TransactionType,
+			MessageType:     msg.Packet.MessageType,
+			ResponseType:    msg.Packet.ResponseType,
+			Address:         msg.Packet.Address,
+			DataSize:        msg.Packet.DataSize,
+			TransactionID:   msg.Packet.TransactionID,
+			Metadata:        metadata,
+		})
+	})
+	return dst
 }
 
 type SlaveNodeStats struct {
@@ -485,5 +594,29 @@ func (sn *SlaveNode) processIncomingMessage(msg *InFlightMessage, cycle int) {
 		sn.txnMgr.RecordPacketEvent(event)
 	}
 
-	sn.queue.Enqueue(packet, cycle)
+	if inQ := sn.inQueue(); inQ != nil {
+		msg := &PipelineMessage{Packet: packet, Kind: "incoming"}
+		if _, ok := inQ.Enqueue(msg, cycle); !ok {
+			GetLogger().Warnf("SlaveNode %d: in_queue full, dropping packet %d", sn.ID, packet.ID)
+		}
+	}
+}
+
+func (sn *SlaveNode) stageQueue(stage pipelineStageName) *queue.StageQueue[*PipelineMessage] {
+	if sn == nil || sn.pipeline == nil {
+		return nil
+	}
+	return sn.pipeline.queue(stage)
+}
+
+func (sn *SlaveNode) inQueue() *queue.StageQueue[*PipelineMessage] {
+	return sn.stageQueue(pipelineStageIn)
+}
+
+func (sn *SlaveNode) processQueue() *queue.StageQueue[*PipelineMessage] {
+	return sn.stageQueue(pipelineStageProcess)
+}
+
+func (sn *SlaveNode) outQueue() *queue.StageQueue[*PipelineMessage] {
+	return sn.stageQueue(pipelineStageOut)
 }

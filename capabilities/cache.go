@@ -1,6 +1,7 @@
 package capabilities
 
 import (
+	"strconv"
 	"sync"
 
 	"github.com/Readm/flow_sim/core"
@@ -194,6 +195,8 @@ func (c *cacheCapability) BuildSnoopResponse(nodeID int, req *core.Packet, alloc
 	} else {
 		resp.ResponseType = core.CHIRespSnpNoData
 	}
+
+	resp.SetMetadata(RingFinalTargetMetadataKey, strconv.Itoa(resp.DstID))
 
 	return resp, nil
 }

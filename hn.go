@@ -18,9 +18,9 @@ type CacheLine = capabilities.HomeCacheLine
 // It receives requests from Request Nodes and forwards them to Slave Nodes,
 // then routes responses back to the originating Request Node.
 type HomeNode struct {
-	Node   // embedded Node base class
-	queue  *queue.TrackedQueue[*core.Packet]
-	txnMgr *TransactionManager // for recording packet events
+	Node     // embedded Node base class
+	pipeline *PacketPipeline
+	txnMgr   *TransactionManager // for recording packet events
 
 	mu       sync.Mutex
 	bindings *NodeCycleBindings
@@ -31,6 +31,8 @@ type HomeNode struct {
 	// Cache storage: simple map from address to cache line
 	cacheCapability capabilities.CacheWithHomeStore
 	cacheStore      capabilities.HomeCache
+	cacheCapacity   int
+	cacheEvictor    capabilities.CacheEvictor
 
 	// Directory: tracks which RequestNodes have cached which addresses
 	// map[address] -> set of RequestNode IDs
@@ -60,29 +62,41 @@ func NewHomeNode(id int) *HomeNode {
 		bindings:        NewNodeCycleBindings(),
 		pendingRequests: make(map[int64]*PendingSnoopRequest),
 		packetIDs:       nil, // will be set by simulator
+		cacheCapacity:   DefaultHomeCacheCapacity,
 	}
-	hn.AddQueue("forward_queue", 0, DefaultForwardQueueCapacity)
-	hn.queue = queue.NewTrackedQueue("forward_queue", DefaultForwardQueueCapacity, hn.makeQueueMutator(), queue.QueueHooks[*core.Packet]{
-		OnEnqueue: hn.enqueueHook,
-		OnDequeue: hn.dequeueHook,
+
+	hn.AddQueue(string(pipelineStageIn), 0, queue.UnlimitedCapacity)
+	hn.AddQueue(string(pipelineStageProcess), 0, DefaultForwardQueueCapacity)
+	hn.AddQueue(string(pipelineStageOut), 0, queue.UnlimitedCapacity)
+
+	hn.pipeline = newPacketPipeline(hn.makeStageMutator, PipelineCapacities{
+		In:      queue.UnlimitedCapacity,
+		Process: DefaultForwardQueueCapacity,
+		Out:     queue.UnlimitedCapacity,
+	}, PipelineHooks{
+		Process: queue.StageQueueHooks[*PipelineMessage]{
+			OnEnqueue: hn.enqueueHook,
+			OnDequeue: hn.dequeueHook,
+		},
 	})
+
 	return hn
 }
 
-func (hn *HomeNode) makeQueueMutator() queue.MutateFunc {
+func (hn *HomeNode) makeStageMutator(stage pipelineStageName) queue.MutateFunc {
 	return func(length int, capacity int) {
-		hn.UpdateQueueState("forward_queue", length, capacity)
+		hn.UpdateQueueState(string(stage), length, capacity)
 	}
 }
 
-func (hn *HomeNode) enqueueHook(p *core.Packet, cycle int) {
-	if hn.txnMgr == nil || p == nil || p.TransactionID == 0 {
+func (hn *HomeNode) enqueueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
+	if hn.txnMgr == nil || msg == nil || msg.Packet == nil || msg.Packet.TransactionID == 0 {
 		return
 	}
 	event := &core.PacketEvent{
-		TransactionID:  p.TransactionID,
-		PacketID:       p.ID,
-		ParentPacketID: p.ParentPacketID,
+		TransactionID:  msg.Packet.TransactionID,
+		PacketID:       msg.Packet.ID,
+		ParentPacketID: msg.Packet.ParentPacketID,
 		NodeID:         hn.ID,
 		EventType:      core.PacketEnqueued,
 		Cycle:          cycle,
@@ -91,14 +105,14 @@ func (hn *HomeNode) enqueueHook(p *core.Packet, cycle int) {
 	hn.txnMgr.RecordPacketEvent(event)
 }
 
-func (hn *HomeNode) dequeueHook(p *core.Packet, cycle int) {
-	if hn.txnMgr == nil || p == nil || p.TransactionID == 0 {
+func (hn *HomeNode) dequeueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
+	if hn.txnMgr == nil || msg == nil || msg.Packet == nil || msg.Packet.TransactionID == 0 {
 		return
 	}
 	event := &core.PacketEvent{
-		TransactionID:  p.TransactionID,
-		PacketID:       p.ID,
-		ParentPacketID: p.ParentPacketID,
+		TransactionID:  msg.Packet.TransactionID,
+		PacketID:       msg.Packet.ID,
+		ParentPacketID: msg.Packet.ParentPacketID,
 		NodeID:         hn.ID,
 		EventType:      core.PacketDequeued,
 		Cycle:          cycle,
@@ -122,6 +136,14 @@ func (hn *HomeNode) SetPluginBroker(b *hooks.PluginBroker) {
 func (hn *HomeNode) SetPolicyManager(m policy.Manager) {
 	hn.policyMgr = m
 	hn.ensureDefaultCapabilities()
+}
+
+// SetCacheCapacity overrides the occupancy limit for the home cache before capability init.
+func (hn *HomeNode) SetCacheCapacity(capacity int) {
+	if capacity <= 0 {
+		capacity = DefaultHomeCacheCapacity
+	}
+	hn.cacheCapacity = capacity
 }
 
 // SetPacketIDAllocator assigns the packet ID allocator for generating response packets.
@@ -162,6 +184,16 @@ func (hn *HomeNode) ensureDefaultCapabilities() {
 	for _, cap := range caps {
 		hn.registerCapability(cap)
 	}
+	if hn.cacheStore != nil && hn.cacheEvictor == nil {
+		lruCap := capabilities.NewLRUEvictionCapability(
+			fmt.Sprintf("home-cache-lru-%d", hn.ID),
+			capabilities.LRUEvictionConfig{
+				Capacity:  hn.cacheCapacity,
+				HomeCache: hn.cacheStore,
+			},
+		)
+		hn.registerCapability(lruCap)
+	}
 	if hn.policyMgr != nil {
 		hn.defaultCapsRegistered = true
 	}
@@ -196,6 +228,9 @@ func (hn *HomeNode) registerCapability(cap capabilities.NodeCapability) {
 		hn.directoryCapability = dirCap
 		hn.directoryStore = dirCap.Directory()
 	}
+	if evictCap, ok := cap.(capabilities.CacheEvictor); ok {
+		hn.cacheEvictor = evictCap
+	}
 }
 
 // ConfigureCycleRuntime sets the coordinator bindings for the node.
@@ -224,9 +259,8 @@ func (hn *HomeNode) RegisterOutgoingSignal(edge core.EdgeKey, signal *CycleSigna
 }
 
 // CanReceive checks if the HomeNode can receive packets from the given edge.
-// HomeNode always can receive (unlimited capacity for forward_queue).
+// HomeNode always can receive (in_queue has unlimited capacity).
 func (hn *HomeNode) CanReceive(edgeKey core.EdgeKey, packetCount int) bool {
-	// forward_queue has unlimited capacity (-1)
 	return true
 }
 
@@ -247,8 +281,13 @@ func (hn *HomeNode) OnPacket(p *core.Packet, cycle int, ch *Link, cfg *Config) {
 	}
 	p.ReceivedAt = cycle
 	hn.mu.Lock()
-	hn.queue.Enqueue(p, cycle)
-	hn.mu.Unlock()
+	defer hn.mu.Unlock()
+	if inQ := hn.inQueue(); inQ != nil {
+		msg := &PipelineMessage{Packet: p, Kind: "incoming"}
+		if _, ok := inQ.Enqueue(msg, cycle); !ok {
+			GetLogger().Warnf("HomeNode %d: in_queue full, dropping packet %d", hn.ID, p.ID)
+		}
+	}
 }
 
 // PendingSnoopRequest tracks a ReadOnce request waiting for Snoop responses
@@ -272,7 +311,7 @@ func (hn *HomeNode) generateSnoopRequest(addr uint64, targetRNID int, originalTx
 		SrcID:           hn.ID,
 		DstID:           targetRNID,
 		GeneratedAt:     cycle,
-		SentAt:          cycle,
+		SentAt:          0,
 		MasterID:        targetRNID,
 		RequestID:       snoopID,
 		TransactionType: txnType,
@@ -297,7 +336,7 @@ func (hn *HomeNode) generateCacheHitResponse(req *core.Packet, cycle int) *core.
 		SrcID:           hn.ID,
 		DstID:           req.MasterID, // return to Request Node
 		GeneratedAt:     cycle,
-		SentAt:          cycle,
+		SentAt:          0,
 		MasterID:        req.MasterID,
 		RequestID:       req.RequestID,
 		TransactionType: req.TransactionType,
@@ -311,381 +350,392 @@ func (hn *HomeNode) generateCacheHitResponse(req *core.Packet, cycle int) *core.
 	return resp
 }
 
-// Tick processes the queue and forwards CHI packets according to CHI protocol rules.
-// For ReadOnce transactions:
-//   - If cache hit: generate CompData response directly to RN (Alternative 1)
-//   - If cache miss: forward request to SN, then update cache when response arrives
-//
-// For ReadNoSnp transactions:
-//   - Requests from RN: forward to target SN
-//   - CompData responses from SN: forward back to originating RN
+// Tick processes pipeline stages and returns the number of packets sent this cycle.
 func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
-	hn.mu.Lock()
-	defer hn.mu.Unlock()
-
-	if hn.queue.Len() == 0 {
+	if cfg == nil || ch == nil {
 		return 0
 	}
 
-	count := 0
-	for hn.queue.Len() > 0 {
-		p, ok := hn.queue.PopFront(cycle)
+	hn.mu.Lock()
+	defer hn.mu.Unlock()
+
+	hn.releaseToProcess(-1, cycle)
+	hn.processStage(cycle, cfg)
+	return hn.sendFromOutQueue(cycle, cfg, ch)
+}
+
+func (hn *HomeNode) processStage(cycle int, cfg *Config) {
+	procQ := hn.processQueue()
+	if procQ == nil {
+		return
+	}
+	for {
+		entryID, msg, ok := procQ.PeekNext()
 		if !ok {
 			break
 		}
-
-		// Handle ReadOnce requests with Directory lookup and Snoop
-		if p.MessageType == core.CHIMsgReq && p.TransactionType == core.CHITxnReadOnce {
-			GetLogger().Infof("[MESI] HomeNode %d: Received ReadOnce request from RN %d (TxnID=%d, Addr=0x%x, Cycle=%d)",
-				hn.ID, p.MasterID, p.TransactionID, p.Address, cycle)
-
-			// Check Directory for other sharers
-			var sharers []int
-			if hn.directoryStore != nil {
-				sharers = hn.directoryStore.Sharers(p.Address)
-			}
-			GetLogger().Infof("[MESI] HomeNode %d: Directory lookup for address 0x%x: found %d sharer(s): %v",
-				hn.ID, p.Address, len(sharers), sharers)
-
-			// Exclude the requesting RN from sharers list
-			filteredSharers := make([]int, 0)
-			for _, rnID := range sharers {
-				if rnID != p.MasterID {
-					filteredSharers = append(filteredSharers, rnID)
-				}
-			}
-			GetLogger().Infof("[MESI] HomeNode %d: After filtering (excluding RN %d): %d sharer(s) to snoop: %v",
-				hn.ID, p.MasterID, len(filteredSharers), filteredSharers)
-
-			if len(filteredSharers) > 0 {
-				// Other RNs have cached this address: send Snoop requests
-				GetLogger().Infof("[MESI] HomeNode %d: Found %d sharer(s) for address 0x%x, sending Snoop requests",
-					hn.ID, len(filteredSharers), p.Address)
-
-				// Store the original request to track which RN is waiting for Snoop responses
-				hn.pendingRequestsMu.Lock()
-				hn.pendingRequests[p.TransactionID] = &PendingSnoopRequest{
-					RequestingRNID: p.MasterID,
-					OriginalReqID:  p.RequestID,
-					TotalSnoops:    len(filteredSharers),
-					ReceivedSnoops: 0,
-					AllNoData:      true, // Assume all are NoData until we get SnpData
-				}
-				hn.pendingRequestsMu.Unlock()
-
-				// Send Snoop requests to all sharers
-				for _, sharerID := range filteredSharers {
-					snoopReq := hn.generateSnoopRequest(p.Address, sharerID, p.TransactionID, p.TransactionType, cycle)
-					if snoopReq != nil {
-						// Record snoop request generation
-						if hn.txnMgr != nil && p.TransactionID > 0 {
-							event := &core.PacketEvent{
-								TransactionID:  p.TransactionID,
-								PacketID:       snoopReq.ID,
-								ParentPacketID: p.ID,
-								NodeID:         hn.ID,
-								EventType:      core.PacketGenerated,
-								Cycle:          cycle,
-								EdgeKey:        nil,
-							}
-							hn.txnMgr.RecordPacketEvent(event)
-						}
-
-						// Send Snoop request to sharer RN
-						snoopReq.SentAt = cycle
-						ch.Send(snoopReq, hn.ID, sharerID, cycle, cfg.RelayMasterLatency)
-						count++
-						GetLogger().Infof("[MESI] HomeNode %d: Sent Snoop request (PacketID=%d) to RN %d for address 0x%x",
-							hn.ID, snoopReq.ID, sharerID, p.Address)
-					}
-				}
-
-				// Wait for Snoop responses - do NOT forward to SN yet
-				// The request will be handled when Snoop response arrives
-				GetLogger().Infof("[MESI] HomeNode %d: Waiting for Snoop responses, NOT forwarding to SN",
-					hn.ID)
-				continue // Skip forwarding to SN
-			} else {
-				// No other sharers: check HN cache
-				cacheHit := false
-				if hn.cacheStore != nil {
-					if line, ok := hn.cacheStore.GetLine(p.Address); ok && line.Valid {
-						cacheHit = true
-					}
-				}
-				if cacheHit {
-					// Cache hit: generate CompData response directly
-					GetLogger().Infof("[Cache] HomeNode %d: CACHE HIT for address 0x%x (TxnID=%d, Cycle=%d)",
-						hn.ID, p.Address, p.TransactionID, cycle)
-					resp := hn.generateCacheHitResponse(p, cycle)
-					if resp != nil {
-						// Record cache hit event
-						if hn.txnMgr != nil && p.TransactionID > 0 {
-							event := &core.PacketEvent{
-								TransactionID:  p.TransactionID,
-								PacketID:       resp.ID,
-								ParentPacketID: p.ID,
-								NodeID:         hn.ID,
-								EventType:      core.PacketGenerated,
-								Cycle:          cycle,
-								EdgeKey:        nil,
-							}
-							hn.txnMgr.RecordPacketEvent(event)
-						}
-
-						// Send response directly to RN
-						latency := cfg.RelayMasterLatency
-						resp.SentAt = cycle
-						GetLogger().Infof("[Cache] HomeNode %d: Sending CompData response directly to RN %d (TxnID=%d, PacketID=%d, Cycle=%d)",
-							hn.ID, resp.DstID, p.TransactionID, resp.ID, cycle)
-						ch.Send(resp, hn.ID, resp.DstID, cycle, latency)
-						count++
-
-						// Update Directory: add requesting RN as sharer
-						if hn.directoryStore != nil {
-							hn.directoryStore.Add(p.Address, p.MasterID)
-						}
-
-						// Record cache hit in transaction metadata
-						if hn.txnMgr != nil && p.TransactionID > 0 {
-							txn := hn.txnMgr.GetTransaction(p.TransactionID)
-							if txn != nil && txn.Context != nil {
-								if txn.Context.Metadata == nil {
-									txn.Context.Metadata = make(map[string]string)
-								}
-								txn.Context.Metadata["cache_hit"] = "true"
-								txn.Context.Metadata["cache_hit_node"] = fmt.Sprintf("%d", hn.ID)
-							}
-						}
-						continue
-					}
-				} else {
-					// Cache miss: record and continue with normal forwarding to SN
-					GetLogger().Infof("[Cache] HomeNode %d: CACHE MISS for address 0x%x (TxnID=%d, Cycle=%d) - forwarding to SN",
-						hn.ID, p.Address, p.TransactionID, cycle)
-					if hn.txnMgr != nil && p.TransactionID > 0 {
-						txn := hn.txnMgr.GetTransaction(p.TransactionID)
-						if txn != nil && txn.Context != nil {
-							if txn.Context.Metadata == nil {
-								txn.Context.Metadata = make(map[string]string)
-							}
-							txn.Context.Metadata["cache_miss"] = "true"
-							txn.Context.Metadata["cache_miss_node"] = fmt.Sprintf("%d", hn.ID)
-						}
-					}
-				}
-			}
-		}
-
-		// Handle Snoop responses from RNs
-		if p.MessageType == core.CHIMsgSnpResp {
-			GetLogger().Infof("[MESI] HomeNode %d: Received Snoop response %s from RN %d for address 0x%x (TxnID=%d, Cycle=%d)",
-				hn.ID, p.ResponseType, p.SrcID, p.Address, p.TransactionID, cycle)
-
-			// Find the original ReadOnce request that triggered this Snoop
-			hn.pendingRequestsMu.Lock()
-			pendingReq, hasPending := hn.pendingRequests[p.TransactionID]
-			if !hasPending {
-				hn.pendingRequestsMu.Unlock()
-				GetLogger().Warnf("[MESI] HomeNode %d: Received Snoop response for unknown TxnID=%d", hn.ID, p.TransactionID)
-			} else {
-				pendingReq.ReceivedSnoops++
-
-				if p.ResponseType == core.CHIRespSnpData {
-					// Snoop response with data: forward as CompData to the original requesting RN
-					requestingRNID := pendingReq.RequestingRNID
-					hn.pendingRequestsMu.Unlock()
-
-					resp := &core.Packet{
-						ID:              hn.packetIDs.Allocate(),
-						Type:            "response", // legacy
-						SrcID:           hn.ID,
-						DstID:           requestingRNID,
-						GeneratedAt:     cycle,
-						SentAt:          cycle,
-						MasterID:        requestingRNID,
-						RequestID:       pendingReq.OriginalReqID, // Use original ReadOnce request ID
-						TransactionType: p.TransactionType,
-						MessageType:     core.CHIMsgComp,
-						ResponseType:    core.CHIRespCompData,
-						Address:         p.Address,
-						DataSize:        p.DataSize,
-						TransactionID:   p.TransactionID,
-						ParentPacketID:  p.ID,
-					}
-
-					// Record response generation
-					if hn.txnMgr != nil && p.TransactionID > 0 {
-						event := &core.PacketEvent{
-							TransactionID:  p.TransactionID,
-							PacketID:       resp.ID,
-							ParentPacketID: p.ID,
-							NodeID:         hn.ID,
-							EventType:      core.PacketGenerated,
-							Cycle:          cycle,
-							EdgeKey:        nil,
-						}
-						hn.txnMgr.RecordPacketEvent(event)
-					}
-
-					// Send CompData to requesting RN
-					ch.Send(resp, hn.ID, requestingRNID, cycle, cfg.RelayMasterLatency)
-					count++
-
-					// Update Directory: add requesting RN as sharer
-					if hn.directoryStore != nil {
-						hn.directoryStore.Add(p.Address, requestingRNID)
-					}
-
-					// Remove from pending requests
-					hn.pendingRequestsMu.Lock()
-					delete(hn.pendingRequests, p.TransactionID)
-					hn.pendingRequestsMu.Unlock()
-
-					GetLogger().Infof("[MESI] HomeNode %d: Forwarded Snoop data as CompData to RN %d (TxnID=%d, PacketID=%d)",
-						hn.ID, requestingRNID, p.TransactionID, resp.ID)
-					continue
-				} else if p.ResponseType == core.CHIRespSnpNoData {
-					// Snoop response without data: mark as NoData
-					pendingReq.AllNoData = pendingReq.AllNoData && true // stays true
-					GetLogger().Infof("[MESI] HomeNode %d: Snoop response has no data (%d/%d received)",
-						hn.ID, pendingReq.ReceivedSnoops, pendingReq.TotalSnoops)
-
-					// Check if all Snoop responses have been received
-					if pendingReq.ReceivedSnoops >= pendingReq.TotalSnoops {
-						// All Snoop responses received, all are NoData: need to forward to SN
-						// For now, we'll log this case - in a full implementation, we'd store the original
-						// request packet and forward it to SN here
-						GetLogger().Infof("[MESI] HomeNode %d: All Snoop responses are NoData (%d/%d), should forward to SN (not implemented yet)",
-							hn.ID, pendingReq.ReceivedSnoops, pendingReq.TotalSnoops)
-						// Remove from pending - transaction will timeout or be handled elsewhere
-						delete(hn.pendingRequests, p.TransactionID)
-						hn.pendingRequestsMu.Unlock()
-					} else {
-						// Still waiting for more Snoop responses
-						hn.pendingRequestsMu.Unlock()
-					}
-				}
-			}
-		}
-
-		// Handle CompData responses from SN: update cache and Directory for ReadOnce transactions
-		if p.MessageType == core.CHIMsgComp && p.ResponseType == core.CHIRespCompData {
-			if p.TransactionType == core.CHITxnReadOnce {
-				// Get the requesting RN ID from pending requests or use MasterID
-				var requestingRNID int
-				hn.pendingRequestsMu.Lock()
-				if pendingReq, hasPending := hn.pendingRequests[p.TransactionID]; hasPending {
-					requestingRNID = pendingReq.RequestingRNID
-					// Remove from pending - we got data from SN (Snoop didn't provide data or we got SN data first)
-					delete(hn.pendingRequests, p.TransactionID)
-					GetLogger().Infof("[MESI] HomeNode %d: Removed TxnID=%d from pending requests (got data from SN), requesting RN=%d",
-						hn.ID, p.TransactionID, requestingRNID)
-				} else {
-					// Not in pending requests, use MasterID (should be the original RN)
-					requestingRNID = p.MasterID
-					GetLogger().Infof("[MESI] HomeNode %d: TxnID=%d not in pending requests, using MasterID=%d",
-						hn.ID, p.TransactionID, requestingRNID)
-				}
-				hn.pendingRequestsMu.Unlock()
-
-				// Update cache with the data
-				GetLogger().Infof("[Cache] HomeNode %d: Received CompData from SN, updating cache for address 0x%x (TxnID=%d, Cycle=%d, RequestingRN=%d)",
-					hn.ID, p.Address, p.TransactionID, cycle, requestingRNID)
-				if hn.cacheStore != nil {
-					hn.cacheStore.UpdateLine(p.Address, CacheLine{Valid: true})
-				}
-
-				// Update Directory: add the requesting RN as sharer
-				if hn.directoryStore != nil {
-					hn.directoryStore.Add(p.Address, requestingRNID)
-				}
-				GetLogger().Infof("[MESI] HomeNode %d: Added RN %d to Directory for address 0x%x",
-					hn.ID, requestingRNID, p.Address)
-
-				GetLogger().Infof("[Cache] HomeNode %d: Cache and Directory updated for address 0x%x (TxnID=%d)",
-					hn.ID, p.Address, p.TransactionID)
-				// Record cache update event
-				if hn.txnMgr != nil && p.TransactionID > 0 {
-					txn := hn.txnMgr.GetTransaction(p.TransactionID)
-					if txn != nil && txn.Context != nil {
-						if txn.Context.Metadata == nil {
-							txn.Context.Metadata = make(map[string]string)
-						}
-						txn.Context.Metadata["cache_updated"] = "true"
-						txn.Context.Metadata["cache_updated_node"] = fmt.Sprintf("%d", hn.ID)
-					}
-				}
-			}
-		}
-
-		defaultTarget, latency, ok := hn.defaultRoute(p, cfg)
-		if !ok {
+		if msg == nil || msg.Packet == nil {
+			procQ.Complete(entryID, cycle)
 			continue
 		}
+		p := msg.Packet
+		hn.emitProcessHook(p, cycle, true)
+		forward := true
 
-		finalTarget := defaultTarget
+		if p.MessageType == core.CHIMsgReq && p.TransactionType == core.CHITxnReadOnce {
+			forward = hn.processReadOnceRequest(p, cycle, cfg)
+		}
 
-		if hn.broker != nil {
-			routeCtx := &hooks.RouteContext{
-				Packet:        p,
-				SourceNodeID:  hn.ID,
-				DefaultTarget: defaultTarget,
-				TargetID:      defaultTarget,
-			}
-			if err := hn.broker.EmitBeforeRoute(routeCtx); err != nil {
-				GetLogger().Warnf("HomeNode %d OnBeforeRoute hook failed: %v", hn.ID, err)
+		if p.MessageType == core.CHIMsgSnpResp {
+			forward = hn.processSnoopResponse(p, cycle, cfg) && forward
+		}
+
+		if p.MessageType == core.CHIMsgComp && p.ResponseType == core.CHIRespCompData {
+			hn.processCompDataResponse(p, cycle)
+		}
+
+		if forward {
+			hn.enqueueDefaultForward(p, cfg, cycle)
+		}
+
+		procQ.Complete(entryID, cycle)
+		hn.emitProcessHook(p, cycle, false)
+	}
+}
+
+func (hn *HomeNode) processReadOnceRequest(p *core.Packet, cycle int, cfg *Config) bool {
+	forward := true
+
+	// Directory lookup
+	var sharers []int
+	if hn.directoryStore != nil {
+		sharers = hn.directoryStore.Sharers(p.Address)
+	}
+
+	filteredSharers := make([]int, 0, len(sharers))
+	for _, rnID := range sharers {
+		if rnID != p.MasterID {
+			filteredSharers = append(filteredSharers, rnID)
+		}
+	}
+
+	if len(filteredSharers) > 0 {
+		forward = false
+		// Track pending request
+		hn.pendingRequestsMu.Lock()
+		hn.pendingRequests[p.TransactionID] = &PendingSnoopRequest{
+			RequestingRNID: p.MasterID,
+			OriginalReqID:  p.RequestID,
+			TotalSnoops:    len(filteredSharers),
+			ReceivedSnoops: 0,
+			AllNoData:      true,
+		}
+		hn.pendingRequestsMu.Unlock()
+
+		for _, sharerID := range filteredSharers {
+			snoopReq := hn.generateSnoopRequest(p.Address, sharerID, p.TransactionID, p.TransactionType, cycle)
+			if snoopReq == nil {
 				continue
 			}
-			finalTarget = routeCtx.TargetID
+			if hn.txnMgr != nil && p.TransactionID > 0 {
+				event := &core.PacketEvent{
+					TransactionID:  p.TransactionID,
+					PacketID:       snoopReq.ID,
+					ParentPacketID: p.ID,
+					NodeID:         hn.ID,
+					EventType:      core.PacketGenerated,
+					Cycle:          cycle,
+					EdgeKey:        nil,
+				}
+				hn.txnMgr.RecordPacketEvent(event)
+			}
+			hn.enqueueOutgoing(snoopReq, "snoop_request", sharerID, cfg.RelayMasterLatency, cycle)
 		}
+		return false
+	}
 
-		if hn.broker != nil {
-			routeCtx := &hooks.RouteContext{
-				Packet:        p,
-				SourceNodeID:  hn.ID,
-				DefaultTarget: defaultTarget,
-				TargetID:      finalTarget,
-			}
-			if err := hn.broker.EmitAfterRoute(routeCtx); err != nil {
-				GetLogger().Warnf("HomeNode %d OnAfterRoute hook failed: %v", hn.ID, err)
-			}
-			finalTarget = routeCtx.TargetID
+	cacheHit := false
+	if hn.cacheStore != nil {
+		if line, ok := hn.cacheStore.GetLine(p.Address); ok && line.Valid {
+			cacheHit = true
 		}
+	}
 
-		if hn.broker != nil {
-			sendCtx := &hooks.MessageContext{
-				Packet:   p,
-				NodeID:   hn.ID,
-				TargetID: finalTarget,
-				Cycle:    cycle,
+	if cacheHit {
+		forward = false
+		resp := hn.generateCacheHitResponse(p, cycle)
+		if resp != nil {
+			if hn.cacheEvictor != nil {
+				hn.cacheEvictor.Touch(p.Address)
 			}
-			if err := hn.broker.EmitBeforeSend(sendCtx); err != nil {
-				GetLogger().Warnf("HomeNode %d OnBeforeSend hook failed: %v", hn.ID, err)
-				continue
+			if hn.txnMgr != nil && p.TransactionID > 0 {
+				event := &core.PacketEvent{
+					TransactionID:  p.TransactionID,
+					PacketID:       resp.ID,
+					ParentPacketID: p.ID,
+					NodeID:         hn.ID,
+					EventType:      core.PacketGenerated,
+					Cycle:          cycle,
+					EdgeKey:        nil,
+				}
+				hn.txnMgr.RecordPacketEvent(event)
+			}
+			hn.enqueueOutgoing(resp, "forward_response", resp.DstID, cfg.RelayMasterLatency, cycle)
+			if hn.directoryStore != nil {
+				hn.directoryStore.Add(p.Address, p.MasterID)
+			}
+			if hn.txnMgr != nil && p.TransactionID > 0 {
+				txn := hn.txnMgr.GetTransaction(p.TransactionID)
+				if txn != nil && txn.Context != nil {
+					if txn.Context.Metadata == nil {
+						txn.Context.Metadata = make(map[string]string)
+					}
+					txn.Context.Metadata["cache_hit"] = "true"
+					txn.Context.Metadata["cache_hit_node"] = fmt.Sprintf("%d", hn.ID)
+				}
 			}
 		}
-
-		latency = hn.adjustLatency(p, cfg, finalTarget)
-
-		p.SentAt = cycle
-		ch.Send(p, hn.ID, finalTarget, cycle, latency)
-		count++
-
-		if hn.broker != nil {
-			sendCtx := &hooks.MessageContext{
-				Packet:   p,
-				NodeID:   hn.ID,
-				TargetID: finalTarget,
-				Cycle:    cycle,
-			}
-			if err := hn.broker.EmitAfterSend(sendCtx); err != nil {
-				GetLogger().Warnf("HomeNode %d OnAfterSend hook failed: %v", hn.ID, err)
+	} else {
+		if hn.txnMgr != nil && p.TransactionID > 0 {
+			txn := hn.txnMgr.GetTransaction(p.TransactionID)
+			if txn != nil && txn.Context != nil {
+				if txn.Context.Metadata == nil {
+					txn.Context.Metadata = make(map[string]string)
+				}
+				txn.Context.Metadata["cache_miss"] = "true"
+				txn.Context.Metadata["cache_miss_node"] = fmt.Sprintf("%d", hn.ID)
 			}
 		}
 	}
 
-	return count
+	return forward
+}
+
+func (hn *HomeNode) processSnoopResponse(p *core.Packet, cycle int, cfg *Config) bool {
+	hn.pendingRequestsMu.Lock()
+	pendingReq, hasPending := hn.pendingRequests[p.TransactionID]
+	if !hasPending {
+		hn.pendingRequestsMu.Unlock()
+		return false
+	}
+	pendingReq.ReceivedSnoops++
+
+	if p.ResponseType == core.CHIRespSnpData {
+		requestingRNID := pendingReq.RequestingRNID
+		delete(hn.pendingRequests, p.TransactionID)
+		hn.pendingRequestsMu.Unlock()
+
+		if hn.packetIDs == nil {
+			return false
+		}
+		resp := &core.Packet{
+			ID:              hn.packetIDs.Allocate(),
+			Type:            "response",
+			SrcID:           hn.ID,
+			DstID:           requestingRNID,
+			GeneratedAt:     cycle,
+			SentAt:          0,
+			MasterID:        requestingRNID,
+			RequestID:       pendingReq.OriginalReqID,
+			TransactionType: p.TransactionType,
+			MessageType:     core.CHIMsgComp,
+			ResponseType:    core.CHIRespCompData,
+			Address:         p.Address,
+			DataSize:        p.DataSize,
+			TransactionID:   p.TransactionID,
+			ParentPacketID:  p.ID,
+		}
+		if hn.txnMgr != nil && p.TransactionID > 0 {
+			event := &core.PacketEvent{
+				TransactionID:  p.TransactionID,
+				PacketID:       resp.ID,
+				ParentPacketID: p.ID,
+				NodeID:         hn.ID,
+				EventType:      core.PacketGenerated,
+				Cycle:          cycle,
+				EdgeKey:        nil,
+			}
+			hn.txnMgr.RecordPacketEvent(event)
+		}
+		hn.enqueueOutgoing(resp, "forward_response", resp.DstID, cfg.RelayMasterLatency, cycle)
+		if hn.directoryStore != nil {
+			hn.directoryStore.Add(p.Address, requestingRNID)
+		}
+		return false
+	}
+
+	pendingReq.AllNoData = pendingReq.AllNoData && true
+	allDone := pendingReq.ReceivedSnoops >= pendingReq.TotalSnoops
+	if allDone {
+		delete(hn.pendingRequests, p.TransactionID)
+	}
+	hn.pendingRequestsMu.Unlock()
+
+	return false
+}
+
+func (hn *HomeNode) processCompDataResponse(p *core.Packet, cycle int) {
+	if p.TransactionType != core.CHITxnReadOnce {
+		return
+	}
+
+	var requestingRNID int
+	hn.pendingRequestsMu.Lock()
+	if pendingReq, hasPending := hn.pendingRequests[p.TransactionID]; hasPending {
+		requestingRNID = pendingReq.RequestingRNID
+		delete(hn.pendingRequests, p.TransactionID)
+	} else {
+		requestingRNID = p.MasterID
+	}
+	hn.pendingRequestsMu.Unlock()
+
+	if hn.cacheStore != nil {
+		hn.cacheStore.UpdateLine(p.Address, CacheLine{Valid: true})
+	}
+	if hn.cacheEvictor != nil {
+		hn.cacheEvictor.Fill(p.Address)
+	}
+	if hn.directoryStore != nil {
+		hn.directoryStore.Add(p.Address, requestingRNID)
+	}
+	if hn.txnMgr != nil && p.TransactionID > 0 {
+		txn := hn.txnMgr.GetTransaction(p.TransactionID)
+		if txn != nil && txn.Context != nil {
+			if txn.Context.Metadata == nil {
+				txn.Context.Metadata = make(map[string]string)
+			}
+			txn.Context.Metadata["cache_updated"] = "true"
+			txn.Context.Metadata["cache_updated_node"] = fmt.Sprintf("%d", hn.ID)
+		}
+	}
+}
+
+func (hn *HomeNode) sendFromOutQueue(cycle int, cfg *Config, ch *Link) int {
+	outQ := hn.outQueue()
+	if outQ == nil {
+		return 0
+	}
+	sent := 0
+	for {
+		entryID, msg, ok := outQ.PeekNext()
+		if !ok {
+			break
+		}
+		if msg == nil || msg.Packet == nil {
+			outQ.Complete(entryID, cycle)
+			continue
+		}
+		packet := msg.Packet
+		defaultTarget := msg.DefaultTarget
+		latency := msg.Latency
+		if (defaultTarget == 0 || latency == 0) && packet != nil {
+			if dt, dl, ok := hn.defaultRoute(packet, cfg); ok {
+				if defaultTarget == 0 {
+					defaultTarget = dt
+				}
+				if latency == 0 {
+					latency = dl
+				}
+			}
+		}
+
+		needsRouting := msg.Kind == "forward_request" || msg.Kind == "forward_response" || msg.Kind == "forward_other"
+		finalTarget := msg.TargetID
+		if finalTarget == 0 {
+			finalTarget = defaultTarget
+		}
+		if needsRouting {
+			resolved, ok := hn.resolveRoute(packet, defaultTarget)
+			if !ok {
+				outQ.ResetPending(entryID)
+				continue
+			}
+			finalTarget = resolved
+		}
+		if finalTarget < 0 {
+			outQ.Complete(entryID, cycle)
+			continue
+		}
+		latency = hn.adjustLatency(packet, cfg, finalTarget)
+		if !hn.emitBeforeSend(packet, finalTarget, cycle) {
+			outQ.ResetPending(entryID)
+			continue
+		}
+		ch.Send(packet, hn.ID, finalTarget, cycle, latency)
+		packet.SentAt = cycle
+		hn.emitAfterSend(packet, finalTarget, cycle)
+		outQ.Complete(entryID, cycle)
+		sent++
+	}
+	return sent
+}
+
+func (hn *HomeNode) resolveRoute(packet *core.Packet, defaultTarget int) (int, bool) {
+	targetID := defaultTarget
+	if hn.broker == nil || packet == nil {
+		if targetID == 0 {
+			targetID = packet.DstID
+		}
+		return targetID, true
+	}
+	if targetID == 0 {
+		targetID = packet.DstID
+	}
+	beforeCtx := &hooks.RouteContext{
+		Packet:        packet,
+		SourceNodeID:  hn.ID,
+		DefaultTarget: targetID,
+		TargetID:      targetID,
+	}
+	if err := hn.broker.EmitBeforeRoute(beforeCtx); err != nil {
+		GetLogger().Warnf("HomeNode %d OnBeforeRoute hook failed: %v", hn.ID, err)
+		return 0, false
+	}
+	afterCtx := &hooks.RouteContext{
+		Packet:        packet,
+		SourceNodeID:  hn.ID,
+		DefaultTarget: targetID,
+		TargetID:      beforeCtx.TargetID,
+	}
+	if err := hn.broker.EmitAfterRoute(afterCtx); err != nil {
+		GetLogger().Warnf("HomeNode %d OnAfterRoute hook failed: %v", hn.ID, err)
+	}
+	if afterCtx.TargetID <= 0 {
+		return targetID, true
+	}
+	return afterCtx.TargetID, true
+}
+
+func (hn *HomeNode) emitBeforeSend(packet *core.Packet, targetID int, cycle int) bool {
+	if hn.broker == nil || packet == nil {
+		return true
+	}
+	ctx := &hooks.MessageContext{
+		Packet:   packet,
+		NodeID:   hn.ID,
+		TargetID: targetID,
+		Cycle:    cycle,
+	}
+	if err := hn.broker.EmitBeforeSend(ctx); err != nil {
+		GetLogger().Warnf("HomeNode %d OnBeforeSend hook failed: %v", hn.ID, err)
+		return false
+	}
+	return true
+}
+
+func (hn *HomeNode) emitAfterSend(packet *core.Packet, targetID int, cycle int) {
+	if hn.broker == nil || packet == nil {
+		return
+	}
+	ctx := &hooks.MessageContext{
+		Packet:   packet,
+		NodeID:   hn.ID,
+		TargetID: targetID,
+		Cycle:    cycle,
+	}
+	if err := hn.broker.EmitAfterSend(ctx); err != nil {
+		GetLogger().Warnf("HomeNode %d OnAfterSend hook failed: %v", hn.ID, err)
+	}
 }
 
 func (hn *HomeNode) defaultRoute(p *core.Packet, cfg *Config) (target int, latency int, ok bool) {
@@ -710,6 +760,33 @@ func (hn *HomeNode) adjustLatency(p *core.Packet, cfg *Config, target int) int {
 		return cfg.RelayMasterLatency
 	}
 	return cfg.RelaySlaveLatency
+}
+
+func (hn *HomeNode) determineForwardKind(packet *core.Packet) string {
+	switch {
+	case packet == nil:
+		return "forward_other"
+	case packet.MessageType == core.CHIMsgSnp:
+		return "snoop_request"
+	case packet.MessageType == core.CHIMsgReq || packet.Type == "request":
+		return "forward_request"
+	case packet.MessageType == core.CHIMsgComp || packet.MessageType == core.CHIMsgResp || packet.Type == "response":
+		return "forward_response"
+	default:
+		return "forward_other"
+	}
+}
+
+func (hn *HomeNode) enqueueDefaultForward(packet *core.Packet, cfg *Config, cycle int) {
+	if packet == nil {
+		return
+	}
+	defaultTarget, latency, ok := hn.defaultRoute(packet, cfg)
+	if !ok {
+		return
+	}
+	kind := hn.determineForwardKind(packet)
+	hn.enqueueOutgoing(packet, kind, defaultTarget, latency, cycle)
 }
 
 // HomeNodeRuntime contains dependencies required during runtime execution.
@@ -741,36 +818,54 @@ func (hn *HomeNode) RunRuntime(ctx *HomeNodeRuntime) {
 	}
 }
 
-// GetQueuePackets returns packet information for the forward_queue
+// GetQueuePackets returns packet information across in/process/out queues
 func (hn *HomeNode) GetQueuePackets() []core.PacketInfo {
 	hn.mu.Lock()
 	defer hn.mu.Unlock()
-	packets := make([]core.PacketInfo, 0, hn.queue.Len())
-	for _, p := range hn.queue.Items() {
-		if p == nil {
-			continue
-		}
-		packets = append(packets, core.PacketInfo{
-			ID:              p.ID,
-			Type:            p.Type,
-			SrcID:           p.SrcID,
-			DstID:           p.DstID,
-			GeneratedAt:     p.GeneratedAt,
-			SentAt:          p.SentAt,
-			ReceivedAt:      p.ReceivedAt,
-			CompletedAt:     p.CompletedAt,
-			MasterID:        p.MasterID,
-			RequestID:       p.RequestID,
-			TransactionType: p.TransactionType,
-			MessageType:     p.MessageType,
-			ResponseType:    p.ResponseType,
-			Address:         p.Address,
-			DataSize:        p.DataSize,
-			TransactionID:   p.TransactionID,
-			Metadata:        core.CloneMetadata(p.Metadata),
-		})
-	}
+	packets := make([]core.PacketInfo, 0)
+	packets = hn.appendStagePackets(packets, hn.inQueue())
+	packets = hn.appendStagePackets(packets, hn.processQueue())
+	packets = hn.appendStagePackets(packets, hn.outQueue())
 	return packets
+}
+
+func (hn *HomeNode) appendStagePackets(dst []core.PacketInfo, q *queue.StageQueue[*PipelineMessage]) []core.PacketInfo {
+	if q == nil {
+		return dst
+	}
+	stageName := q.Name()
+	q.ForEach(func(_ queue.EntryID, msg *PipelineMessage, ready bool) {
+		if msg == nil || msg.Packet == nil {
+			return
+		}
+		metadata := core.CloneMetadata(msg.Packet.Metadata)
+		if metadata == nil {
+			metadata = map[string]string{}
+		}
+		metadata["node_queue_ready"] = fmt.Sprintf("%t", ready)
+		metadata["node_queue_stage"] = stageName
+		metadata["node_message_kind"] = msg.Kind
+		dst = append(dst, core.PacketInfo{
+			ID:              msg.Packet.ID,
+			Type:            msg.Packet.Type,
+			SrcID:           msg.Packet.SrcID,
+			DstID:           msg.Packet.DstID,
+			GeneratedAt:     msg.Packet.GeneratedAt,
+			SentAt:          msg.Packet.SentAt,
+			ReceivedAt:      msg.Packet.ReceivedAt,
+			CompletedAt:     msg.Packet.CompletedAt,
+			MasterID:        msg.Packet.MasterID,
+			RequestID:       msg.Packet.RequestID,
+			TransactionType: msg.Packet.TransactionType,
+			MessageType:     msg.Packet.MessageType,
+			ResponseType:    msg.Packet.ResponseType,
+			Address:         msg.Packet.Address,
+			DataSize:        msg.Packet.DataSize,
+			TransactionID:   msg.Packet.TransactionID,
+			Metadata:        metadata,
+		})
+	})
+	return dst
 }
 
 // Legacy type alias for backward compatibility during transition
@@ -796,17 +891,108 @@ func (hn *HomeNode) processIncomingMessage(msg *InFlightMessage, cycle int) {
 
 	// Record PacketReceived event
 	if hn.txnMgr != nil && packet.TransactionID > 0 {
-		event := &PacketEvent{
+		event := &core.PacketEvent{
 			TransactionID:  packet.TransactionID,
 			PacketID:       packet.ID,
 			ParentPacketID: packet.ParentPacketID,
 			NodeID:         hn.ID,
-			EventType:      PacketReceived,
+			EventType:      core.PacketReceived,
 			Cycle:          cycle,
 			EdgeKey:        nil, // in-node event
 		}
 		hn.txnMgr.RecordPacketEvent(event)
 	}
 
-	hn.queue.Enqueue(packet, cycle)
+	if inQ := hn.inQueue(); inQ != nil {
+		msg := &PipelineMessage{Packet: packet, Kind: "incoming"}
+		if _, ok := inQ.Enqueue(msg, cycle); !ok {
+			GetLogger().Warnf("HomeNode %d: in_queue full, dropping packet %d", hn.ID, packet.ID)
+		}
+	}
+}
+
+func (hn *HomeNode) releaseToProcess(limit int, cycle int) {
+	inQ := hn.inQueue()
+	procQ := hn.processQueue()
+	if inQ == nil || procQ == nil {
+		return
+	}
+	if limit <= 0 {
+		limit = inQ.Len()
+	}
+	moved := 0
+	for moved < limit {
+		entryID, msg, ok := inQ.PeekNext()
+		if !ok {
+			break
+		}
+		if msg == nil {
+			inQ.Complete(entryID, cycle)
+			moved++
+			continue
+		}
+		if _, ok := procQ.Enqueue(msg, cycle); !ok {
+			inQ.ResetPending(entryID)
+			break
+		}
+		inQ.Complete(entryID, cycle)
+		moved++
+	}
+}
+
+func (hn *HomeNode) stageQueue(stage pipelineStageName) *queue.StageQueue[*PipelineMessage] {
+	if hn == nil || hn.pipeline == nil {
+		return nil
+	}
+	return hn.pipeline.queue(stage)
+}
+
+func (hn *HomeNode) inQueue() *queue.StageQueue[*PipelineMessage] {
+	return hn.stageQueue(pipelineStageIn)
+}
+
+func (hn *HomeNode) processQueue() *queue.StageQueue[*PipelineMessage] {
+	return hn.stageQueue(pipelineStageProcess)
+}
+
+func (hn *HomeNode) outQueue() *queue.StageQueue[*PipelineMessage] {
+	return hn.stageQueue(pipelineStageOut)
+}
+
+func (hn *HomeNode) enqueueOutgoing(packet *core.Packet, kind string, defaultTarget int, latency int, cycle int) {
+	if packet == nil {
+		return
+	}
+	msg := &PipelineMessage{
+		Packet:        packet,
+		Kind:          kind,
+		DefaultTarget: defaultTarget,
+		Latency:       latency,
+	}
+	if outQ := hn.outQueue(); outQ != nil {
+		if _, ok := outQ.Enqueue(msg, cycle); !ok {
+			GetLogger().Warnf("HomeNode %d: out_queue full, dropping packet %d", hn.ID, packet.ID)
+		}
+	}
+}
+
+func (hn *HomeNode) emitProcessHook(packet *core.Packet, cycle int, before bool) {
+	if hn.broker == nil || packet == nil {
+		return
+	}
+	ctx := &hooks.ProcessContext{
+		Packet: packet,
+		Node:   hn,
+		NodeID: hn.ID,
+		Cycle:  cycle,
+	}
+	var err error
+	if before {
+		err = hn.broker.EmitBeforeProcess(ctx)
+	} else {
+		err = hn.broker.EmitAfterProcess(ctx)
+	}
+	if err != nil {
+		GetLogger().Warnf("HomeNode %d process hook failed: %v", hn.ID, err)
+	}
 }

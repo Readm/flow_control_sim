@@ -11,6 +11,30 @@ type SOCNetworkConfig struct {
 func GetPredefinedConfigs() []SOCNetworkConfig {
 	return []SOCNetworkConfig{
 		{
+			Name:        "ring_demo",
+			Description: "Ring topology demo: 2 RNs with cache, 1 HN with directory/cache, 2 SNs on ring",
+			Config: &Config{
+				NumMasters:           2,
+				NumSlaves:            2,
+				NumRelays:            1,
+				TotalCycles:          400,
+				MasterRelayLatency:   2,
+				RelayMasterLatency:   2,
+				RelaySlaveLatency:    1,
+				SlaveRelayLatency:    1,
+				SlaveProcessRate:     1,
+				RequestRateConfig:    0.6,
+				BandwidthLimit:       1,
+				SlaveWeights:         []int{1, 1},
+				Headless:             false,
+				VisualMode:           "web",
+				RingEnabled:          true,
+				RingInterleaveStride: 1,
+				RequestCacheCapacity: DefaultRequestCacheCapacity,
+				HomeCacheCapacity:    DefaultHomeCacheCapacity,
+			},
+		},
+		{
 			Name:        "readonce_mesi_snoop",
 			Description: "ReadOnce MESI Snoop Test: 2 RNs (both with cache), 1 HN, 1 SN. RN0 reads first and caches data, RN1 reads same address triggering Snoop to RN0",
 			Config: &Config{

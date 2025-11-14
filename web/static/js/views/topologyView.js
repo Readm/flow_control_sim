@@ -413,10 +413,50 @@ export function createTopologyView({
                 });
             });
         }
-        state.cy.layout({ name: 'preset' }).run();
+        const layoutName =
+            draft?.source === 'frame' && isRingTopology(draft) ? 'circle' : 'preset';
+        state.cy.layout({ name: layoutName }).run();
         state.cy.center();
         state.history = [];
         state.redo = [];
+    }
+
+    function isRingTopology(draft) {
+        if (!draft || !Array.isArray(draft.nodes) || draft.nodes.length === 0) {
+            return false;
+        }
+        if (!Array.isArray(draft.edges) || draft.edges.length < draft.nodes.length) {
+            return false;
+        }
+        const nodeIds = draft.nodes.map((node) => String(node.id));
+        const idSet = new Set(nodeIds);
+        if (idSet.size !== nodeIds.length) {
+            return false;
+        }
+        const successor = new Map();
+        for (const edge of draft.edges) {
+            const src = String(edge.source);
+            const dst = String(edge.target);
+            if (!idSet.has(src) || !idSet.has(dst)) {
+                continue;
+            }
+            if (successor.has(src)) {
+                return false;
+            }
+            successor.set(src, dst);
+        }
+        if (successor.size !== idSet.size) {
+            return false;
+        }
+        const start = nodeIds[0];
+        let current = start;
+        for (let i = 0; i < nodeIds.length; i += 1) {
+            current = successor.get(current);
+            if (current == null) {
+                return false;
+            }
+        }
+        return current === start;
     }
 
     function nextNodeId() {

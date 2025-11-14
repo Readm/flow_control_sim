@@ -20,10 +20,12 @@
 | Node 类型 | 能力名称 | 说明 |
 |-----------|----------|------|
 | RequestNode | `NewMESICacheCapability` | 提供本地 MESI 缓存映射，基于通用缓存能力按需开启。 |
+|            | `NewLRUEvictionCapability` | 负责缓存容量管理（LRU），触发驱逐时调用缓存能力 `Invalidate`。 |
 |            | `NewTransactionCapability` | 封装 TxFactory / TransactionManager，负责生成请求与事务。 |
 |            | `NewRoutingCapability` | 在 `OnBeforeRoute` 阶段通过 `policy.Manager.ResolveRoute` 决策下一跳。 |
 |            | `NewFlowControlCapability` | 在 `OnBeforeSend` 阶段执行 `policy.Manager.CheckFlowControl`。 |
 | HomeNode   | `NewHomeCacheCapability` | 维护地址级缓存命中状态，可复用到其他组合场景。 |
+|            | `NewLRUEvictionCapability` | 针对 Home 缓存行启用 LRU 驱逐，保持缓存容量可配置。 |
 |            | `NewDirectoryCapability` | 维护地址 -> RN 集合的目录，支持动态增删。 |
 |            | `NewRoutingCapability` | HN 内部路由决策。 |
 |            | `NewFlowControlCapability` | 控制 HN→SN/HN→RN 出站流量。 |
@@ -53,6 +55,7 @@
   - `NewCacheCapability`：统一的缓存能力构造器，通过 `CacheConfig` 控制是否启用 MESI 状态或缓存行管理。
   - `NewMESICacheCapability`：基于 `NewCacheCapability` 的包装，仅启用请求侧 MESI 状态读写接口 `RequestCache`。
   - `NewHomeCacheCapability`：基于 `NewCacheCapability` 的包装，仅启用缓存行管理接口 `HomeCache`。
+  - `NewLRUEvictionCapability`：面向缓存容量控制的能力，提供 `Touch` / `Fill` / `Invalidate` 接口并在超额时触发驱逐。
 - **目录类**：
   - `NewDirectoryCapability`：维护地址到节点集合的映射，暴露 `DirectoryStore`。
 - **事务类**：
@@ -61,6 +64,7 @@
 - **策略类**：
   - `NewRoutingCapability`：封装 `policy.Manager.ResolveRoute`。
   - `NewFlowControlCapability`：封装 `policy.Manager.CheckFlowControl`。
+  - `NewRingRoutingCapability`：提供环形拓扑下的逐跳转发，接入 `BeforeRoute` Hook。
 - **通用 Hook 封装**：
   - `NewHookCapability`：可将任意 `hooks.HookBundle` 注册到 Broker（SlaveNode 默认使用）。
 - 能力分类通过 `hooks.PluginDescriptor.Category` 管理：`policy`、`capability`、`visualization`、`instrumentation` 等。

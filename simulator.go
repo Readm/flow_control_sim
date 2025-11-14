@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Readm/flow_sim/capabilities"
+	"github.com/Readm/flow_sim/core"
 	"github.com/Readm/flow_sim/hooks"
 	incentiveplugin "github.com/Readm/flow_sim/plugins/incentives"
 	visualplugin "github.com/Readm/flow_sim/plugins/visualization"
@@ -25,6 +27,7 @@ type Simulator struct {
 	slaveByID  map[int]*SlaveNode
 	nodeLabels map[int]string
 	edges      []EdgeSnapshot
+	ringOrder  []int
 
 	cfg         *Config
 	rng         *rand.Rand
@@ -154,6 +157,7 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 	for i := 0; i < cfg.NumMasters; i++ {
 		id := idAlloc.Allocate()
 		m := NewRequestNode(id, i, generators[i])
+		m.SetCacheCapacity(cfg.RequestCacheCapacity)
 		masters[i] = m
 		masterByID[id] = m
 	}
@@ -170,6 +174,7 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 	// single relay in phase one
 	relayID := idAlloc.Allocate()
 	relay = NewHomeNode(relayID)
+	relay.SetCacheCapacity(cfg.HomeCacheCapacity)
 
 	// Create node registry for link
 	nodeRegistry := make(map[int]NodeReceiver)
@@ -201,6 +206,32 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 	labels[relay.ID] = "HN 0" // Home Node
 
 	return masters, slaves, relay, ch, masterByID, slaveByID, labels
+}
+
+func buildRingOrder(masters []*RequestNode, relay *HomeNode, slaves []*SlaveNode) []int {
+	order := make([]int, 0, len(masters)+len(slaves)+1)
+	if len(masters) > 0 {
+		order = append(order, masters[0].ID)
+	}
+	if relay != nil {
+		order = append(order, relay.ID)
+	}
+	for i := 1; i < len(masters); i++ {
+		order = append(order, masters[i].ID)
+	}
+	for _, s := range slaves {
+		order = append(order, s.ID)
+	}
+	seen := make(map[int]struct{}, len(order))
+	unique := make([]int, 0, len(order))
+	for _, id := range order {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
 }
 
 func (s *Simulator) rebuildRuntimeHelpers() {
@@ -387,6 +418,23 @@ func NewSimulator(cfg *Config) *Simulator {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(cfg, rng)
 
+	var ringOrder []int
+	if cfg.RingEnabled {
+		interleaver := NewRingAddressInterleaver(slaves, cfg.RingInterleaveStride)
+		for _, m := range masters {
+			m.SetAddressMapper(interleaver)
+		}
+		ringOrder = buildRingOrder(masters, relay, slaves)
+		if len(ringOrder) > 0 {
+			ringCap := capabilities.NewRingRoutingCapability("ring-routing", ringOrder)
+			if ringCap != nil {
+				if err := ringCap.Register(broker); err != nil {
+					GetLogger().Warnf("ring routing capability registration failed: %v", err)
+				}
+			}
+		}
+	}
+
 	sim := &Simulator{
 		Masters:      masters,
 		Slaves:       slaves,
@@ -404,6 +452,7 @@ func NewSimulator(cfg *Config) *Simulator {
 		txFactory:    txFactory,
 		policyMgr:    policy.NewDefaultManager(),
 		pluginReg:    registry,
+		ringOrder:    ringOrder,
 	}
 
 	for _, m := range sim.Masters {
@@ -621,20 +670,36 @@ func (s *Simulator) updateCoordinatorLimit() {
 }
 
 func (s *Simulator) buildEdges() []EdgeSnapshot {
+	if s.cfg != nil && s.cfg.RingEnabled && len(s.ringOrder) > 1 {
+		edges := make([]EdgeSnapshot, 0, len(s.ringOrder))
+		latency := s.cfg.MasterRelayLatency
+		if latency <= 0 {
+			latency = 1
+		}
+		for i, src := range s.ringOrder {
+			dst := s.ringOrder[(i+1)%len(s.ringOrder)]
+			edges = append(edges, EdgeSnapshot{
+				Source:  src,
+				Target:  dst,
+				Label:   fmt.Sprintf("%dcy", latency),
+				Latency: latency,
+			})
+		}
+		return edges
+	}
+
 	edges := make([]EdgeSnapshot, 0, (len(s.Masters)+len(s.Slaves))*2)
 	if s.Relay == nil {
 		return edges
 	}
 	homeNodeID := s.Relay.ID
 	for _, m := range s.Masters {
-		// CHI edges: RN -> HN (Req), HN -> RN (Comp)
 		edges = append(edges,
 			EdgeSnapshot{Source: m.ID, Target: homeNodeID, Label: "Req", Latency: s.cfg.MasterRelayLatency},
 			EdgeSnapshot{Source: homeNodeID, Target: m.ID, Label: "Comp", Latency: s.cfg.RelayMasterLatency},
 		)
 	}
 	for _, sl := range s.Slaves {
-		// CHI edges: HN -> SN (Req), SN -> HN (Comp)
 		edges = append(edges,
 			EdgeSnapshot{Source: homeNodeID, Target: sl.ID, Label: "Req", Latency: s.cfg.RelaySlaveLatency},
 			EdgeSnapshot{Source: sl.ID, Target: homeNodeID, Label: "Comp", Latency: s.cfg.SlaveRelayLatency},
@@ -696,18 +761,17 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"nodeType":          "RN", // CHI Request Node
 			"chiProtocol":       true,
 		}
-		// Get packet info for both queues separately
-		stimulusPackets := m.GetStimulusQueuePackets()
-		dispatchPackets := m.GetDispatchQueuePackets()
-		// Clone queues and add packet info for both stimulus_queue and dispatch_queue
+		queuePackets := m.GetQueuePackets()
 		queueInfo := m.GetQueueInfo()
 		clonedQueues := cloneQueues(queueInfo)
-		// Add packets to respective queues
+		packetsByQueue := make(map[string][]core.PacketInfo)
+		for _, pkt := range queuePackets {
+			stageName := pkt.Metadata["node_queue_stage"]
+			packetsByQueue[stageName] = append(packetsByQueue[stageName], pkt)
+		}
 		for i := range clonedQueues {
-			if clonedQueues[i].Name == "stimulus_queue" {
-				clonedQueues[i].Packets = stimulusPackets
-			} else if clonedQueues[i].Name == "dispatch_queue" {
-				clonedQueues[i].Packets = dispatchPackets
+			if packets, ok := packetsByQueue[clonedQueues[i].Name]; ok {
+				clonedQueues[i].Packets = packets
 			}
 		}
 		// Get label with fallback
@@ -734,6 +798,18 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"chiProtocol":    true,
 		}
 		queuePackets := sl.GetQueuePackets()
+		queueInfo := sl.GetQueueInfo()
+		clonedQueues := cloneQueues(queueInfo)
+		packetsByQueue := make(map[string][]core.PacketInfo)
+		for _, pkt := range queuePackets {
+			stageName := pkt.Metadata["node_queue_stage"]
+			packetsByQueue[stageName] = append(packetsByQueue[stageName], pkt)
+		}
+		for i := range clonedQueues {
+			if packets, ok := packetsByQueue[clonedQueues[i].Name]; ok {
+				clonedQueues[i].Packets = packets
+			}
+		}
 		// Get label with fallback
 		label, ok := s.nodeLabels[sl.ID]
 		if !ok {
@@ -743,17 +819,16 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			ID:      sl.ID,
 			Type:    sl.Type,
 			Label:   label,
-			Queues:  cloneQueuesWithPackets(sl.GetQueueInfo(), "request_queue", queuePackets),
+			Queues:  clonedQueues,
 			Payload: payload,
 		})
 	}
 
 	if s.Relay != nil {
-		// Get queue length from queue info
 		queueInfo := s.Relay.GetQueueInfo()
 		queueLength := 0
 		for _, q := range queueInfo {
-			if q.Name == "forward_queue" {
+			if q.Name == string(pipelineStageProcess) {
 				queueLength = q.Length
 				break
 			}
@@ -764,7 +839,17 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"chiProtocol": true,
 		}
 		queuePackets := s.Relay.GetQueuePackets()
-		// Get label with fallback
+		queueInfoCloned := cloneQueues(queueInfo)
+		packetsByQueue := make(map[string][]core.PacketInfo)
+		for _, pkt := range queuePackets {
+			stageName := pkt.Metadata["node_queue_stage"]
+			packetsByQueue[stageName] = append(packetsByQueue[stageName], pkt)
+		}
+		for i := range queueInfoCloned {
+			if packets, ok := packetsByQueue[queueInfoCloned[i].Name]; ok {
+				queueInfoCloned[i].Packets = packets
+			}
+		}
 		label, ok := s.nodeLabels[s.Relay.ID]
 		if !ok {
 			label = "HN 0"
@@ -773,7 +858,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			ID:      s.Relay.ID,
 			Type:    s.Relay.Type,
 			Label:   label,
-			Queues:  cloneQueuesWithPackets(s.Relay.GetQueueInfo(), "forward_queue", queuePackets),
+			Queues:  queueInfoCloned,
 			Payload: payload,
 		})
 	}
@@ -877,6 +962,23 @@ func (s *Simulator) reset(newCfg *Config) {
 	txFactory := NewTxFactory(broker, txnMgr, pktAlloc)
 	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(s.cfg, s.rng)
 
+	var ringOrder []int
+	if s.cfg.RingEnabled {
+		interleaver := NewRingAddressInterleaver(slaves, s.cfg.RingInterleaveStride)
+		for _, m := range masters {
+			m.SetAddressMapper(interleaver)
+		}
+		ringOrder = buildRingOrder(masters, relay, slaves)
+		if len(ringOrder) > 0 {
+			ringCap := capabilities.NewRingRoutingCapability("ring-routing", ringOrder)
+			if ringCap != nil {
+				if err := ringCap.Register(broker); err != nil {
+					GetLogger().Warnf("ring routing capability registration failed: %v", err)
+				}
+			}
+		}
+	}
+
 	s.Masters = masters
 	s.Slaves = slaves
 	s.Relay = relay
@@ -884,6 +986,7 @@ func (s *Simulator) reset(newCfg *Config) {
 	s.masterByID = masterByID
 	s.slaveByID = slaveByID
 	s.nodeLabels = labels
+	s.ringOrder = ringOrder
 	s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	s.pktIDs = pktAlloc
 	s.txnMgr = txnMgr
@@ -1123,6 +1226,15 @@ func (s *Simulator) waitForResetCommand() *Config {
 	cfg := s.pendingReset
 	s.pendingReset = nil
 	return cfg
+}
+
+func cloneRingOrder(order []int) []int {
+	if len(order) == 0 {
+		return nil
+	}
+	cloned := make([]int, len(order))
+	copy(cloned, order)
+	return cloned
 }
 
 type GlobalStats struct {

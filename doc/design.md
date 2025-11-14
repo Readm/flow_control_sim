@@ -272,7 +272,27 @@ flowchart LR
 
 ---
 
-## 9️⃣ 当前实现快照（2025-11）
+## 9️⃣ 节点管线形态（2025-12）
+
+| 节点 | 阶段 (`queue` 名称) | 职责说明 | 默认容量 |
+| ---- | ------------------- | -------- | -------- |
+| RN   | `in_queue`          | 生成阶段，缓存调度器新产生的请求 | ∞ |
+| RN   | `process_queue`     | 待发送阶段，执行路由/流控判定并准备发送 | 1024 |
+| RN   | `out_queue`         | 响应阶段，追踪在途请求与待完成响应 | ∞ |
+| HN   | `in_queue`          | 汇聚阶段，接收来自 RN / SN 的所有消息 | ∞ |
+| HN   | `process_queue`     | 判定阶段，执行目录/缓存命中、Snoop 决策 | ∞ |
+| HN   | `out_queue`         | 发射阶段，输出 Snoop / Comp / 转发请求 | ∞ |
+| SN   | `in_queue`          | 入站阶段，缓存来自 HN 的待处理请求 | 20 |
+| SN   | `process_queue`     | 处理阶段，按 `ProcessRate` 出队执行 | 20 |
+| SN   | `out_queue`         | 出站阶段，批量吐出响应数据包 | ∞ |
+
+- 三类节点均共享 `PacketPipeline`/`StageQueue` 实现，`OnBeforeProcess`/`OnAfterProcess` Hook 在相应阶段触发。
+- RN/HN 默认挂载 LRU 替换能力，容量可通过 `Config.RequestCacheCapacity`、`Config.HomeCacheCapacity` 调整。
+- Ring 模式下，RN 使用 `RingAddressInterleaver` 依据地址条带选择 SN，`RingRoutingCapability` 在 `BeforeRoute` 阶段推进下一跳。
+
+---
+
+## 🔟 当前实现快照（2025-12）
 
 - **TxFactory**
   - 作为同步装配器，由 `Simulator` 注入 `RequestNode`
@@ -293,7 +313,7 @@ flowchart LR
 
 ---
 
-## 🔟 插件化骨架（2025-12）
+## 1️⃣0 插件化骨架（2025-12）
 
 ### 核心结构
 - **骨架最小化**：`Node` / `Link` 仅负责上下文封装、信号驱动与消息转发；路由、流控、统计等均通过插件实现。

@@ -47,5 +47,15 @@ func ValidateConfig(cfg *Config) error {
 		cfg.SlaveProcessRate = 1
 	}
 
+	if cfg.RequestCacheCapacity <= 0 {
+		cfg.RequestCacheCapacity = DefaultRequestCacheCapacity
+	}
+	if cfg.HomeCacheCapacity <= 0 {
+		cfg.HomeCacheCapacity = DefaultHomeCacheCapacity
+	}
+	if cfg.RingInterleaveStride <= 0 {
+		cfg.RingInterleaveStride = DefaultRingInterleaveStride
+	}
+
 	return nil
 }
