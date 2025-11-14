@@ -362,6 +362,9 @@ func (ep *edgePipeline) shiftSlotsLocked() {
 	if len(ep.slots) == 0 {
 		return
 	}
+	if len(ep.slots) == 1 {
+		return
+	}
 	for i := 0; i < len(ep.slots)-1; i++ {
 		ep.slots[i].packets = ep.slots[i+1].packets
 		ep.slots[i].logicCycle = ep.slots[i+1].logicCycle
@@ -379,17 +382,17 @@ func (ep *edgePipeline) fillTailLocked(cycle int) {
 	if remaining <= 0 {
 		return
 	}
-	toTake := remaining
-	if toTake > len(ep.sendQueue) {
-		toTake = len(ep.sendQueue)
+	take := remaining
+	if take > len(ep.sendQueue) {
+		take = len(ep.sendQueue)
 	}
 
-	for i := 0; i < toTake; i++ {
+	for i := 0; i < take; i++ {
 		pp := ep.sendQueue[i]
 		tail.packets = append(tail.packets, pp.msg)
 		tail.logicCycle = pp.logicCycle
 	}
-	ep.sendQueue = ep.sendQueue[toTake:]
+	ep.sendQueue = ep.sendQueue[take:]
 }
 
 func (ep *edgePipeline) bumpSlotCyclesLocked() {

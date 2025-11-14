@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 
 	"github.com/Readm/flow_sim/capabilities"
@@ -18,6 +19,7 @@ type SlaveNode struct {
 	pipeline    *PacketPipeline
 	txnMgr      *TransactionManager // for recording packet events
 	broker      *hooks.PluginBroker
+	routerID    int
 
 	// stats
 	ProcessedCount int
@@ -113,6 +115,19 @@ func (sn *SlaveNode) SetTransactionManager(txnMgr *TransactionManager) {
 func (sn *SlaveNode) SetPluginBroker(b *hooks.PluginBroker) {
 	sn.broker = b
 	sn.ensureDefaultCapabilities()
+}
+
+// SetRouterID configures the router used for forwarding responses when ring is enabled.
+func (sn *SlaveNode) SetRouterID(id int) {
+	sn.mu.Lock()
+	defer sn.mu.Unlock()
+	sn.routerID = id
+}
+
+func (sn *SlaveNode) CapabilityNames() []string {
+	sn.mu.Lock()
+	defer sn.mu.Unlock()
+	return capabilityNameList(sn.capabilities)
 }
 
 func (sn *SlaveNode) ensureDefaultCapabilities() {
@@ -410,6 +425,8 @@ type SlaveNodeRuntime struct {
 	Link            *Link
 	RelayID         int
 	RelayLatency    int
+	RouterID        int
+	RouterLatency   int
 }
 
 // RunRuntime executes the slave node logic driven by the coordinator.
@@ -431,9 +448,23 @@ func (sn *SlaveNode) RunRuntime(ctx *SlaveNodeRuntime) {
 		sn.bindings.WaitIncoming(cycle)
 		sn.bindings.SignalReceive(cycle)
 		responses := sn.Tick(cycle, ctx.PacketAllocator)
-		if ctx.Link != nil && ctx.RelayID >= 0 {
-			for _, resp := range responses {
-				ctx.Link.Send(resp, sn.ID, ctx.RelayID, cycle, ctx.RelayLatency)
+		for _, resp := range responses {
+			if resp == nil {
+				continue
+			}
+			targetID := ctx.RelayID
+			latency := ctx.RelayLatency
+			if ctx.RouterID > 0 {
+				targetID = ctx.RouterID
+				if ctx.RouterLatency > 0 {
+					latency = ctx.RouterLatency
+				}
+			}
+			if latency <= 0 {
+				latency = 1
+			}
+			if ctx.Link != nil && targetID >= 0 {
+				ctx.Link.Send(resp, sn.ID, targetID, cycle, latency)
 			}
 		}
 		sn.bindings.SignalSend(cycle)
@@ -472,6 +503,8 @@ func (sn *SlaveNode) generateCHIResponse(req *Packet, cycle int, packetIDs *Pack
 		// Legacy support
 		resp.MessageType = CHIMsgResp
 	}
+
+	resp.SetMetadata(capabilities.RingFinalTargetMetadataKey, strconv.Itoa(resp.MasterID))
 
 	return resp
 }

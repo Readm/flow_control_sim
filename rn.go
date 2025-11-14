@@ -192,13 +192,19 @@ func (rn *RequestNode) SetRouterID(id int) {
 	rn.routerID = id
 }
 
+func (rn *RequestNode) CapabilityNames() []string {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	return capabilityNameList(rn.capabilities)
+}
+
 // GenerateReadNoSnpRequest creates a CHI ReadNoSnp transaction request packet.
 // ReadNoSnp is a simple read request that does not require snoop operations.
 func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID int, homeNodeID int) *core.Packet {
 	address := rn.nextAddress
 	rn.nextAddress += DefaultCacheLineSize
 
-	return &core.Packet{
+	packet := &core.Packet{
 		ID:              reqID,
 		Type:            "request", // legacy field for compatibility
 		SrcID:           rn.ID,
@@ -212,6 +218,8 @@ func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID 
 		Address:         address,
 		DataSize:        DefaultCacheLineSize,
 	}
+	packet.SetMetadata(capabilities.RingFinalTargetMetadataKey, strconv.Itoa(dstSNID))
+	return packet
 }
 
 // Tick may generate request(s) per cycle based on the configured RequestGenerator.

@@ -159,7 +159,7 @@ export function createFlowView({
         }
 
         updateNodes(frame.nodes || []);
-        updateEdges(frame.edges || []);
+        updateEdges(frame.edges || [], frame.cycle || 0);
         drawPipelineStatePoints(frame);
     }
 
@@ -185,6 +185,7 @@ export function createFlowView({
                     type: node.type,
                     queues: node.queues || [],
                     payload: node.payload || {},
+                    capabilities: node.capabilities || [],
                     height,
                     progressBg,
                 },
@@ -225,13 +226,14 @@ export function createFlowView({
                 label: buildNodeLabel(node),
                 queues: node.queues || [],
                 payload: node.payload || {},
+                capabilities: node.capabilities || [],
                 height,
                 progressBg,
             });
         });
     }
 
-    function updateEdges(edges) {
+    function updateEdges(edges, frameCycle) {
         if (!cy) {
             return;
         }
@@ -247,8 +249,13 @@ export function createFlowView({
                 bandwidthLimit: edge.bandwidthLimit,
                 latency: edge.latency,
             });
-
-            if (pipelineStages.length > 0 && pipelineStages[0].packetCount > 0) {
+            const hasTraffic = pipelineStages.some((stage) => stage.packetCount > 0);
+            if (hasTraffic) {
+                cyEdge.data("lastActiveCycle", frameCycle);
+            }
+            const lastActiveCycle = cyEdge.data("lastActiveCycle");
+            const recentlyActive = typeof lastActiveCycle === "number" && frameCycle - lastActiveCycle <= 5;
+            if (hasTraffic || recentlyActive) {
                 cyEdge.style("line-color", "#ff4d4f");
                 cyEdge.style("width", 3);
             } else {
@@ -267,6 +274,10 @@ export function createFlowView({
         if (width === 0 || height === 0) {
             return;
         }
+        if (isRingTopology()) {
+            applyRingLayout(width, height);
+            return;
+        }
 
         const leftX = width * 0.2;
         const centerX = width * 0.5;
@@ -277,6 +288,74 @@ export function createFlowView({
             node.position({ x: centerX, y: height / 2 });
         });
         distributeNodesVertically(cy.nodes('[type="SN"], [type="slave"]'), rightX, height);
+    }
+
+    function isRingTopology() {
+        if (!cy) {
+            return false;
+        }
+        return cy.nodes('[type="RT"]').length > 0;
+    }
+
+    function applyRingLayout(width, height) {
+        if (!cy) {
+            return;
+        }
+        const routers = cy.nodes('[type="RT"]');
+        if (routers.length === 0) {
+            return;
+        }
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const radius = Math.min(width, height) * 0.35;
+        const innerRadius = radius * 0.6;
+
+        routers.forEach((router, index) => {
+            const angle = (2 * Math.PI * index) / routers.length;
+            const routerX = centerX + radius * Math.cos(angle);
+            const routerY = centerY + radius * Math.sin(angle);
+            router.position({ x: routerX, y: routerY });
+
+            const neighbors = router
+                .connectedEdges()
+                .connectedNodes()
+                .filter((node) => node.id() !== router.id() && node.data('type') !== 'RT');
+
+            if (neighbors.length === 0) {
+                return;
+            }
+            const spread = Math.PI / 9;
+            const startAngle = angle - spread / 2;
+            const endAngle = angle + spread / 2;
+
+            neighbors.forEach((node, idx) => {
+                const t = neighbors.length === 1 ? 0.5 : idx / (neighbors.length - 1);
+                const nodeAngle = startAngle + (endAngle - startAngle) * t;
+                const nodeX = centerX + innerRadius * Math.cos(nodeAngle);
+                const nodeY = centerY + innerRadius * Math.sin(nodeAngle);
+                node.position({ x: nodeX, y: nodeY });
+            });
+        });
+
+        const remaining = cy.nodes().filter((node) => {
+            if (node.data('type') === 'RT') {
+                return false;
+            }
+            let visited = false;
+            routers.forEach((router) => {
+                if (visited) {
+                    return;
+                }
+                const neighbors = router.connectedEdges().connectedNodes();
+                if (neighbors.anySame(node)) {
+                    visited = true;
+                }
+            });
+            return !visited;
+        });
+        if (remaining.length > 0) {
+            distributeNodesVertically(remaining, centerX, height);
+        }
     }
 
     function distributeNodesVertically(collection, x, containerHeight) {
@@ -484,7 +563,13 @@ export function createFlowView({
                 parts.push(`<div style=\"font-size: 11px; color: #666;\">${key}: <strong>${value}</strong></div>`);
             });
         }
-
+        const capabilities = Array.isArray(data.capabilities) ? data.capabilities : [];
+        if (capabilities.length > 0) {
+            parts.push('<div style="margin-top: 8px; font-weight: 600;">Capabilities</div>');
+            capabilities.forEach((capability) => {
+                parts.push(`<div style=\"font-size: 11px; color: #666;\">${capability}</div>`);
+            });
+        }
         const queues = data.queues || [];
         if (queues.length > 0) {
             parts.push('<div style="margin-top: 8px; font-weight: 600;">Queues</div>');

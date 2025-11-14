@@ -14,6 +14,12 @@ type Router interface {
 	ResolveRoute(packet *core.Packet, sourceID int, defaultTarget int) (int, error)
 }
 
+type RouterFunc func(packet *core.Packet, sourceID int, defaultTarget int) (int, error)
+
+func (f RouterFunc) ResolveRoute(packet *core.Packet, sourceID int, defaultTarget int) (int, error) {
+	return f(packet, sourceID, defaultTarget)
+}
+
 // FlowController validates whether a packet can be sent.
 type FlowController interface {
 	Check(packet *core.Packet, sourceID int, targetID int) error
@@ -25,9 +31,10 @@ type DomainMapper interface {
 }
 
 type manager struct {
-	router Router
-	flow   FlowController
-	domain DomainMapper
+	router   Router
+	flow     FlowController
+	domain   DomainMapper
+	fallback Router
 }
 
 // NewDefaultManager creates a manager with permissive defaults.
@@ -43,6 +50,12 @@ func NewDefaultManager() Manager {
 func WithRouter(m Manager, r Router) Manager {
 	base := asManager(m)
 	base.router = r
+	return base
+}
+
+func WithFallbackRouter(m Manager, r Router) Manager {
+	base := asManager(m)
+	base.fallback = r
 	return base
 }
 
@@ -62,9 +75,22 @@ func WithDomainMapper(m Manager, dm DomainMapper) Manager {
 
 func (m *manager) ResolveRoute(packet *core.Packet, sourceID int, defaultTarget int) (int, error) {
 	if m.router == nil {
+		if m.fallback != nil {
+			return m.fallback.ResolveRoute(packet, sourceID, defaultTarget)
+		}
 		return defaultTarget, nil
 	}
-	return m.router.ResolveRoute(packet, sourceID, defaultTarget)
+	target, err := m.router.ResolveRoute(packet, sourceID, defaultTarget)
+	if err == nil && target != 0 {
+		return target, nil
+	}
+	if m.fallback != nil {
+		return m.fallback.ResolveRoute(packet, sourceID, defaultTarget)
+	}
+	if defaultTarget != 0 {
+		return defaultTarget, nil
+	}
+	return 0, err
 }
 
 func (m *manager) CheckFlowControl(packet *core.Packet, sourceID int, targetID int) error {

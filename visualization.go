@@ -2,11 +2,12 @@ package main
 
 // NodeSnapshot describes a node state in a given cycle for visualization.
 type NodeSnapshot struct {
-	ID      int            `json:"id"`
-	Type    NodeType       `json:"type"`
-	Label   string         `json:"label"`
-	Queues  []QueueInfo    `json:"queues"`
-	Payload map[string]any `json:"payload,omitempty"`
+	ID           int            `json:"id"`
+	Type         NodeType       `json:"type"`
+	Label        string         `json:"label"`
+	Queues       []QueueInfo    `json:"queues"`
+	Capabilities []string       `json:"capabilities,omitempty"`
+	Payload      map[string]any `json:"payload,omitempty"`
 }
 
 // PipelineStageInfo represents the state of a single stage in a pipeline

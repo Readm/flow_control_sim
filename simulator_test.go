@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,6 +245,66 @@ func TestReadNoSnpTransaction(t *testing.T) {
 		t.Logf("Request Node: %d requests, %d completed, avg delay=%.2f",
 			rnStats.TotalRequests, rnStats.CompletedRequests, rnStats.AvgDelay)
 	}
+}
+
+func TestFrameIncludesCapabilities(t *testing.T) {
+	cfg := &Config{
+		NumMasters:           1,
+		NumSlaves:            1,
+		NumRelays:            1,
+		TotalCycles:          10,
+		MasterRelayLatency:   2,
+		RelayMasterLatency:   2,
+		RelaySlaveLatency:    1,
+		SlaveRelayLatency:    1,
+		SlaveProcessRate:     1,
+		RequestRateConfig:    0.0,
+		BandwidthLimit:       1,
+		SlaveWeights:         []int{1},
+		RingEnabled:          true,
+		RingInterleaveStride: 1,
+		Headless:             true,
+		VisualMode:           "none",
+	}
+
+	sim := NewSimulator(cfg)
+	if sim == nil {
+		t.Fatalf("simulator initialization failed")
+	}
+
+	frame := sim.buildFrame(0)
+	if frame == nil {
+		t.Fatalf("expected non-nil frame")
+	}
+
+	assertHasCapability := func(t *testing.T, nodeType NodeType, nodes []NodeSnapshot, expectedPrefix string) {
+		t.Helper()
+		for _, node := range nodes {
+			if node.Type != nodeType {
+				continue
+			}
+			if len(node.Capabilities) == 0 {
+				t.Fatalf("expected node %d (%s) to expose capabilities", node.ID, nodeType)
+			}
+			found := false
+			for _, capability := range node.Capabilities {
+				if strings.HasPrefix(capability, expectedPrefix) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected node %d (%s) to expose capability prefix %s, got %v", node.ID, nodeType, expectedPrefix, node.Capabilities)
+			}
+			return
+		}
+		t.Fatalf("node type %s not found in frame", nodeType)
+	}
+
+	assertHasCapability(t, NodeTypeRN, frame.Nodes, "request-routing-")
+	assertHasCapability(t, NodeTypeHN, frame.Nodes, "home-routing-")
+	assertHasCapability(t, NodeTypeSN, frame.Nodes, "slave-processing-")
+	assertHasCapability(t, NodeTypeRT, frame.Nodes, "ring-router-forward-")
 }
 
 // TestReadOnceCacheMechanism verifies the simplest cache mechanism:

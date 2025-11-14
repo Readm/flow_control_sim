@@ -108,6 +108,12 @@ func (rr *RingRouterNode) SetPacketIDAllocator(allocator *PacketIDAllocator) {
 	rr.packetIDs = allocator
 }
 
+func (rr *RingRouterNode) CapabilityNames() []string {
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	return capabilityNameList(rr.capabilities)
+}
+
 // CanReceive checks whether the router can accept additional packets on the incoming edge.
 func (rr *RingRouterNode) CanReceive(edgeKey EdgeKey, _ int) bool {
 	q := rr.inQueue()
@@ -118,7 +124,8 @@ func (rr *RingRouterNode) CanReceive(edgeKey EdgeKey, _ int) bool {
 	if capacity < 0 {
 		return true
 	}
-	return q.Len() < capacity
+	ready := q.Len() < capacity
+	return ready
 }
 
 // OnPackets enqueues incoming messages into the router pipeline.

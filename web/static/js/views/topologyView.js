@@ -88,7 +88,13 @@ export function createTopologyView({
     }
 
     function handleFrame(frame) {
-        if (!frame || state.dirty) {
+        if (!frame) {
+            return;
+        }
+        if (state.cy && Array.isArray(frame.nodes)) {
+            updateNodeRuntimeData(frame.nodes);
+        }
+        if (state.dirty) {
             return;
         }
         const configHash = frame.configHash || null;
@@ -99,6 +105,24 @@ export function createTopologyView({
         if (!state.loading) {
             loadFromServer();
         }
+    }
+
+    function updateNodeRuntimeData(nodes) {
+        if (!state.cy || !Array.isArray(nodes)) {
+            return;
+        }
+        nodes.forEach((node) => {
+            if (!node || typeof node.id === 'undefined') {
+                return;
+            }
+            const cyNode = state.cy.getElementById(String(node.id));
+            if (!cyNode || cyNode.length === 0) {
+                return;
+            }
+            const payload = node.payload || {};
+            cyNode.data('payload', payload);
+            cyNode.data('capabilities', Array.isArray(node.capabilities) ? node.capabilities : []);
+        });
     }
 
     function initializeGraph() {
@@ -391,6 +415,8 @@ export function createTopologyView({
                 id: String(node.id),
                 label: node.label,
                 type: node.type,
+                payload: node.payload || {},
+                capabilities: node.capabilities || [],
             },
             position: {
                 x: typeof node.posX === 'number' && Number.isFinite(node.posX) ? node.posX : 120 * idx + 80,
@@ -556,6 +582,33 @@ export function createTopologyView({
             return;
         }
         state.contextMenu.innerHTML = '';
+
+        if (type === 'node' && element) {
+            const capabilities = Array.isArray(element.data('capabilities')) ? element.data('capabilities') : [];
+            const header = document.createElement('div');
+            header.className = 'menu-section-title';
+            header.textContent = 'Capabilities';
+            state.contextMenu.appendChild(header);
+
+            if (capabilities.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'menu-capability-item';
+                empty.textContent = 'None';
+                state.contextMenu.appendChild(empty);
+            } else {
+                capabilities.forEach((capability) => {
+                    const item = document.createElement('div');
+                    item.className = 'menu-capability-item';
+                    item.textContent = capability;
+                    state.contextMenu.appendChild(item);
+                });
+            }
+
+            const divider = document.createElement('div');
+            divider.className = 'menu-divider';
+            state.contextMenu.appendChild(divider);
+        }
+
         const items = type === 'node'
             ? [
                   { label: 'Edit Node', handler: () => editNode(element) },

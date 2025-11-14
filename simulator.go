@@ -13,6 +13,7 @@ import (
 	incentiveplugin "github.com/Readm/flow_sim/plugins/incentives"
 	visualplugin "github.com/Readm/flow_sim/plugins/visualization"
 	"github.com/Readm/flow_sim/policy"
+	"github.com/Readm/flow_sim/router"
 	simruntime "github.com/Readm/flow_sim/simulator"
 	"github.com/Readm/flow_sim/visual"
 )
@@ -21,13 +22,17 @@ type Simulator struct {
 	Masters []*RequestNode
 	Slaves  []*SlaveNode
 	Relay   *HomeNode
+	Routers []*RingRouterNode
 	Chan    *Link
 
-	masterByID map[int]*RequestNode
-	slaveByID  map[int]*SlaveNode
-	nodeLabels map[int]string
-	edges      []EdgeSnapshot
-	ringOrder  []int
+	masterByID    map[int]*RequestNode
+	slaveByID     map[int]*SlaveNode
+	routerByID    map[int]*RingRouterNode
+	routerForNode map[int]int
+	nodeLabels    map[int]string
+	edges         []EdgeSnapshot
+	edgeLatencies map[EdgeKey]int
+	ringOrder     []int
 
 	cfg         *Config
 	rng         *rand.Rand
@@ -84,9 +89,12 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 	masters []*RequestNode,
 	slaves []*SlaveNode,
 	relay *HomeNode,
+	routers []*RingRouterNode,
 	ch *Link,
 	masterByID map[int]*RequestNode,
 	slaveByID map[int]*SlaveNode,
+	routerByID map[int]*RingRouterNode,
+	routerForNode map[int]*RingRouterNode,
 	labels map[int]string,
 ) {
 	idAlloc := NewNodeIDAllocator()
@@ -188,6 +196,50 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 		nodeRegistry[relay.ID] = relay
 	}
 
+	labels = make(map[int]string, len(masters)+len(slaves)+1)
+	for i, m := range masters {
+		labels[m.ID] = fmt.Sprintf("RN %d", i)
+	}
+	for i, s := range slaves {
+		labels[s.ID] = fmt.Sprintf("SN %d", i)
+	}
+	if relay != nil {
+		labels[relay.ID] = "HN 0"
+	}
+
+	routerByID = make(map[int]*RingRouterNode)
+	routerForNode = make(map[int]*RingRouterNode)
+	if cfg.RingEnabled {
+		routerCount := len(masters) + len(slaves)
+		if relay != nil {
+			routerCount++
+		}
+		routers = make([]*RingRouterNode, 0, routerCount)
+
+		addRouter := func(nodeID int, label string) {
+			routerID := idAlloc.Allocate()
+			router := NewRingRouterNode(routerID)
+			routers = append(routers, router)
+			routerByID[routerID] = router
+			routerForNode[nodeID] = router
+			nodeRegistry[routerID] = router
+			labels[routerID] = label
+		}
+
+		for i, m := range masters {
+			addRouter(m.ID, fmt.Sprintf("RT RN %d", i))
+			m.SetRouterID(routerForNode[m.ID].ID)
+		}
+		if relay != nil {
+			addRouter(relay.ID, "RT HN 0")
+			relay.SetRouterID(routerForNode[relay.ID].ID)
+		}
+		for i, s := range slaves {
+			addRouter(s.ID, fmt.Sprintf("RT SN %d", i))
+			s.SetRouterID(routerForNode[s.ID].ID)
+		}
+	}
+
 	// Create link with bandwidth limit and node registry
 	bandwidthLimit := cfg.BandwidthLimit
 	if bandwidthLimit <= 0 {
@@ -203,12 +255,10 @@ func initializeSimulatorComponents(cfg *Config, rng *rand.Rand) (
 	for i, s := range slaves {
 		labels[s.ID] = fmt.Sprintf("SN %d", i) // Slave Node
 	}
-	labels[relay.ID] = "HN 0" // Home Node
-
-	return masters, slaves, relay, ch, masterByID, slaveByID, labels
+	return masters, slaves, relay, routers, ch, masterByID, slaveByID, routerByID, routerForNode, labels
 }
 
-func buildRingOrder(masters []*RequestNode, relay *HomeNode, slaves []*SlaveNode) []int {
+func buildRingOrder(masters []*RequestNode, relay *HomeNode, slaves []*SlaveNode, routerForNode map[int]*RingRouterNode) []int {
 	order := make([]int, 0, len(masters)+len(slaves)+1)
 	if len(masters) > 0 {
 		order = append(order, masters[0].ID)
@@ -229,7 +279,11 @@ func buildRingOrder(masters []*RequestNode, relay *HomeNode, slaves []*SlaveNode
 			continue
 		}
 		seen[id] = struct{}{}
-		unique = append(unique, id)
+		if router, ok := routerForNode[id]; ok {
+			unique = append(unique, router.ID)
+		} else {
+			unique = append(unique, id)
+		}
 	}
 	return unique
 }
@@ -416,44 +470,84 @@ func NewSimulator(cfg *Config) *Simulator {
 	registry := hooks.NewRegistry(broker)
 	txFactory := NewTxFactory(broker, txnMgr, pktAlloc)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(cfg, rng)
+	masters, slaves, relay, routers, ch, masterByID, slaveByID, routerByID, routerForNode, labels := initializeSimulatorComponents(cfg, rng)
 
-	var ringOrder []int
+	sim := &Simulator{
+		Masters:       masters,
+		Slaves:        slaves,
+		Relay:         relay,
+		Routers:       routers,
+		Chan:          ch,
+		masterByID:    masterByID,
+		slaveByID:     slaveByID,
+		routerByID:    routerByID,
+		routerForNode: make(map[int]int, len(routerForNode)),
+		nodeLabels:    labels,
+		cfg:           cfg,
+		rng:           rng,
+		pktIDs:        pktAlloc,
+		txnMgr:        txnMgr,
+		current:       0,
+		pluginBroker:  broker,
+		txFactory:     txFactory,
+		policyMgr:     policy.NewDefaultManager(),
+		pluginReg:     registry,
+		edgeLatencies: make(map[EdgeKey]int),
+	}
+	fallbackRouter := router.NewDefaultRouter()
+	for nodeID, router := range routerForNode {
+		sim.routerForNode[nodeID] = router.ID
+		fallbackRouter.AddDirectedEdge(nodeID, router.ID, 1)
+		fallbackRouter.AddDirectedEdge(router.ID, nodeID, 1)
+	}
+
+	routerLocal := make(map[int][]int)
+	for nodeID, routerID := range sim.routerForNode {
+		routerLocal[routerID] = append(routerLocal[routerID], nodeID)
+	}
+
+	routerCaps := make(map[int]capabilities.RingRouterCapability)
+	for _, router := range sim.Routers {
+		cap := capabilities.NewRingRouterCapability(
+			fmt.Sprintf("ring-router-forward-%d", router.ID),
+			capabilities.RingRouterConfig{RouterID: router.ID},
+		)
+		router.RegisterCapability(cap)
+		routerCaps[router.ID] = cap
+	}
+
 	if cfg.RingEnabled {
 		interleaver := NewRingAddressInterleaver(slaves, cfg.RingInterleaveStride)
 		for _, m := range masters {
 			m.SetAddressMapper(interleaver)
 		}
-		ringOrder = buildRingOrder(masters, relay, slaves)
-		if len(ringOrder) > 0 {
-			ringCap := capabilities.NewRingRoutingCapability("ring-routing", ringOrder)
-			if ringCap != nil {
-				if err := ringCap.Register(broker); err != nil {
-					GetLogger().Warnf("ring routing capability registration failed: %v", err)
-				}
+		sim.ringOrder = buildRingOrder(masters, relay, slaves, routerForNode)
+		if len(sim.ringOrder) > 0 {
+			for idx, routerID := range sim.ringOrder {
+				nextID := sim.ringOrder[(idx+1)%len(sim.ringOrder)]
+				local := routerLocal[routerID]
+				routerCaps[routerID].Update(capabilities.RingRouterConfig{
+					RouterID:     routerID,
+					NextRouterID: nextID,
+					LocalNodeIDs: local,
+				})
+				fallbackRouter.AddDirectedEdge(routerID, nextID, cfg.MasterRelayLatency)
 			}
 		}
 	}
 
-	sim := &Simulator{
-		Masters:      masters,
-		Slaves:       slaves,
-		Relay:        relay,
-		Chan:         ch,
-		masterByID:   masterByID,
-		slaveByID:    slaveByID,
-		nodeLabels:   labels,
-		cfg:          cfg,
-		rng:          rng,
-		pktIDs:       pktAlloc,
-		txnMgr:       txnMgr,
-		current:      0,
-		pluginBroker: broker,
-		txFactory:    txFactory,
-		policyMgr:    policy.NewDefaultManager(),
-		pluginReg:    registry,
-		ringOrder:    ringOrder,
+	if relay != nil {
+		for _, m := range masters {
+			fallbackRouter.AddDirectedEdge(m.ID, relay.ID, cfg.MasterRelayLatency)
+			fallbackRouter.AddDirectedEdge(relay.ID, m.ID, cfg.RelayMasterLatency)
+		}
+		for _, s := range slaves {
+			fallbackRouter.AddDirectedEdge(relay.ID, s.ID, cfg.RelaySlaveLatency)
+			fallbackRouter.AddDirectedEdge(s.ID, relay.ID, cfg.SlaveRelayLatency)
+		}
 	}
+
+	sim.policyMgr = policy.WithFallbackRouter(sim.policyMgr, fallbackRouter.PolicyRouter())
 
 	for _, m := range sim.Masters {
 		m.SetTxFactory(txFactory)
@@ -468,6 +562,11 @@ func NewSimulator(cfg *Config) *Simulator {
 		sim.Relay.SetPluginBroker(broker)
 		sim.Relay.SetPolicyManager(sim.policyMgr)
 		sim.Relay.SetPacketIDAllocator(sim.pktIDs)
+	}
+	for _, router := range sim.Routers {
+		router.SetPluginBroker(broker)
+		router.SetTransactionManager(sim.txnMgr)
+		router.SetPacketIDAllocator(sim.pktIDs)
 	}
 
 	sim.edges = sim.buildEdges()
@@ -537,7 +636,7 @@ func NewSimulator(cfg *Config) *Simulator {
 }
 
 func (s *Simulator) initializeCycleRuntime() {
-	componentIDs := make([]string, 0, len(s.Masters)+len(s.Slaves)+len(s.edges)+1)
+	componentIDs := make([]string, 0, len(s.Masters)+len(s.Slaves)+len(s.Routers)+len(s.edges)+1)
 	for _, m := range s.Masters {
 		componentIDs = append(componentIDs, fmt.Sprintf("node-%d", m.ID))
 	}
@@ -546,6 +645,9 @@ func (s *Simulator) initializeCycleRuntime() {
 	}
 	for _, sl := range s.Slaves {
 		componentIDs = append(componentIDs, fmt.Sprintf("node-%d", sl.ID))
+	}
+	for _, rt := range s.Routers {
+		componentIDs = append(componentIDs, fmt.Sprintf("node-%d", rt.ID))
 	}
 	for _, edge := range s.edges {
 		componentIDs = append(componentIDs, fmt.Sprintf("link-%d-%d", edge.Source, edge.Target))
@@ -562,6 +664,9 @@ func (s *Simulator) initializeCycleRuntime() {
 	}
 	for _, sl := range s.Slaves {
 		sl.ConfigureCycleRuntime(fmt.Sprintf("node-%d", sl.ID), s.coordinator)
+	}
+	for _, rt := range s.Routers {
+		rt.ConfigureCycleRuntime(fmt.Sprintf("node-%d", rt.ID), s.coordinator)
 	}
 
 	s.Chan.ConfigureCoordinator(s.coordinator)
@@ -596,6 +701,9 @@ func (s *Simulator) getCycleSignaler(id int) cycleSignaler {
 	}
 	if s.Relay != nil && s.Relay.ID == id {
 		return s.Relay
+	}
+	if node, ok := s.routerByID[id]; ok {
+		return node
 	}
 	return nil
 }
@@ -633,18 +741,45 @@ func (s *Simulator) startRuntimes() {
 		}(rn)
 	}
 
+	resolveLatency := func(fromID, toID int) int {
+		if latency, ok := s.edgeLatencies[EdgeKey{FromID: fromID, ToID: toID}]; ok {
+			return latency
+		}
+		return 1
+	}
+
 	for _, sl := range s.Slaves {
+		routerID := s.routerForNode[sl.ID]
+		routerLatency := resolveLatency(sl.ID, routerID)
 		ctx := &SlaveNodeRuntime{
 			PacketAllocator: s.pktIDs,
 			Link:            s.Chan,
 			RelayID:         relayID,
 			RelayLatency:    s.cfg.SlaveRelayLatency,
+			RouterID:        routerID,
+			RouterLatency:   routerLatency,
 		}
 		s.runtimeWG.Add(1)
 		go func(node *SlaveNode) {
 			defer s.runtimeWG.Done()
 			node.RunRuntime(ctx)
 		}(sl)
+	}
+
+	for _, rt := range s.Routers {
+		ctx := &RingRouterRuntime{
+			Link: s.Chan,
+			ResolveLatency: func(fromID, toID int) int {
+				return resolveLatency(fromID, toID)
+			},
+			TransactionMgr:  s.txnMgr,
+			PacketAllocator: s.pktIDs,
+		}
+		s.runtimeWG.Add(1)
+		go func(router *RingRouterNode) {
+			defer s.runtimeWG.Done()
+			router.RunRuntime(ctx)
+		}(rt)
 	}
 
 	s.updateCoordinatorLimit()
@@ -670,6 +805,7 @@ func (s *Simulator) updateCoordinatorLimit() {
 }
 
 func (s *Simulator) buildEdges() []EdgeSnapshot {
+	s.edgeLatencies = make(map[EdgeKey]int)
 	if s.cfg != nil && s.cfg.RingEnabled && len(s.ringOrder) > 1 {
 		edges := make([]EdgeSnapshot, 0, len(s.ringOrder))
 		latency := s.cfg.MasterRelayLatency
@@ -678,12 +814,37 @@ func (s *Simulator) buildEdges() []EdgeSnapshot {
 		}
 		for i, src := range s.ringOrder {
 			dst := s.ringOrder[(i+1)%len(s.ringOrder)]
-			edges = append(edges, EdgeSnapshot{
+			edge := EdgeSnapshot{
 				Source:  src,
 				Target:  dst,
 				Label:   fmt.Sprintf("%dcy", latency),
 				Latency: latency,
-			})
+			}
+			edges = append(edges, edge)
+			s.edgeLatencies[EdgeKey{FromID: src, ToID: dst}] = latency
+		}
+
+		localLatency := 1
+		for nodeID, routerID := range s.routerForNode {
+			if routerID == 0 {
+				continue
+			}
+			localLabel := fmt.Sprintf("%dcy", localLatency)
+			rtToNode := EdgeSnapshot{
+				Source:  routerID,
+				Target:  nodeID,
+				Label:   localLabel,
+				Latency: localLatency,
+			}
+			nodeToRt := EdgeSnapshot{
+				Source:  nodeID,
+				Target:  routerID,
+				Label:   localLabel,
+				Latency: localLatency,
+			}
+			edges = append(edges, nodeToRt, rtToNode)
+			s.edgeLatencies[EdgeKey{FromID: routerID, ToID: nodeID}] = localLatency
+			s.edgeLatencies[EdgeKey{FromID: nodeID, ToID: routerID}] = localLatency
 		}
 		return edges
 	}
@@ -694,16 +855,18 @@ func (s *Simulator) buildEdges() []EdgeSnapshot {
 	}
 	homeNodeID := s.Relay.ID
 	for _, m := range s.Masters {
-		edges = append(edges,
-			EdgeSnapshot{Source: m.ID, Target: homeNodeID, Label: "Req", Latency: s.cfg.MasterRelayLatency},
-			EdgeSnapshot{Source: homeNodeID, Target: m.ID, Label: "Comp", Latency: s.cfg.RelayMasterLatency},
-		)
+		reqEdge := EdgeSnapshot{Source: m.ID, Target: homeNodeID, Label: "Req", Latency: s.cfg.MasterRelayLatency}
+		compEdge := EdgeSnapshot{Source: homeNodeID, Target: m.ID, Label: "Comp", Latency: s.cfg.RelayMasterLatency}
+		edges = append(edges, reqEdge, compEdge)
+		s.edgeLatencies[EdgeKey{FromID: reqEdge.Source, ToID: reqEdge.Target}] = reqEdge.Latency
+		s.edgeLatencies[EdgeKey{FromID: compEdge.Source, ToID: compEdge.Target}] = compEdge.Latency
 	}
 	for _, sl := range s.Slaves {
-		edges = append(edges,
-			EdgeSnapshot{Source: homeNodeID, Target: sl.ID, Label: "Req", Latency: s.cfg.RelaySlaveLatency},
-			EdgeSnapshot{Source: sl.ID, Target: homeNodeID, Label: "Comp", Latency: s.cfg.SlaveRelayLatency},
-		)
+		reqEdge := EdgeSnapshot{Source: homeNodeID, Target: sl.ID, Label: "Req", Latency: s.cfg.RelaySlaveLatency}
+		compEdge := EdgeSnapshot{Source: sl.ID, Target: homeNodeID, Label: "Comp", Latency: s.cfg.SlaveRelayLatency}
+		edges = append(edges, reqEdge, compEdge)
+		s.edgeLatencies[EdgeKey{FromID: reqEdge.Source, ToID: reqEdge.Target}] = reqEdge.Latency
+		s.edgeLatencies[EdgeKey{FromID: compEdge.Source, ToID: compEdge.Target}] = compEdge.Latency
 	}
 	return edges
 }
@@ -739,7 +902,7 @@ func cloneQueuesWithPackets(qs []QueueInfo, queueName string, packets []PacketIn
 }
 
 func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
-	nodeCount := len(s.Masters) + len(s.Slaves)
+	nodeCount := len(s.Masters) + len(s.Slaves) + len(s.Routers)
 	if s.Relay != nil {
 		nodeCount++
 	}
@@ -780,11 +943,12 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			label = fmt.Sprintf("RN %d", m.ID)
 		}
 		nodes = append(nodes, NodeSnapshot{
-			ID:      m.ID,
-			Type:    m.Type,
-			Label:   label,
-			Queues:  clonedQueues,
-			Payload: payload,
+			ID:           m.ID,
+			Type:         m.Type,
+			Label:        label,
+			Queues:       clonedQueues,
+			Capabilities: m.CapabilityNames(),
+			Payload:      payload,
 		})
 	}
 
@@ -816,11 +980,44 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			label = fmt.Sprintf("SN %d", sl.ID)
 		}
 		nodes = append(nodes, NodeSnapshot{
-			ID:      sl.ID,
-			Type:    sl.Type,
-			Label:   label,
-			Queues:  clonedQueues,
-			Payload: payload,
+			ID:           sl.ID,
+			Type:         sl.Type,
+			Label:        label,
+			Queues:       clonedQueues,
+			Capabilities: sl.CapabilityNames(),
+			Payload:      payload,
+		})
+	}
+
+	for _, rt := range s.Routers {
+		queuePackets := rt.GetQueuePackets()
+		queueInfo := rt.GetQueueInfo()
+		clonedQueues := cloneQueues(queueInfo)
+		packetsByQueue := make(map[string][]core.PacketInfo)
+		for _, pkt := range queuePackets {
+			stageName := pkt.Metadata["node_queue_stage"]
+			packetsByQueue[stageName] = append(packetsByQueue[stageName], pkt)
+		}
+		for i := range clonedQueues {
+			if packets, ok := packetsByQueue[clonedQueues[i].Name]; ok {
+				clonedQueues[i].Packets = packets
+			}
+		}
+		label, ok := s.nodeLabels[rt.ID]
+		if !ok {
+			label = fmt.Sprintf("RT %d", rt.ID)
+		}
+		payload := map[string]any{
+			"nodeType":    "RT",
+			"chiProtocol": true,
+		}
+		nodes = append(nodes, NodeSnapshot{
+			ID:           rt.ID,
+			Type:         rt.Type,
+			Label:        label,
+			Queues:       clonedQueues,
+			Capabilities: rt.CapabilityNames(),
+			Payload:      payload,
 		})
 	}
 
@@ -855,11 +1052,12 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			label = "HN 0"
 		}
 		nodes = append(nodes, NodeSnapshot{
-			ID:      s.Relay.ID,
-			Type:    s.Relay.Type,
-			Label:   label,
-			Queues:  queueInfoCloned,
-			Payload: payload,
+			ID:           s.Relay.ID,
+			Type:         s.Relay.Type,
+			Label:        label,
+			Queues:       queueInfoCloned,
+			Capabilities: s.Relay.CapabilityNames(),
+			Payload:      payload,
 		})
 	}
 
@@ -960,33 +1158,70 @@ func (s *Simulator) reset(newCfg *Config) {
 	txnMgr := NewTransactionManager()
 	broker := hooks.NewPluginBroker()
 	txFactory := NewTxFactory(broker, txnMgr, pktAlloc)
-	masters, slaves, relay, ch, masterByID, slaveByID, labels := initializeSimulatorComponents(s.cfg, s.rng)
+	masters, slaves, relay, routers, ch, masterByID, slaveByID, routerByID, routerForNode, labels := initializeSimulatorComponents(s.cfg, s.rng)
 
-	var ringOrder []int
+	s.Masters = masters
+	s.Slaves = slaves
+	s.Relay = relay
+	s.Routers = routers
+	s.Chan = ch
+	s.masterByID = masterByID
+	s.slaveByID = slaveByID
+	s.routerByID = routerByID
+	s.routerForNode = make(map[int]int, len(routerForNode))
+	fallbackRouter := router.NewDefaultRouter()
+	for nodeID, router := range routerForNode {
+		s.routerForNode[nodeID] = router.ID
+		fallbackRouter.AddDirectedEdge(nodeID, router.ID, 1)
+		fallbackRouter.AddDirectedEdge(router.ID, nodeID, 1)
+	}
+	s.ringOrder = nil
+	routerLocal := make(map[int][]int)
+	for nodeID, routerID := range s.routerForNode {
+		routerLocal[routerID] = append(routerLocal[routerID], nodeID)
+	}
+	routerCaps := make(map[int]capabilities.RingRouterCapability)
+	for _, router := range s.Routers {
+		cap := capabilities.NewRingRouterCapability(
+			fmt.Sprintf("ring-router-forward-%d", router.ID),
+			capabilities.RingRouterConfig{RouterID: router.ID},
+		)
+		router.RegisterCapability(cap)
+		routerCaps[router.ID] = cap
+	}
 	if s.cfg.RingEnabled {
 		interleaver := NewRingAddressInterleaver(slaves, s.cfg.RingInterleaveStride)
 		for _, m := range masters {
 			m.SetAddressMapper(interleaver)
 		}
-		ringOrder = buildRingOrder(masters, relay, slaves)
-		if len(ringOrder) > 0 {
-			ringCap := capabilities.NewRingRoutingCapability("ring-routing", ringOrder)
-			if ringCap != nil {
-				if err := ringCap.Register(broker); err != nil {
-					GetLogger().Warnf("ring routing capability registration failed: %v", err)
-				}
+		s.ringOrder = buildRingOrder(masters, relay, slaves, routerForNode)
+		if len(s.ringOrder) > 0 {
+			for idx, routerID := range s.ringOrder {
+				nextID := s.ringOrder[(idx+1)%len(s.ringOrder)]
+				local := routerLocal[routerID]
+				routerCaps[routerID].Update(capabilities.RingRouterConfig{
+					RouterID:     routerID,
+					NextRouterID: nextID,
+					LocalNodeIDs: local,
+				})
+				fallbackRouter.AddDirectedEdge(routerID, nextID, s.cfg.MasterRelayLatency)
 			}
 		}
 	}
-
-	s.Masters = masters
-	s.Slaves = slaves
-	s.Relay = relay
-	s.Chan = ch
-	s.masterByID = masterByID
-	s.slaveByID = slaveByID
+	if s.Relay != nil {
+		for _, m := range s.Masters {
+			fallbackRouter.AddDirectedEdge(m.ID, s.Relay.ID, s.cfg.MasterRelayLatency)
+			fallbackRouter.AddDirectedEdge(s.Relay.ID, m.ID, s.cfg.RelayMasterLatency)
+		}
+		for _, sl := range s.Slaves {
+			fallbackRouter.AddDirectedEdge(s.Relay.ID, sl.ID, s.cfg.RelaySlaveLatency)
+			fallbackRouter.AddDirectedEdge(sl.ID, s.Relay.ID, s.cfg.SlaveRelayLatency)
+		}
+	}
+	baseMgr := policy.NewDefaultManager()
+	s.policyMgr = policy.WithFallbackRouter(baseMgr, fallbackRouter.PolicyRouter())
 	s.nodeLabels = labels
-	s.ringOrder = ringOrder
+	// s.ringOrder already assigned if ring enabled
 	s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	s.pktIDs = pktAlloc
 	s.txnMgr = txnMgr
@@ -994,12 +1229,13 @@ func (s *Simulator) reset(newCfg *Config) {
 	s.edges = s.buildEdges()
 	s.pluginBroker = broker
 	s.txFactory = txFactory
-	s.policyMgr = policy.NewDefaultManager()
+	// s.policyMgr already configured with fallback router
 
 	for _, m := range s.Masters {
 		m.SetTxFactory(txFactory)
 		m.SetPluginBroker(broker)
 		m.SetPolicyManager(s.policyMgr)
+		m.SetPacketIDAllocator(s.pktIDs)
 	}
 	for _, sl := range s.Slaves {
 		sl.SetPluginBroker(broker)
@@ -1007,6 +1243,12 @@ func (s *Simulator) reset(newCfg *Config) {
 	if s.Relay != nil {
 		s.Relay.SetPluginBroker(broker)
 		s.Relay.SetPolicyManager(s.policyMgr)
+		s.Relay.SetPacketIDAllocator(s.pktIDs)
+	}
+	for _, router := range s.Routers {
+		router.SetPluginBroker(broker)
+		router.SetTransactionManager(s.txnMgr)
+		router.SetPacketIDAllocator(s.pktIDs)
 	}
 
 	// Set TransactionManager for all components
