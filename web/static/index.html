@@ -269,6 +269,56 @@
             background: #fff;
         }
 
+        .topology-editor {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .topology-context-menu {
+            position: absolute;
+            min-width: 160px;
+            background: #fff;
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+            padding: 4px 0;
+            z-index: 40;
+            display: none;
+            font-size: 13px;
+        }
+
+        .topology-context-menu.show {
+            display: block;
+        }
+
+        .topology-context-menu button {
+            width: 100%;
+            background: transparent;
+            border: none;
+            padding: 8px 16px;
+            text-align: left;
+            cursor: pointer;
+            color: #333;
+        }
+
+        .topology-context-menu button:hover {
+            background: #f0f5ff;
+            color: #1d39c4;
+        }
+
+        .edgehandles-handle {
+            width: 12px;
+            height: 12px;
+            background: #1890ff;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            box-shadow: 0 0 6px rgba(24, 144, 255, 0.6);
+        }
+
+        .edgehandles-handle.edgehandles-hover {
+            background: #40a9ff;
+        }
+
         .empty-state {
             margin: auto;
             text-align: center;
@@ -642,6 +692,7 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape-edgehandles@4.0.1/cytoscape-edgehandles.min.js"></script>
     <script type="module" src="js/main.js"></script>
 </body>
 </html>

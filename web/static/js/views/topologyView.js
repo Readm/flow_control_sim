@@ -46,8 +46,6 @@ const CY_STYLE = [
     },
 ];
 
-const LINK_MODE_STATUS = 'Select source node, then destination node to create a link.';
-
 export function createTopologyView({
     panelElement,
     containerElement,
@@ -65,11 +63,13 @@ export function createTopologyView({
         dirty: false,
         history: [],
         redo: [],
-        mode: 'idle',
-        linkSourceId: null,
         loading: false,
         lastSource: 'frame',
         lastConfigHash: null,
+        contextMenu: null,
+        contextMenuType: null,
+        contextMenuTarget: null,
+        edgehandles: null,
     };
 
     attachButtonHandlers();
@@ -84,7 +84,7 @@ export function createTopologyView({
 
     function deactivate() {
         setStatus('');
-        exitLinkMode();
+        hideContextMenu();
     }
 
     function handleFrame(frame) {
@@ -116,12 +116,6 @@ export function createTopologyView({
             wheelSensitivity: 0.2,
         });
 
-        state.cy.on('tap', 'node', (evt) => {
-            if (state.mode === 'add-link') {
-                handleLinkSelection(evt.target.id());
-            }
-        });
-
         state.cy.on('dbltap', 'node', (evt) => {
             const node = evt.target;
             const newLabel = prompt('Node label', node.data('label') || '');
@@ -140,19 +134,37 @@ export function createTopologyView({
             }
         });
 
-        state.cy.on('cxttap', (evt) => {
-            if (evt.target && evt.target.isNode && evt.target.isNode()) {
-                evt.target.select();
-            }
+        state.cy.on('cxttap', 'node', (evt) => {
+            evt.originalEvent?.preventDefault();
+            showContextMenu('node', evt.target, evt.renderedPosition);
         });
+
+        state.cy.on('cxttap', 'edge', (evt) => {
+            evt.originalEvent?.preventDefault();
+            showContextMenu('edge', evt.target, evt.renderedPosition);
+        });
+
+        state.cy.on('cxttap', () => {
+            hideContextMenu();
+        });
+
+        state.cy.on('tap', () => {
+            hideContextMenu();
+        });
+
+        initializeEdgeHandles();
+        initializeContextMenu();
 
         containerElement.addEventListener('keydown', handleKeyPress);
         containerElement.setAttribute('tabindex', '-1');
+        state.graphElement.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+        });
     }
 
     function attachButtonHandlers() {
         buttons.addNode?.addEventListener('click', addNode);
-        buttons.addLink?.addEventListener('click', toggleLinkMode);
+        buttons.addLink?.addEventListener('click', showLinkHandleHint);
         buttons.delete?.addEventListener('click', deleteSelection);
         buttons.undo?.addEventListener('click', undo);
         buttons.redo?.addEventListener('click', redo);
@@ -161,6 +173,10 @@ export function createTopologyView({
     }
 
     function handleKeyPress(event) {
+        if (event.key === 'Escape') {
+            hideContextMenu();
+            return;
+        }
         if (event.key === 'Delete') {
             deleteSelection();
         }
@@ -191,54 +207,15 @@ export function createTopologyView({
         markDirty();
     }
 
-    function toggleLinkMode() {
+    function showLinkHandleHint() {
         ensureReady();
-        if (state.mode === 'add-link') {
-            exitLinkMode();
-        } else {
-            state.mode = 'add-link';
-            state.linkSourceId = null;
-            setStatus(LINK_MODE_STATUS, 'info');
-        }
-    }
-
-    function handleLinkSelection(nodeId) {
-        if (!state.linkSourceId) {
-            state.linkSourceId = nodeId;
-            setStatus('Select destination node to complete the link.', 'info');
-            return;
-        }
-
-        if (state.linkSourceId === nodeId) {
-            setStatus('Cannot create self-loop link.', 'warn');
-            return;
-        }
-
-        const label = prompt('Link label', 'Link');
-        if (label === null) {
-            exitLinkMode();
-            return;
-        }
-        const latencyInput = prompt('Link latency (cycles)', '1');
-        const latency = latencyInput ? parseInt(latencyInput, 10) : 0;
-
-        state.cy.add({
-            group: 'edges',
-            data: {
-                id: `e${state.linkSourceId}-${nodeId}-${Date.now()}`,
-                source: state.linkSourceId,
-                target: nodeId,
-                label: label.trim(),
-                latency: Number.isFinite(latency) ? latency : 0,
-            },
-        });
-        recordSnapshot();
-        markDirty();
-        exitLinkMode();
+        hideContextMenu();
+        setStatus('Drag from the blue handle on a node to another node to create a link.', 'info');
     }
 
     function deleteSelection() {
         ensureReady();
+        hideContextMenu();
         const selection = state.cy.$(':selected');
         if (selection.length === 0) {
             setStatus('Select nodes or links to delete.', 'info');
@@ -459,10 +436,221 @@ export function createTopologyView({
         setStatus('Topology modified. Remember to save draft.', 'warn');
     }
 
-    function exitLinkMode() {
-        state.mode = 'idle';
-        state.linkSourceId = null;
-        setStatus('');
+    function initializeContextMenu() {
+        if (state.contextMenu) {
+            return;
+        }
+        const menu = document.createElement('div');
+        menu.className = 'topology-context-menu';
+        containerElement.appendChild(menu);
+        state.contextMenu = menu;
+        document.addEventListener('click', handleDocumentClick);
+    }
+
+    function handleDocumentClick(event) {
+        if (!state.contextMenu || !state.contextMenu.classList.contains('show')) {
+            return;
+        }
+        if (state.contextMenu.contains(event.target)) {
+            return;
+        }
+        hideContextMenu();
+    }
+
+    function showContextMenu(type, element, renderedPosition) {
+        initializeContextMenu();
+        if (!state.contextMenu || !element) {
+            return;
+        }
+        state.contextMenuType = type;
+        state.contextMenuTarget = element;
+        try {
+            element.select();
+        } catch (error) {
+            // Ignore selection errors for non-selectable elements.
+        }
+        populateContextMenu(type, element);
+
+        const position = renderedPosition || element.renderedPosition();
+        if (!position) {
+            return;
+        }
+        const containerRect = containerElement.getBoundingClientRect();
+        state.contextMenu.style.left = '0px';
+        state.contextMenu.style.top = '0px';
+        state.contextMenu.style.visibility = 'hidden';
+        state.contextMenu.classList.add('show');
+
+        const menuRect = state.contextMenu.getBoundingClientRect();
+        let left = position.x - containerRect.left;
+        let top = position.y - containerRect.top;
+
+        if (left + menuRect.width > containerRect.width) {
+            left = containerRect.width - menuRect.width - 8;
+        }
+        if (top + menuRect.height > containerRect.height) {
+            top = containerRect.height - menuRect.height - 8;
+        }
+
+        left = Math.max(0, left);
+        top = Math.max(0, top);
+
+        state.contextMenu.style.left = `${left}px`;
+        state.contextMenu.style.top = `${top}px`;
+        state.contextMenu.style.visibility = 'visible';
+    }
+
+    function hideContextMenu() {
+        if (!state.contextMenu) {
+            return;
+        }
+        state.contextMenu.classList.remove('show');
+        state.contextMenu.style.visibility = '';
+        state.contextMenu.innerHTML = '';
+        state.contextMenuType = null;
+        state.contextMenuTarget = null;
+    }
+
+    function populateContextMenu(type, element) {
+        if (!state.contextMenu) {
+            return;
+        }
+        state.contextMenu.innerHTML = '';
+        const items = type === 'node'
+            ? [
+                  { label: 'Edit Node', handler: () => editNode(element) },
+                  { label: 'Delete Node', handler: () => deleteElement(element, 'Node deleted.') },
+              ]
+            : [
+                  { label: 'Edit Link', handler: () => editEdge(element) },
+                  { label: 'Delete Link', handler: () => deleteElement(element, 'Link deleted.') },
+              ];
+
+        items.forEach((item) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = item.label;
+            button.addEventListener('click', () => {
+                hideContextMenu();
+                item.handler();
+            });
+            state.contextMenu.appendChild(button);
+        });
+    }
+
+    function editNode(node) {
+        if (!node || node.removed()) {
+            return;
+        }
+        const currentLabel = node.data('label') || '';
+        const currentType = node.data('type') || 'RN';
+        const newLabel = prompt('Node label', currentLabel);
+        if (newLabel === null || newLabel.trim() === '') {
+            return;
+        }
+        const newType = prompt('Node type (RN, HN, SN)', currentType);
+        if (newType === null || newType.trim() === '') {
+            return;
+        }
+        recordSnapshot();
+        node.data('label', newLabel.trim());
+        node.data('type', newType.trim());
+        markDirty();
+        setStatus('Node updated.', 'success');
+    }
+
+    function editEdge(edge) {
+        if (!edge || edge.removed()) {
+            return;
+        }
+        const currentLabel = edge.data('label') || '';
+        const currentLatency = edge.data('latency');
+        const newLabel = prompt('Link label', currentLabel);
+        if (newLabel === null || newLabel.trim() === '') {
+            return;
+        }
+        const latencyPrompt = prompt(
+            'Link latency (cycles)',
+            Number.isFinite(currentLatency) ? String(currentLatency) : '1',
+        );
+        if (latencyPrompt === null) {
+            return;
+        }
+        const latencyValue = latencyPrompt.trim();
+        const latency = latencyValue === '' ? 0 : parseInt(latencyValue, 10);
+        recordSnapshot();
+        edge.data('label', newLabel.trim());
+        edge.data('latency', Number.isFinite(latency) && latency >= 0 ? latency : 0);
+        markDirty();
+        setStatus('Link updated.', 'success');
+    }
+
+    function deleteElement(element, successMessage) {
+        if (!element || element.removed()) {
+            return;
+        }
+        recordSnapshot();
+        element.remove();
+        markDirty();
+        setStatus(successMessage || 'Element deleted.', 'success');
+    }
+
+    function initializeEdgeHandles() {
+        if (!state.cy) {
+            return;
+        }
+        if (typeof state.cy.edgehandles !== 'function' && typeof cytoscapeEdgehandles === 'function' && typeof cytoscape.use === 'function') {
+            cytoscape.use(cytoscapeEdgehandles);
+        }
+        if (typeof state.cy.edgehandles !== 'function') {
+            console.warn('cytoscape-edgehandles plugin is not available.');
+            return;
+        }
+        state.edgehandles = state.cy.edgehandles({
+            handleNodes: 'node',
+            handlePosition: 'right middle',
+            handleColor: '#1890ff',
+            handleSize: 10,
+            hoverDelay: 100,
+            enabled: true,
+            loopAllowed: () => false,
+        });
+
+        state.cy.on('ehcomplete', (_event, _sourceNode, _targetNode, addedEdge) => {
+            if (!addedEdge) {
+                return;
+            }
+            handleEdgeCreation(addedEdge);
+        });
+
+        state.cy.on('ehcancel', () => {
+            hideContextMenu();
+        });
+    }
+
+    function handleEdgeCreation(edge) {
+        const newLabel = prompt('Link label', 'Link');
+        if (newLabel === null || newLabel.trim() === '') {
+            edge.remove();
+            setStatus('Link creation cancelled.', 'info');
+            return;
+        }
+        const latencyPrompt = prompt(
+            'Link latency (cycles)',
+            Number.isFinite(edge.data('latency')) ? String(edge.data('latency')) : '1',
+        );
+        if (latencyPrompt === null) {
+            edge.remove();
+            setStatus('Link creation cancelled.', 'info');
+            return;
+        }
+        const latencyValue = latencyPrompt.trim();
+        const latency = latencyValue === '' ? 0 : parseInt(latencyValue, 10);
+        edge.data('label', newLabel.trim());
+        edge.data('latency', Number.isFinite(latency) && latency >= 0 ? latency : 0);
+        recordSnapshot();
+        markDirty();
+        setStatus('Link created.', 'success');
     }
 
     function ensureReady() {
