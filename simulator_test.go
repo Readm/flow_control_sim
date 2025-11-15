@@ -578,8 +578,8 @@ func newInteractiveConfig(totalCycles int) *Config {
 	}
 }
 
-// TestSimulatorControlFlowStepResume verifies pause->step->resume flow without manual intervention.
-func TestSimulatorControlFlowStepResume(t *testing.T) {
+// TestSimulatorControlFlowRun verifies pause->run flow without manual intervention.
+func TestSimulatorControlFlowRun(t *testing.T) {
 	cfg := newInteractiveConfig(5)
 	sim := NewSimulator(cfg)
 
@@ -597,14 +597,14 @@ func TestSimulatorControlFlowStepResume(t *testing.T) {
 
 	viz.waitForCycle(t, 0, time.Second)
 
-	viz.pushCommand(visual.ControlCommand{Type: visual.CommandStep})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandRun, Cycles: 1})
 	viz.waitForCycle(t, 1, time.Second)
 	viz.assertNoAdvanceBeyond(t, 1, 150*time.Millisecond)
 
-	viz.pushCommand(visual.ControlCommand{Type: visual.CommandStep})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandRun, Cycles: 1})
 	viz.waitForCycle(t, 2, time.Second)
 
-	viz.pushCommand(visual.ControlCommand{Type: visual.CommandResume})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandRun, Cycles: cfg.TotalCycles})
 	viz.waitForCycle(t, cfg.TotalCycles, 2*time.Second)
 
 	if reset := <-done; reset {
@@ -632,7 +632,7 @@ func TestSimulatorControlFlowReset(t *testing.T) {
 
 	viz.waitForCycle(t, 0, time.Second)
 
-	viz.pushCommand(visual.ControlCommand{Type: visual.CommandStep})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandRun, Cycles: 1})
 	viz.waitForCycle(t, 1, time.Second)
 
 	newCfg := newInteractiveConfig(4)
@@ -661,7 +661,7 @@ func TestSimulatorControlFlowReset(t *testing.T) {
 		done <- sim.runCycles()
 	}()
 
-	viz.pushCommand(visual.ControlCommand{Type: visual.CommandResume})
+	viz.pushCommand(visual.ControlCommand{Type: visual.CommandRun, Cycles: sim.cfg.TotalCycles})
 	viz.waitForCycle(t, sim.cfg.TotalCycles, 2*time.Second)
 
 	if reset := <-done; reset {

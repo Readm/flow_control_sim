@@ -317,7 +317,7 @@ func (rr *RingRouterNode) processStage(cycle int, ctx *RingRouterRuntime) {
 
 		packet := msg.Packet
 		defaultTarget := msg.DefaultTarget
-		if defaultTarget <= 0 {
+		if defaultTarget < 0 {
 			defaultTarget = rr.determineFinalTarget(packet)
 		}
 
@@ -364,13 +364,13 @@ func (rr *RingRouterNode) sendFromOutQueue(cycle int, ctx *RingRouterRuntime) {
 
 		packet := msg.Packet
 		targetID := msg.TargetID
-		if targetID <= 0 {
+		if targetID < 0 {
 			targetID = msg.DefaultTarget
 		}
-		if targetID <= 0 {
+		if targetID < 0 {
 			targetID = rr.determineFinalTarget(packet)
 		}
-		if targetID <= 0 {
+		if targetID < 0 {
 			GetLogger().Warnf("RingRouterNode %d: unable to determine target for packet %d", rr.ID, packet.ID)
 			outQ.Complete(entryID, cycle)
 			continue
@@ -385,7 +385,7 @@ func (rr *RingRouterNode) sendFromOutQueue(cycle int, ctx *RingRouterRuntime) {
 		}
 
 		finalTarget := msg.DefaultTarget
-		if finalTarget <= 0 {
+		if finalTarget < 0 {
 			finalTarget = rr.determineFinalTarget(packet)
 		}
 		rr.ensureFinalTargetMetadata(packet, finalTarget)
@@ -407,7 +407,7 @@ func (rr *RingRouterNode) sendFromOutQueue(cycle int, ctx *RingRouterRuntime) {
 func (rr *RingRouterNode) resolveRoute(packet *core.Packet, defaultTarget int) (int, bool) {
 	targetID := defaultTarget
 	if rr.broker == nil || packet == nil {
-		if targetID <= 0 {
+		if targetID < 0 {
 			return 0, false
 		}
 		return targetID, true
@@ -432,13 +432,13 @@ func (rr *RingRouterNode) resolveRoute(packet *core.Packet, defaultTarget int) (
 	if err := rr.broker.EmitAfterRoute(afterCtx); err != nil {
 		GetLogger().Warnf("RingRouterNode %d OnAfterRoute hook failed: %v", rr.ID, err)
 	}
-	if afterCtx.TargetID > 0 {
+	if afterCtx.TargetID >= 0 {
 		targetID = afterCtx.TargetID
 	}
-	if targetID <= 0 {
+	if targetID < 0 {
 		targetID = defaultTarget
 	}
-	if targetID <= 0 {
+	if targetID < 0 {
 		return 0, false
 	}
 	return targetID, true
@@ -535,7 +535,7 @@ func (rr *RingRouterNode) determineFinalTarget(packet *core.Packet) int {
 }
 
 func (rr *RingRouterNode) ensureFinalTargetMetadata(packet *core.Packet, finalTarget int) {
-	if packet == nil || finalTarget <= 0 {
+	if packet == nil || finalTarget < 0 {
 		return
 	}
 	packet.SetMetadata(capabilities.RingFinalTargetMetadataKey, strconv.Itoa(finalTarget))

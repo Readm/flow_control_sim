@@ -988,10 +988,10 @@ func (rn *RequestNode) sendFromOutQueue(limit int, cycle int, cfg *Config, ch *L
 
 		packet := msg.Packet
 		defaultTarget := msg.TargetID
-		if defaultTarget <= 0 {
+		if defaultTarget < 0 {
 			defaultTarget = msg.DefaultTarget
 		}
-		if defaultTarget <= 0 {
+		if defaultTarget < 0 {
 			targetRouter := homeNodeID
 			if cfg != nil && cfg.RingEnabled && rn.routerID != 0 {
 				targetRouter = rn.routerID
@@ -1074,10 +1074,10 @@ func (rn *RequestNode) resolveRoute(packet *core.Packet, defaultTarget int) (int
 	if err := rn.broker.EmitAfterRoute(afterCtx); err != nil {
 		GetLogger().Warnf("RequestNode %d OnAfterRoute hook failed: %v", rn.ID, err)
 	}
-	if afterCtx.TargetID > 0 {
+	if afterCtx.TargetID >= 0 {
 		targetID = afterCtx.TargetID
 	}
-	if targetID <= 0 {
+	if targetID < 0 {
 		targetID = defaultTarget
 	}
 	return targetID, true

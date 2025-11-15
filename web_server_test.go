@@ -119,8 +119,8 @@ func TestWebServer_ControlEndpoint(t *testing.T) {
 		t.Errorf("Expected pause command, got %s", cmd.Type)
 	}
 
-	// Test resume command
-	cmdJSON = `{"type":"resume"}`
+	// Test run command with explicit cycles
+	cmdJSON = `{"type":"run","cycles":5}`
 	req = httptest.NewRequest("POST", "/api/control", bytes.NewBufferString(cmdJSON))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
@@ -133,8 +133,32 @@ func TestWebServer_ControlEndpoint(t *testing.T) {
 	if !ok {
 		t.Fatal("Expected command, got none")
 	}
-	if cmd.Type != visual.CommandResume {
-		t.Errorf("Expected resume command, got %s", cmd.Type)
+	if cmd.Type != visual.CommandRun {
+		t.Errorf("Expected run command, got %s", cmd.Type)
+	}
+	if cmd.Cycles != 5 {
+		t.Errorf("Expected 5 cycles, got %d", cmd.Cycles)
+	}
+
+	// Test run command with default cycles
+	cmdJSON = `{"type":"run"}`
+	req = httptest.NewRequest("POST", "/api/control", bytes.NewBufferString(cmdJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	server.handleControl(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Errorf("Expected 202, got %d", w.Code)
+	}
+
+	cmd, ok = server.NextCommand()
+	if !ok {
+		t.Fatal("Expected command, got none")
+	}
+	if cmd.Type != visual.CommandRun {
+		t.Errorf("Expected run command, got %s", cmd.Type)
+	}
+	if cmd.Cycles != 1 {
+		t.Errorf("Expected default cycles 1, got %d", cmd.Cycles)
 	}
 
 	// Test reset command with config
@@ -183,6 +207,16 @@ func TestWebServer_ControlEndpoint(t *testing.T) {
 	server.handleControl(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected 400, got %d", w.Code)
+	}
+
+	// Test invalid run cycles
+	cmdJSON = `{"type":"run","cycles":0}`
+	req = httptest.NewRequest("POST", "/api/control", bytes.NewBufferString(cmdJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	server.handleControl(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for invalid cycles, got %d", w.Code)
 	}
 
 	// Test invalid JSON

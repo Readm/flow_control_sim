@@ -49,6 +49,21 @@
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .run-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        #runCycleCount {
+            width: 80px;
+            padding: 6px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
         }
 
         button {
@@ -129,6 +144,15 @@
         .form-group input:focus {
             outline: none;
             border-color: #007bff;
+        }
+
+        .readonly-value {
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #f8f8f8;
+            font-size: 13px;
+            color: #333;
         }
 
         .form-row {
@@ -585,8 +609,10 @@
             <h3>Simulation Control</h3>
             <div class="control-buttons">
                 <button id="btnPause" class="primary">Pause</button>
-                <button id="btnResume" class="primary">Resume</button>
-                <button id="btnStep" class="primary">Step</button>
+                <div class="run-controls">
+                    <input type="number" id="runCycleCount" min="1" value="1">
+                    <button id="btnRun" class="primary">Run</button>
+                </div>
                 <button id="btnReset" class="danger">Reset</button>
             </div>
             <div class="status-info">
@@ -608,7 +634,7 @@
                 </div>
                 <div class="form-group">
                     <label>Total Cycles</label>
-                    <input type="number" id="totalCycles" min="1" value="1000">
+                    <div id="totalCycles" class="readonly-value">-</div>
                 </div>
             </div>
             <div class="status-info" style="margin-top: 10px; font-size: 11px; color: #999;">

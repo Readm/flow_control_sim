@@ -719,7 +719,7 @@ func (hn *HomeNode) resolveRoute(packet *core.Packet, defaultTarget int) (int, b
 	if err := hn.broker.EmitAfterRoute(afterCtx); err != nil {
 		GetLogger().Warnf("HomeNode %d OnAfterRoute hook failed: %v", hn.ID, err)
 	}
-	if afterCtx.TargetID <= 0 {
+	if afterCtx.TargetID < 0 {
 		return targetID, true
 	}
 	return afterCtx.TargetID, true
@@ -796,7 +796,7 @@ func (hn *HomeNode) defaultRoute(p *core.Packet, cfg *Config) (target int, laten
 }
 
 func (hn *HomeNode) ensureFinalTargetMetadata(packet *core.Packet, finalTarget int) {
-	if packet == nil || finalTarget <= 0 {
+	if packet == nil || finalTarget < 0 {
 		return
 	}
 	packet.SetMetadata(capabilities.RingFinalTargetMetadataKey, strconv.Itoa(finalTarget))

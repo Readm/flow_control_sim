@@ -113,6 +113,7 @@ type controlRequest struct {
 	Config      *Config `json:"config,omitempty"`
 	ConfigName  string  `json:"configName,omitempty"`
 	TotalCycles *int    `json:"totalCycles,omitempty"`
+	Cycles      *int    `json:"cycles,omitempty"`
 }
 
 // processControlRequest processes a control request and returns a ControlCommand.
@@ -123,8 +124,16 @@ func (ws *WebServer) processControlRequest(req *controlRequest) (*visual.Control
 	switch req.Type {
 	case "pause":
 		cmd.Type = visual.CommandPause
-	case "resume":
-		cmd.Type = visual.CommandResume
+	case "run":
+		cycles := 1
+		if req.Cycles != nil {
+			cycles = *req.Cycles
+		}
+		if cycles <= 0 {
+			return nil, &validationError{msg: "cycles must be positive"}
+		}
+		cmd.Type = visual.CommandRun
+		cmd.Cycles = cycles
 	case "reset":
 		cmd.Type = visual.CommandReset
 		if req.ConfigName != "" {
@@ -144,8 +153,6 @@ func (ws *WebServer) processControlRequest(req *controlRequest) (*visual.Control
 			ws.applyPolicyDraftToConfig(req.Config)
 			cmd.ConfigOverride = req.Config
 		}
-	case "step":
-		cmd.Type = visual.CommandStep
 	default:
 		return nil, &validationError{msg: "Invalid command type: " + req.Type}
 	}

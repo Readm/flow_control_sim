@@ -6,16 +6,16 @@ import "context"
 type ControlCommandType string
 
 const (
-	CommandNone   ControlCommandType = "none"
-	CommandPause  ControlCommandType = "pause"
-	CommandResume ControlCommandType = "resume"
-	CommandReset  ControlCommandType = "reset"
-	CommandStep   ControlCommandType = "step"
+	CommandNone  ControlCommandType = "none"
+	CommandPause ControlCommandType = "pause"
+	CommandReset ControlCommandType = "reset"
+	CommandRun   ControlCommandType = "run"
 )
 
 // ControlCommand captures a control instruction for the simulator.
 type ControlCommand struct {
 	Type           ControlCommandType
+	Cycles         int
 	ConfigOverride any
 }
 

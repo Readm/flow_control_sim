@@ -10,6 +10,7 @@ func main() {
 	var headless = flag.Bool("headless", false, "Run in headless mode (no GUI)")
 	var benchmark = flag.Bool("benchmark", false, "Run performance benchmark test")
 	var configName = flag.String("config", "", "Predefined configuration name (e.g., 'backpressure_test', 'multi_master_multi_slave')")
+	var traceEvents = flag.Bool("trace-events", false, "Enable verbose packet event tracing for debugging")
 	flag.Parse()
 
 	// If benchmark mode, run benchmark suite
@@ -21,13 +22,13 @@ func main() {
 	// Use predefined configuration
 	configs := GetPredefinedConfigs()
 	var cfg *Config
-	
+
 	// If config name is specified, use it; otherwise use first config
 	selectedConfigName := *configName
 	if selectedConfigName == "" && len(configs) > 0 {
 		selectedConfigName = configs[0].Name
 	}
-	
+
 	if selectedConfigName != "" {
 		cfg = GetConfigByName(selectedConfigName)
 		if cfg == nil {
@@ -38,7 +39,7 @@ func main() {
 			cfg.VisualMode = "web"
 		}
 	}
-	
+
 	if cfg == nil {
 		// Fallback to default if GetConfigByName fails or no configs available
 		cfg = &Config{
@@ -57,6 +58,11 @@ func main() {
 			Headless:           *headless,
 			VisualMode:         "web",
 		}
+	}
+
+	if *traceEvents {
+		SetPacketEventTrace(true)
+		GetLogger().Infof("Packet event tracing enabled. Logs will include TRACE entries.")
 	}
 
 	sim := NewSimulator(cfg)

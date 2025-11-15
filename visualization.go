@@ -30,6 +30,7 @@ type EdgeSnapshot struct {
 // SimulationFrame aggregates information required by frontends for a cycle.
 type SimulationFrame struct {
 	Cycle            int               `json:"cycle"`
+	Paused           bool              `json:"paused"`
 	Nodes            []NodeSnapshot    `json:"nodes"`
 	Edges            []EdgeSnapshot    `json:"edges"`
 	InFlightCount    int               `json:"inFlightCount"`

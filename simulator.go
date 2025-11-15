@@ -18,6 +18,8 @@ import (
 	"github.com/Readm/flow_sim/visual"
 )
 
+const runCommandChunkSize = 1000
+
 type Simulator struct {
 	Masters []*RequestNode
 	Slaves  []*SlaveNode
@@ -46,12 +48,14 @@ type Simulator struct {
 	isPaused  bool
 	isRunning bool
 
+	pendingReset      *Config
+	runBudget         int
+	runChunkRemaining int
+	runTarget         int
+
 	coordinator  *CycleCoordinator
 	componentIDs []string
 	runtimeWG    sync.WaitGroup
-
-	pendingReset *Config
-	stepOnce     bool
 
 	pluginBroker        *hooks.PluginBroker
 	pluginReg           *hooks.Registry
@@ -790,18 +794,96 @@ func (s *Simulator) updateCoordinatorLimit() {
 		return
 	}
 
-	limit := s.cfg.TotalCycles - 1
-	if s.stepOnce {
-		limit = s.current
-	} else if s.isPaused {
-		limit = s.current
+	maxLimit := s.cfg.TotalCycles - 1
+	if maxLimit < -1 {
+		maxLimit = -1
 	}
 
-	if limit < -1 {
-		limit = -1
+	limit := maxLimit
+
+	if s.runChunkRemaining > 0 {
+		target := s.runTarget - 1
+		if target > maxLimit {
+			target = maxLimit
+		}
+		if target < s.current {
+			target = s.current
+		}
+		if target < -1 {
+			target = -1
+		}
+		limit = target
+	} else if s.isPaused {
+		target := s.current - 1
+		if target > maxLimit {
+			target = maxLimit
+		}
+		if target < -1 {
+			target = -1
+		}
+		limit = target
 	}
 
 	s.coordinator.SetMaxTarget(limit)
+}
+
+func (s *Simulator) clearRunRequests() {
+	s.runBudget = 0
+	s.runChunkRemaining = 0
+	s.runTarget = s.current
+	s.isPaused = true
+	s.updateCoordinatorLimit()
+}
+
+func (s *Simulator) scheduleNextRunChunk() {
+	if s.cfg == nil {
+		s.clearRunRequests()
+		return
+	}
+
+	remainingTotal := s.cfg.TotalCycles - s.current
+	if remainingTotal <= 0 {
+		s.clearRunRequests()
+		return
+	}
+
+	if s.runBudget <= 0 {
+		s.runChunkRemaining = 0
+		s.runTarget = s.current
+		s.isPaused = true
+		s.updateCoordinatorLimit()
+		return
+	}
+
+	chunk := runCommandChunkSize
+	if s.runBudget < chunk {
+		chunk = s.runBudget
+	}
+	if remainingTotal < chunk {
+		chunk = remainingTotal
+	}
+	if chunk <= 0 {
+		s.clearRunRequests()
+		return
+	}
+
+	s.runBudget -= chunk
+	s.runChunkRemaining = chunk
+	s.runTarget = s.current + chunk
+	if s.runTarget > s.cfg.TotalCycles {
+		s.runTarget = s.cfg.TotalCycles
+	}
+	s.isPaused = false
+	s.updateCoordinatorLimit()
+}
+
+func (s *Simulator) onCycleAdvanced() {
+	if s.runChunkRemaining > 0 {
+		s.runChunkRemaining--
+		if s.runChunkRemaining == 0 {
+			s.scheduleNextRunChunk()
+		}
+	}
 }
 
 func (s *Simulator) buildEdges() []EdgeSnapshot {
@@ -1086,6 +1168,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 
 	frame := &SimulationFrame{
 		Cycle:            cycle,
+		Paused:           s.isPaused && s.runChunkRemaining == 0,
 		Nodes:            nodes,
 		Edges:            edges,
 		InFlightCount:    s.Chan.InFlightCount(),
@@ -1312,7 +1395,9 @@ func (s *Simulator) reset(newCfg *Config) {
 	} else {
 		s.isPaused = false
 	}
-	s.stepOnce = false
+	s.runBudget = 0
+	s.runChunkRemaining = 0
+	s.runTarget = s.current
 
 	s.initializeCycleRuntime()
 	s.updateCoordinatorLimit()
@@ -1333,18 +1418,14 @@ func (s *Simulator) handleCommand(cmd visual.ControlCommand) bool {
 
 	switch cmd.Type {
 	case visual.CommandPause:
-		s.stepOnce = false
-		s.isPaused = true
-		s.updateCoordinatorLimit()
-	case visual.CommandResume:
-		s.stepOnce = false
-		s.isPaused = false
-		s.updateCoordinatorLimit()
-	case visual.CommandStep:
-		if s.isPaused {
-			s.stepOnce = true
-			s.isPaused = false
-			s.updateCoordinatorLimit()
+		s.clearRunRequests()
+	case visual.CommandRun:
+		if cmd.Cycles <= 0 {
+			break
+		}
+		s.runBudget += cmd.Cycles
+		if s.runChunkRemaining == 0 {
+			s.scheduleNextRunChunk()
 		}
 	case visual.CommandReset:
 		if s.pendingReset == nil {
@@ -1357,6 +1438,7 @@ func (s *Simulator) handleCommand(cmd visual.ControlCommand) bool {
 				cfg = &cfgCopy
 			}
 			s.pendingReset = cfg
+			s.clearRunRequests()
 			s.stopRuntimes()
 		}
 		return false
@@ -1399,15 +1481,19 @@ func (s *Simulator) runCycles() bool {
 			return true
 		}
 
-		if s.isPaused {
-			if s.runner != nil {
-				if !s.runner.WaitForCommand(context.Background()) {
-					return true
-				}
-			} else {
-				time.Sleep(1 * time.Millisecond)
+		if s.runChunkRemaining == 0 {
+			if !s.isPaused && s.runBudget > 0 {
+				s.scheduleNextRunChunk()
+				continue
 			}
 			if s.isPaused {
+				if s.runner != nil {
+					if !s.runner.WaitForCommand(context.Background()) {
+						return true
+					}
+				} else {
+					time.Sleep(1 * time.Millisecond)
+				}
 				continue
 			}
 		}
@@ -1434,19 +1520,15 @@ func (s *Simulator) runCycles() bool {
 		cycle++
 		s.current = cycle
 		metrics.RecordCycles(1)
+		s.onCycleAdvanced()
 
 		if s.visualEnabled() {
 			frame := s.buildFrame(s.current)
 			s.runner.PublishFrame(frame)
 		}
-
-		if s.stepOnce {
-			s.isPaused = true
-			s.stepOnce = false
-			s.updateCoordinatorLimit()
-		}
 	}
 
+	s.clearRunRequests()
 	s.stopRuntimes()
 	s.current = totalCycles
 	return false

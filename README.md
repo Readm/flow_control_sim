@@ -68,7 +68,7 @@
      - `GET /api/frame` - 返回最新帧数据（兼容性保留）
      - `GET /api/stats` - 返回统计信息
      - `GET /api/configs` - 返回预定义配置列表
-     - `POST /api/control` - 接收控制命令（pause/resume/reset/step）
+    - `POST /api/control` - 接收控制命令（pause/run/reset）
      - `WS /ws` - WebSocket 连接端点（实时推送）
    - 通过 channel 队列传递控制命令
    - 支持 WebSocket 实时推送帧数据
@@ -291,9 +291,9 @@ curl http://127.0.0.1:8080/api/configs
 **Web 界面功能**:
 - 实时拓扑图：显示 Master、Slave、Relay 节点及其连接关系
 - 队列信息：鼠标悬停节点查看队列详情
-- 控制按钮：暂停、继续、单步执行、重置模拟
+- 控制按钮：暂停、运行（指定 cycles）、重置模拟
 - 配置选择：从下拉菜单选择预定义网络配置
-- 参数配置：在配置面板调整参数（如总 cycles 数），重置后生效
+- 配置信息：配置面板根据预设展示总 cycles 数，重置时自动生效
 - 统计信息：实时显示全局、Master、Slave 统计信息
 
 **运行性能测试（Benchmark）**:
@@ -468,7 +468,7 @@ docker-compose up -d
 
 #### POST /api/control
 
-发送控制指令（暂停、继续、重置）。
+发送控制指令（暂停、执行指定 cycle、重置）。
 
 **请求**: `POST http://127.0.0.1:8080/api/control`
 
@@ -478,9 +478,18 @@ Content-Type: application/json
 ```
 
 **请求体**:
+**请求体示例（执行指定 cycles）**:
 ```json
 {
-  "type": "pause" | "resume" | "reset",
+  "type": "run",
+  "cycles": 500
+}
+```
+
+**请求体示例（重置并传入配置）**:
+```json
+{
+  "type": "reset",
   "config": {
     "NumMasters": 3,
     "NumSlaves": 2,
@@ -499,9 +508,11 @@ Content-Type: application/json
 
 **字段说明**:
 - `type` (必需): 控制指令类型
+- `type` (必需): 控制指令类型
   - `"pause"`: 暂停模拟
-  - `"resume"`: 继续模拟
+  - `"run"`: 执行指定数量的 cycles（支持累加请求）
   - `"reset"`: 重置模拟（可带新配置）
+- `cycles` (可选): 当 `type` 为 `"run"` 时，指定需要执行的 cycles 数量（> 0）
 - `config` (可选): 仅当 `type` 为 `"reset"` 时有效，用于更新模拟配置
 
 **响应**:
@@ -533,7 +544,8 @@ Content-Type: application/json
 **客户端 → 服务端**（控制命令）:
 ```json
 {
-  "type": "pause" | "resume" | "reset" | "step",
+  "type": "pause" | "run" | "reset",
+  "cycles": 250,
   "configName": "backpressure_test",
   "totalCycles": 1000
 }
@@ -542,9 +554,9 @@ Content-Type: application/json
 **字段说明**:
 - `type` (必需): 控制指令类型
   - `"pause"`: 暂停模拟
-  - `"resume"`: 继续模拟
+  - `"run"`: 执行指定数量的 cycles（可叠加）
   - `"reset"`: 重置模拟（可带新配置）
-  - `"step"`: 单步执行一个 cycle
+- `cycles` (可选): 当 `type` 为 `"run"` 时，指定 cycles 数量
 - `configName` (可选): 预设配置名称，仅当 `type` 为 `"reset"` 时有效
 - `totalCycles` (可选): 总模拟 cycles 数，仅当 `type` 为 `"reset"` 时有效
 
@@ -561,7 +573,7 @@ Content-Type: application/json
 **特性**:
 - 连接建立后立即发送最新帧数据
 - 每次模拟器更新帧时自动推送给所有连接的客户端
-- 支持通过 WebSocket 发送控制命令（pause/resume/reset/step）
+- 支持通过 WebSocket 发送控制命令（pause/run/reset）
 - 自动重连机制（连接断开后 2 秒自动重试）
 
 **使用说明**:

@@ -4,7 +4,20 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+const (
+	transactionEventBufferSize = 16 * 1024
+	overflowLogInterval        = 500 * time.Millisecond
+)
+
+var packetEventTraceEnabled atomic.Bool
+
+// SetPacketEventTrace toggles verbose packet event tracing for diagnostics.
+func SetPacketEventTrace(enabled bool) {
+	packetEventTraceEnabled.Store(enabled)
+}
 
 // PacketHistoryConfig holds configuration for packet history tracking
 type PacketHistoryConfig struct {
@@ -34,6 +47,9 @@ type TransactionManager struct {
 
 	eventCh  chan *PacketEvent
 	eventSeq int64
+
+	overflowCounter   atomic.Int64
+	lastOverflowLogNs atomic.Int64
 }
 
 // NewTransactionManager creates a new TransactionManager
@@ -51,7 +67,7 @@ func NewTransactionManager() *TransactionManager {
 			MaxTransactionHistory: 1000,
 		},
 		nodeLabels: make(map[int]string),
-		eventCh:    make(chan *PacketEvent, 1024),
+		eventCh:    make(chan *PacketEvent, transactionEventBufferSize),
 	}
 	go tm.runEventLoop()
 	return tm
@@ -292,7 +308,13 @@ func (tm *TransactionManager) RecordPacketEvent(event *PacketEvent) {
 	select {
 	case tm.eventCh <- event:
 	default:
-		GetLogger().Warnf("transaction manager event channel full; processing event %d inline", seq)
+		count := tm.overflowCounter.Add(1)
+		now := time.Now().UnixNano()
+		last := tm.lastOverflowLogNs.Load()
+		if now-last >= int64(overflowLogInterval) && tm.lastOverflowLogNs.CompareAndSwap(last, now) {
+			GetLogger().Warnf("transaction manager event channel full; processed %d events inline since last notice", count)
+			tm.overflowCounter.Store(0)
+		}
 		tm.handlePacketEvent(event)
 	}
 }
@@ -302,11 +324,13 @@ func (tm *TransactionManager) handlePacketEvent(event *PacketEvent) {
 		return
 	}
 
+	traceEnabled := packetEventTraceEnabled.Load()
+
 	tm.mu.Lock()
-	defer tm.mu.Unlock()
 
 	// Check if history tracking is enabled
 	if !tm.historyConfig.EnablePacketHistory {
+		tm.mu.Unlock()
 		return
 	}
 
@@ -328,6 +352,22 @@ func (tm *TransactionManager) handlePacketEvent(event *PacketEvent) {
 	// Check if we need to cleanup
 	if tm.historyConfig.MaxPacketHistorySize > 0 && len(tm.allPacketHistory) > tm.historyConfig.MaxPacketHistorySize {
 		tm.cleanupHistoryLocked()
+	}
+
+	tm.mu.Unlock()
+
+	if traceEnabled {
+		GetLogger().Infof(
+			"TRACE packet event seq=%d node=%d(%s) txn=%d packet=%d type=%s cycle=%d metadata=%v",
+			event.Sequence,
+			event.NodeID,
+			event.NodeLabel,
+			event.TransactionID,
+			event.PacketID,
+			event.EventType,
+			event.Cycle,
+			event.Metadata,
+		)
 	}
 }
 

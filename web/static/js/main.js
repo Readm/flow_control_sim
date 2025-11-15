@@ -7,7 +7,7 @@ const DEFAULT_VIEW_ID = "flowView";
 
 const state = {
     isPaused: true,
-    isStepProcessing: false,
+    isRunProcessing: false,
     expectingReset: false,
     currentFrame: null,
     ws: null,
@@ -16,10 +16,11 @@ const state = {
 
 const controlButtons = {
     pause: document.getElementById("btnPause"),
-    resume: document.getElementById("btnResume"),
-    step: document.getElementById("btnStep"),
+    run: document.getElementById("btnRun"),
     reset: document.getElementById("btnReset"),
 };
+
+const runCycleInput = document.getElementById("runCycleCount");
 
 const statusElements = {
     cycle: document.getElementById("currentCycle"),
@@ -32,6 +33,8 @@ const configElements = {
     select: document.getElementById("networkConfig"),
     totalCycles: document.getElementById("totalCycles"),
 };
+
+const configTotals = new Map();
 
 const statsPanel = document.getElementById("statsPanel");
 
@@ -47,6 +50,7 @@ function initialize() {
     setupViews();
     setupTabs();
     setupControlPanel();
+    setupConfigForm();
     loadConfigOptions();
     connectWebSocket();
     activateView(DEFAULT_VIEW_ID);
@@ -162,18 +166,24 @@ function updateTabHighlights(activeId) {
 
 function setupControlPanel() {
     controlButtons.pause?.addEventListener("click", () => handleControlCommand("pause"));
-    controlButtons.resume?.addEventListener("click", () => handleControlCommand("resume"));
-    controlButtons.step?.addEventListener("click", () => handleStepCommand());
+    controlButtons.run?.addEventListener("click", () => handleRunCommand());
     controlButtons.reset?.addEventListener("click", () => handleControlCommand("reset"));
 }
 
-async function handleControlCommand(type) {
+function setupConfigForm() {
+    configElements.select?.addEventListener("change", () => {
+        updateTotalCyclesDisplay();
+    });
+}
+
+async function handleControlCommand(type, options = {}) {
     clearErrorMessage();
     const button = getButtonByType(type);
     disableButton(button, true);
 
+    let success = true;
     try {
-        const payload = buildControlPayload(type);
+        const payload = buildControlPayload(type, options);
         const response = await fetch("/api/control", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -185,48 +195,67 @@ async function handleControlCommand(type) {
             throw new Error(errorText || `Failed to execute ${type} command`);
         }
 
-        applyControlState(type);
+        applyControlState(type, options);
     } catch (error) {
+        success = false;
         showErrorMessage(error.message || "Failed to send control command");
     } finally {
         disableButton(button, false);
         updateButtonStates();
     }
+
+    return success;
 }
 
-async function handleStepCommand() {
-    if (!state.isPaused || state.isStepProcessing) {
+async function handleRunCommand() {
+    if (state.isRunProcessing) {
         return;
     }
-    state.isStepProcessing = true;
+    let cycles = 1;
+    if (runCycleInput) {
+        const parsed = parseInt(runCycleInput.value, 10);
+        if (Number.isFinite(parsed)) {
+            cycles = parsed;
+        }
+    }
+    if (cycles <= 0) {
+        showErrorMessage("Cycles must be a positive number");
+        runCycleInput?.focus();
+        return;
+    }
+    if (runCycleInput) {
+        runCycleInput.value = String(cycles);
+    }
+
+    state.isRunProcessing = true;
     updateButtonStates();
-    await handleControlCommand("step");
+    const success = await handleControlCommand("run", { cycles });
 
     try {
-        for (let attempt = 0; attempt < 5; attempt += 1) {
-            const frame = await fetchFrameImmediate();
-            if (frame) {
-                break;
+        if (success) {
+            for (let attempt = 0; attempt < 5; attempt += 1) {
+                const frame = await fetchFrameImmediate();
+                if (frame) {
+                    break;
+                }
+                await delay(100);
             }
-            await delay(100);
         }
     } finally {
-        state.isStepProcessing = false;
+        state.isRunProcessing = false;
         updateButtonStates();
     }
 }
 
-function buildControlPayload(type) {
+function buildControlPayload(type, options = {}) {
     const payload = { type };
     if (type === "reset") {
         const configName = configElements.select?.value || "";
         if (configName) {
             payload.configName = configName;
         }
-        const totalCycles = parseInt(configElements.totalCycles?.value || "", 10);
-        if (Number.isFinite(totalCycles) && totalCycles > 0) {
-            payload.totalCycles = totalCycles;
-        }
+    } else if (type === "run") {
+        payload.cycles = options.cycles || 1;
     }
     return payload;
 }
@@ -237,7 +266,7 @@ function applyControlState(type) {
             state.isPaused = true;
             updateStatusText("Paused");
             break;
-        case "resume":
+        case "run":
             state.isPaused = false;
             updateStatusText("Running");
             break;
@@ -249,9 +278,6 @@ function applyControlState(type) {
             updateCycleValue("-");
             updateInFlightValue("-");
             break;
-        case "step":
-            updateStatusText("Stepping");
-            break;
         default:
             break;
     }
@@ -261,10 +287,8 @@ function getButtonByType(type) {
     switch (type) {
         case "pause":
             return controlButtons.pause;
-        case "resume":
-            return controlButtons.resume;
-        case "step":
-            return controlButtons.step;
+        case "run":
+            return controlButtons.run;
         case "reset":
             return controlButtons.reset;
         default:
@@ -279,10 +303,14 @@ function disableButton(button, disabled) {
 }
 
 function updateButtonStates() {
-    controlButtons.pause && (controlButtons.pause.disabled = state.isPaused);
-    controlButtons.resume && (controlButtons.resume.disabled = !state.isPaused);
-    if (controlButtons.step) {
-        controlButtons.step.disabled = !state.isPaused || state.isStepProcessing;
+    if (controlButtons.pause) {
+        controlButtons.pause.disabled = state.isPaused || state.expectingReset;
+    }
+    if (controlButtons.run) {
+        controlButtons.run.disabled = state.isRunProcessing || state.expectingReset;
+    }
+    if (controlButtons.reset) {
+        controlButtons.reset.disabled = state.expectingReset;
     }
 }
 
@@ -357,12 +385,19 @@ function handleFrame(frame) {
     }
     state.currentFrame = frame;
 
+    if (typeof frame.paused === "boolean") {
+        state.isPaused = frame.paused;
+    }
+
+    if (state.expectingReset && frame.cycle === 0) {
+        state.expectingReset = false;
+    }
+
     updateCycleValue(frame.cycle ?? "-");
     updateInFlightValue(frame.inFlightCount ?? "-");
 
-    if (frame.totalCycles && Number.isFinite(frame.totalCycles) && frame.cycle >= frame.totalCycles) {
-        updateStatusText("Completed");
-        state.isPaused = true;
+    if (state.expectingReset) {
+        updateStatusText("Resetting");
     } else if (state.isPaused) {
         updateStatusText("Paused");
     } else {
@@ -455,22 +490,48 @@ function populateConfigSelect(configs) {
     if (!select) {
         return;
     }
+    const previousValue = select.value;
     select.innerHTML = "";
+    configTotals.clear();
     if (!configs || configs.length === 0) {
         const option = document.createElement("option");
         option.value = "";
         option.textContent = "No configurations available";
         select.appendChild(option);
         select.disabled = true;
+        updateTotalCyclesDisplay();
         return;
     }
+    select.disabled = false;
     configs.forEach((cfg) => {
         const option = document.createElement("option");
         option.value = cfg.name || "";
         option.textContent = cfg.description ? `${cfg.name} – ${cfg.description}` : cfg.name;
         select.appendChild(option);
+        if (option.value) {
+            const total = Number(cfg.totalCycles);
+            configTotals.set(option.value, Number.isFinite(total) ? total : null);
+        }
     });
-    select.disabled = false;
+    if (previousValue && configTotals.has(previousValue)) {
+        select.value = previousValue;
+    } else if (select.options.length > 0) {
+        select.selectedIndex = 0;
+    }
+    updateTotalCyclesDisplay();
+}
+
+function updateTotalCyclesDisplay() {
+    if (!configElements.totalCycles) {
+        return;
+    }
+    const selected = configElements.select?.value || "";
+    const total = configTotals.get(selected);
+    if (typeof total === "number" && Number.isFinite(total) && total > 0) {
+        configElements.totalCycles.textContent = total;
+    } else {
+        configElements.totalCycles.textContent = "-";
+    }
 }
 
 function showPacketModal(modalData) {
