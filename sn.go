@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/Readm/flow_sim/capabilities"
+	chicap "github.com/Readm/flow_sim/capabilities/chi"
 	"github.com/Readm/flow_sim/core"
 	"github.com/Readm/flow_sim/hooks"
 	"github.com/Readm/flow_sim/queue"
@@ -21,6 +22,8 @@ type SlaveNode struct {
 	broker      *hooks.PluginBroker
 	routerID    int
 
+	chiSlave chicap.SlaveCapability
+
 	// stats
 	ProcessedCount int
 	MaxQueueLength int
@@ -33,6 +36,17 @@ type SlaveNode struct {
 	capabilities          []capabilities.NodeCapability
 	capabilityRegistry    map[string]struct{}
 	defaultCapsRegistered bool
+}
+
+type slavePacketRecorder struct {
+	tm *TransactionManager
+}
+
+func (a slavePacketRecorder) RecordPacketEvent(event *PacketEvent) {
+	if a.tm == nil || event == nil {
+		return
+	}
+	a.tm.RecordPacketEvent(event)
 }
 
 func NewSlaveNode(id int, rate int) *SlaveNode {
@@ -179,6 +193,19 @@ func (sn *SlaveNode) ensureDefaultCapabilities() {
 		},
 	)
 	sn.registerCapability(cap)
+	if sn.chiSlave == nil {
+		slaveCap, err := chicap.NewSlaveCapability(chicap.SlaveConfig{
+			Name:           fmt.Sprintf("chi-slave-%d", sn.ID),
+			NodeID:         sn.ID,
+			Recorder:       slavePacketRecorder{tm: sn.txnMgr},
+			SetFinalTarget: sn.setFinalTargetMetadata,
+		})
+		if err != nil {
+			GetLogger().Warnf("SlaveNode %d: init CHI slave capability failed: %v", sn.ID, err)
+		} else {
+			sn.registerCapability(slaveCap)
+		}
+	}
 	sn.defaultCapsRegistered = true
 }
 
@@ -202,6 +229,10 @@ func (sn *SlaveNode) registerCapability(cap capabilities.NodeCapability) {
 	}
 	sn.capabilityRegistry[desc.Name] = struct{}{}
 	sn.capabilities = append(sn.capabilities, cap)
+
+	if slaveCap, ok := cap.(chicap.SlaveCapability); ok {
+		sn.chiSlave = slaveCap
+	}
 }
 
 // ConfigureCycleRuntime sets the coordinator bindings for the node.
@@ -361,18 +392,26 @@ func (sn *SlaveNode) processStage(cycle int, packetIDs *PacketIDAllocator) {
 		req.CompletedAt = cycle
 		sn.ProcessedCount++
 
-		resp := sn.generateCHIResponse(req, cycle, packetIDs)
-		if sn.txnMgr != nil && resp != nil && resp.TransactionID > 0 {
-			event := &PacketEvent{
-				TransactionID:  resp.TransactionID,
-				PacketID:       resp.ID,
-				ParentPacketID: req.ID,
-				NodeID:         sn.ID,
-				EventType:      PacketGenerated,
-				Cycle:          cycle,
-				EdgeKey:        nil,
+		var responses []*Packet
+		if sn.chiSlave != nil {
+			allocator := capabilities.PacketAllocator(func() (int64, error) {
+				if packetIDs == nil {
+					return 0, fmt.Errorf("packet allocator not configured")
+				}
+				return packetIDs.Allocate(), nil
+			})
+			if resp, err := sn.chiSlave.HandleRequest(req, cycle, allocator); err != nil {
+				GetLogger().Warnf("SlaveNode %d: CHI slave capability failed: %v", sn.ID, err)
+			} else {
+				for _, pkt := range resp {
+					responses = append(responses, (*Packet)(pkt))
+				}
 			}
-			sn.txnMgr.RecordPacketEvent(event)
+		} else {
+			resp := sn.generateCHIResponse(req, cycle, packetIDs)
+			if resp != nil {
+				responses = append(responses, resp)
+			}
 		}
 
 		if sn.broker != nil {
@@ -388,9 +427,26 @@ func (sn *SlaveNode) processStage(cycle int, packetIDs *PacketIDAllocator) {
 			}
 		}
 
-		if resp != nil && outQ != nil {
-			if _, ok := outQ.Enqueue(&PipelineMessage{Packet: resp, Kind: "response_ready"}, cycle); !ok {
-				GetLogger().Warnf("SlaveNode %d: out_queue full, dropping response %d", sn.ID, resp.ID)
+		for _, resp := range responses {
+			if resp == nil {
+				continue
+			}
+			if sn.txnMgr != nil && resp.TransactionID > 0 {
+				event := &PacketEvent{
+					TransactionID:  resp.TransactionID,
+					PacketID:       resp.ID,
+					ParentPacketID: req.ID,
+					NodeID:         sn.ID,
+					EventType:      PacketGenerated,
+					Cycle:          cycle,
+					EdgeKey:        nil,
+				}
+				sn.txnMgr.RecordPacketEvent(event)
+			}
+			if outQ != nil {
+				if _, ok := outQ.Enqueue(&PipelineMessage{Packet: resp, Kind: "response_ready"}, cycle); !ok {
+					GetLogger().Warnf("SlaveNode %d: out_queue full, dropping response %d", sn.ID, resp.ID)
+				}
 			}
 		}
 
@@ -520,6 +576,13 @@ func (sn *SlaveNode) QueueLength() int {
 		total += procQ.Len()
 	}
 	return total
+}
+
+func (sn *SlaveNode) setFinalTargetMetadata(packet *core.Packet, finalTarget int) {
+	if packet == nil || finalTarget < 0 {
+		return
+	}
+	packet.SetMetadata(capabilities.RingFinalTargetMetadataKey, strconv.Itoa(finalTarget))
 }
 
 // GetQueuePackets returns packet information across in/process/out queues

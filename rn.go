@@ -7,9 +7,11 @@ import (
 	"sync"
 
 	"github.com/Readm/flow_sim/capabilities"
+	chicap "github.com/Readm/flow_sim/capabilities/chi"
 	"github.com/Readm/flow_sim/core"
 	"github.com/Readm/flow_sim/hooks"
 	"github.com/Readm/flow_sim/policy"
+	protochi "github.com/Readm/flow_sim/protocols/chi"
 	"github.com/Readm/flow_sim/queue"
 )
 
@@ -58,6 +60,7 @@ type RequestNode struct {
 
 	cacheCapability capabilities.CacheWithRequestStore
 	cacheStore      capabilities.RequestCache
+	chiRequest      chicap.RequestCapability
 	txnCapability   capabilities.TransactionCapability
 	txnCreator      capabilities.TransactionCreator
 }
@@ -331,6 +334,39 @@ func (rn *RequestNode) ensureDefaultCapabilities() {
 	for _, cap := range caps {
 		rn.registerCapability(cap)
 	}
+
+	if rn.cacheStore != nil && rn.txnCreator != nil && rn.chiRequest == nil {
+		smCap, err := protochi.NewMESIMidStateMachine(rn.cacheStore)
+		if err != nil {
+			GetLogger().Warnf("RequestNode %d: init CHI state machine failed: %v", rn.ID, err)
+		} else {
+			rn.registerCapability(smCap)
+			handler, ok := rn.cacheCapability.(capabilities.RequestCacheHandler)
+			if !ok {
+				GetLogger().Warnf("RequestNode %d: cache capability missing RequestCacheHandler, skip CHI capability", rn.ID)
+				return
+			}
+			reqCap, err := chicap.NewRequestCapability(chicap.RequestConfig{
+				Creator:      rn.txnCreator,
+				Cache:        rn.cacheStore,
+				StateMachine: smCap,
+				CacheHandler: handler,
+				PacketAllocator: func() (int64, error) {
+					if rn.packetIDs == nil {
+						return 0, fmt.Errorf("packet allocator not configured")
+					}
+					return rn.packetIDs.Allocate(), nil
+				},
+			})
+			if err != nil {
+				GetLogger().Warnf("RequestNode %d: init CHI request capability failed: %v", rn.ID, err)
+			} else {
+				rn.registerCapability(reqCap)
+				rn.chiRequest = reqCap
+			}
+		}
+	}
+
 	if rn.cacheStore != nil && rn.cacheEvictor == nil {
 		lruCap := capabilities.NewLRUEvictionCapability(
 			fmt.Sprintf("request-cache-lru-%d", rn.ID),
@@ -450,12 +486,8 @@ func (rn *RequestNode) handleResponseLocked(p *core.Packet, cycle int, txnMgr *T
 		txnMgr.MarkTransactionCompleted(p.TransactionID, cycle)
 	}
 
-	if cacheHandler, ok := rn.cacheCapability.(capabilities.RequestCacheHandler); ok {
-		cacheHandler.HandleResponse(p)
-		if p.TransactionType == core.CHITxnReadOnce && p.ResponseType == core.CHIRespCompData {
-			GetLogger().Infof("[MESI] RequestNode %d: Cache updated to Shared for address 0x%x (TxnID=%d)",
-				rn.ID, p.Address, p.TransactionID)
-		}
+	if rn.chiRequest != nil {
+		rn.chiRequest.HandleResponse(p, cycle)
 	}
 
 	if rn.cacheEvictor != nil && p.ResponseType == core.CHIRespCompData {
@@ -658,38 +690,23 @@ func (rn *RequestNode) handleSnoopRequestLocked(snoopReq *core.Packet, cycle int
 		return
 	}
 
-	GetLogger().Infof("[MESI] RequestNode %d: Received Snoop request for address 0x%x (TxnID=%d, Cycle=%d)",
-		rn.ID, snoopReq.Address, snoopReq.TransactionID, cycle)
-
 	var snoopResp *core.Packet
-	if handler, ok := rn.cacheCapability.(capabilities.RequestCacheHandler); ok {
-		allocator := func() (int64, error) {
-			if rn.packetIDs == nil {
-				return 0, fmt.Errorf("packet allocator not configured")
-			}
-			return rn.packetIDs.Allocate(), nil
-		}
-		resp, err := handler.BuildSnoopResponse(rn.ID, snoopReq, allocator, cycle)
-		if err != nil {
-			GetLogger().Warnf("RequestNode %d: failed to build snoop response: %v", rn.ID, err)
-			return
-		}
-		snoopResp = resp
-	} else {
-		GetLogger().Warnf("RequestNode %d: cache capability missing, cannot respond to snoop", rn.ID)
+	if rn.chiRequest == nil {
+		rn.ensureDefaultCapabilities()
+	}
+	if rn.chiRequest == nil {
+		GetLogger().Warnf("RequestNode %d: CHI request capability missing, cannot respond to snoop", rn.ID)
 		return
 	}
+	resp, err := rn.chiRequest.HandleSnoopRequest(snoopReq, cycle, nil)
+	if err != nil {
+		GetLogger().Warnf("RequestNode %d: failed to build snoop response: %v", rn.ID, err)
+		return
+	}
+	snoopResp = resp
 
 	if snoopResp == nil {
 		return
-	}
-
-	if snoopResp.ResponseType == core.CHIRespSnpData {
-		GetLogger().Infof("[MESI] RequestNode %d: Cache provides data for address 0x%x (TxnID=%d)",
-			rn.ID, snoopReq.Address, snoopReq.TransactionID)
-	} else {
-		GetLogger().Infof("[MESI] RequestNode %d: Cache invalid, responding with SnpNoData for address 0x%x",
-			rn.ID, snoopReq.Address)
 	}
 
 	// Record snoop response generation
@@ -837,19 +854,19 @@ func (rn *RequestNode) generateRequests(cycle int, slaves []*SlaveNode) {
 			DataSize:        dataSize,
 		}
 
-		creator := rn.txnCreator
-		if creator == nil {
+		requestCap := rn.chiRequest
+		if requestCap == nil {
 			rn.ensureDefaultCapabilities()
-			creator = rn.txnCreator
+			requestCap = rn.chiRequest
 		}
-		if creator == nil {
-			GetLogger().Warnf("RequestNode %d transaction capability missing", rn.ID)
+		if requestCap == nil {
+			GetLogger().Warnf("RequestNode %d CHI request capability missing", rn.ID)
 			continue
 		}
 
-		packet, _, err := creator(params)
+		packet, _, err := requestCap.BuildRequest(params)
 		if err != nil {
-			GetLogger().Warnf("RequestNode %d transaction capability failed: %v", rn.ID, err)
+			GetLogger().Warnf("RequestNode %d CHI request build failed: %v", rn.ID, err)
 			continue
 		}
 		if packet == nil {
