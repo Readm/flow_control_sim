@@ -259,39 +259,12 @@ export function createTxnView({
             maxCycle = minCycle + 1;
         }
         const cycleRange = Math.max(1, maxCycle - minCycle);
-
-        function cycleToPercent(cycle) {
+        const cycleToPercent = (cycle) => {
             if (!Number.isFinite(cycle)) {
                 return 0;
             }
             return ((cycle - minCycle) / cycleRange) * 100;
-        }
-
-    function buildDirective(startPercent, endPercent) {
-        const parts = [];
-        if (Number.isFinite(startPercent)) {
-            parts.push(`ys=${startPercent.toFixed(2)}%`);
-        }
-        if (Number.isFinite(endPercent)) {
-            parts.push(`ye=${endPercent.toFixed(2)}%`);
-        }
-        return parts.length > 0 ? `[${parts.join(', ')}]` : '';
-    }
-
-    function buildMessageDetails(sendCycle, receiveCycle) {
-        if (!Number.isFinite(sendCycle) || !Number.isFinite(receiveCycle)) {
-            return '';
-        }
-        const delay = Math.max(0, receiveCycle - sendCycle);
-        return ` (cycles ${sendCycle}→${receiveCycle}, delay ${delay})`;
-    }
-
-    function convertTimelineToMermaid(timeline) {
-        const events = timeline.events || [];
-        const nodes = timeline.nodes || [];
-        if (events.length === 0) {
-            return 'sequenceDiagram\nNote over Client: No events available';
-        }
+        };
 
         const sortedNodes = [...nodes].sort((a, b) => a.index - b.index);
         const participants = sortedNodes.map((node, idx) => {
@@ -428,6 +401,25 @@ export function createTxnView({
         });
 
         return `sequenceDiagram\n${participants.join('\n')}\n\n${messages.join('\n')}`;
+    }
+
+    function buildDirective(startPercent, endPercent) {
+        const parts = [];
+        if (Number.isFinite(startPercent)) {
+            parts.push(`ys=${startPercent.toFixed(2)}%`);
+        }
+        if (Number.isFinite(endPercent)) {
+            parts.push(`ye=${endPercent.toFixed(2)}%`);
+        }
+        return parts.length > 0 ? `[${parts.join(', ')}]` : '';
+    }
+
+    function buildMessageDetails(sendCycle, receiveCycle) {
+        if (!Number.isFinite(sendCycle) || !Number.isFinite(receiveCycle)) {
+            return '';
+        }
+        const delay = Math.max(0, receiveCycle - sendCycle);
+        return ` (cycles ${sendCycle}→${receiveCycle}, delay ${delay})`;
     }
 
     function parseDirectiveStr(input) {

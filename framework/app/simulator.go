@@ -1310,6 +1310,9 @@ func (s *Simulator) reset(newCfg *Config) {
 	s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	s.pktIDs = pktAlloc
 	s.txnMgr = txnMgr
+	if viz, ok := s.visualizer.(interface{ SetTransactionManager(*TransactionManager) }); ok {
+		viz.SetTransactionManager(s.txnMgr)
+	}
 	s.current = 0
 	s.edges = s.buildEdges()
 	s.pluginBroker = broker

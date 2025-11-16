@@ -393,6 +393,7 @@ function handleFrame(frame) {
 
     if (state.expectingReset && frame.cycle === 0) {
         state.expectingReset = false;
+        txnViewController?.refreshTransactions?.();
     }
 
     updateCycleValue(frame.cycle ?? "-");
