@@ -1,4 +1,5 @@
 const DEFAULT_PLACEHOLDER = 'Enter a transaction ID and click Load Timeline.';
+const MAX_DISPLAYED_TRANSACTIONS = 20;
 
 export function createTxnView({
     panelElement,
@@ -6,6 +7,8 @@ export function createTxnView({
     inputElement,
     loadButton,
     errorElement,
+    availableListElement,
+    availableStatusElement,
 }) {
     if (!panelElement || !containerElement || !inputElement || !loadButton || !errorElement) {
         throw new Error('Transaction view requires panel, container, input, button, and error elements.');
@@ -14,8 +17,11 @@ export function createTxnView({
     initializePlaceholder();
     bindEventHandlers();
 
+    let isRefreshingTransactions = false;
+    let queuedRefresh = false;
+
     function activate() {
-        // No-op for now; reserved for future enhancements.
+        refreshAvailableTransactions();
     }
 
     function deactivate() {
@@ -79,6 +85,113 @@ export function createTxnView({
         });
     }
 
+    async function refreshAvailableTransactions() {
+        if (!availableListElement) {
+            return;
+        }
+        if (isRefreshingTransactions) {
+            queuedRefresh = true;
+            return;
+        }
+        isRefreshingTransactions = true;
+        showAvailableStatus('Refreshing transactions…');
+        showTransactionListPlaceholder('Loading transaction IDs…');
+
+        try {
+            const response = await fetch('/api/transactions');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const transactions = await response.json();
+            renderAvailableTransactions(Array.isArray(transactions) ? transactions : []);
+        } catch (error) {
+            console.error('Failed to refresh transactions:', error);
+            showAvailableStatus('Failed to load transactions');
+            showTransactionListPlaceholder('Unable to load transactions. Try again later.');
+        } finally {
+            isRefreshingTransactions = false;
+            if (queuedRefresh) {
+                queuedRefresh = false;
+                refreshAvailableTransactions();
+            }
+        }
+    }
+
+    function renderAvailableTransactions(transactions) {
+        if (!availableListElement) {
+            return;
+        }
+        availableListElement.innerHTML = '';
+        if (transactions.length === 0) {
+            showTransactionListPlaceholder('No transactions recorded yet.');
+            showAvailableStatus('No transactions found');
+            return;
+        }
+
+        const sorted = [...transactions].sort((a, b) => {
+            const aTime = Number.isFinite(a.completedAt) && a.completedAt > 0 ? a.completedAt : a.initiatedAt;
+            const bTime = Number.isFinite(b.completedAt) && b.completedAt > 0 ? b.completedAt : b.initiatedAt;
+            if (bTime !== aTime) {
+                return (bTime || 0) - (aTime || 0);
+            }
+            return (b.id || 0) - (a.id || 0);
+        });
+        const limited = sorted.slice(0, MAX_DISPLAYED_TRANSACTIONS);
+
+        limited.forEach((txn) => {
+            const pill = document.createElement('button');
+            pill.type = 'button';
+            pill.className = 'transaction-id-pill';
+            pill.textContent = `#${txn.id}`;
+            pill.title = buildTransactionTooltip(txn);
+            pill.addEventListener('click', () => {
+                inputElement.value = txn.id;
+                loadTimeline(txn.id);
+            });
+            availableListElement.appendChild(pill);
+        });
+
+        if (sorted.length > MAX_DISPLAYED_TRANSACTIONS) {
+            showAvailableStatus(`Showing newest ${limited.length} of ${sorted.length} transactions`);
+        } else {
+            showAvailableStatus(`Total ${sorted.length} transaction${sorted.length === 1 ? '' : 's'}`);
+        }
+    }
+
+    function buildTransactionTooltip(summary) {
+        if (!summary) {
+            return 'Click to load this transaction timeline';
+        }
+        const parts = [`ID ${summary.id}`];
+        if (summary.type) {
+            parts.push(`Type: ${summary.type}`);
+        }
+        if (summary.state) {
+            parts.push(`State: ${summary.state}`);
+        }
+        if (Number.isFinite(summary.initiatedAt)) {
+            parts.push(`Started @ cycle ${summary.initiatedAt}`);
+        }
+        if (Number.isFinite(summary.completedAt) && summary.completedAt > 0) {
+            parts.push(`Completed @ cycle ${summary.completedAt}`);
+        }
+        return parts.join('\n');
+    }
+
+    function showTransactionListPlaceholder(text) {
+        if (!availableListElement) {
+            return;
+        }
+        availableListElement.innerHTML = `<div class="transaction-id-empty">${text}</div>`;
+    }
+
+    function showAvailableStatus(text) {
+        if (!availableStatusElement) {
+            return;
+        }
+        availableStatusElement.textContent = text;
+    }
+
     function showLoading(text) {
         containerElement.innerHTML = `<div class="sequence-diagram-loading">${text}</div>`;
     }
@@ -124,12 +237,35 @@ export function createTxnView({
         return 'Message';
     }
 
-    function cycleToPercent(cycle) {
-        if (!Number.isFinite(cycle)) {
-            return 0;
+    function convertTimelineToMermaid(timeline) {
+        const events = timeline.events || [];
+        const nodes = timeline.nodes || [];
+        if (events.length === 0) {
+            return 'sequenceDiagram\nNote over Client: No events available';
         }
-        return (cycle % 1000) / 10;
-    }
+
+        let minCycle = Number.POSITIVE_INFINITY;
+        let maxCycle = Number.NEGATIVE_INFINITY;
+        events.forEach((event) => {
+            if (Number.isFinite(event.cycle)) {
+                minCycle = Math.min(minCycle, event.cycle);
+                maxCycle = Math.max(maxCycle, event.cycle);
+            }
+        });
+        if (!Number.isFinite(minCycle)) {
+            minCycle = 0;
+        }
+        if (!Number.isFinite(maxCycle)) {
+            maxCycle = minCycle + 1;
+        }
+        const cycleRange = Math.max(1, maxCycle - minCycle);
+
+        function cycleToPercent(cycle) {
+            if (!Number.isFinite(cycle)) {
+                return 0;
+            }
+            return ((cycle - minCycle) / cycleRange) * 100;
+        }
 
     function buildDirective(startPercent, endPercent) {
         const parts = [];
@@ -708,5 +844,6 @@ export function createTxnView({
         deactivate,
         clear,
         loadTimeline,
+        refreshTransactions: refreshAvailableTransactions,
     };
 }

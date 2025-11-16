@@ -78,6 +78,8 @@ function setupViews() {
         inputElement: document.getElementById("transactionID"),
         loadButton: document.getElementById("btnLoadTimeline"),
         errorElement: document.getElementById("timelineError"),
+        availableListElement: document.getElementById("transactionList"),
+        availableStatusElement: document.getElementById("transactionListStatus"),
     });
 
     topologyViewController = createTopologyView({
