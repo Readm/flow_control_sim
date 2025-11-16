@@ -6,7 +6,7 @@
 
 ✅ **核心功能完成** - 项目已完成核心模拟功能，并实现了基于 Cytoscape.js 的 Web 可视化界面。
 
-详细的开发计划请参考 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)
+详细的开发计划请参考 [doc/DEVELOPMENT_PLAN.md](./doc/DEVELOPMENT_PLAN.md)
 
 ## 系统特性
 
@@ -73,7 +73,7 @@
    - 通过 channel 队列传递控制命令
    - 支持 WebSocket 实时推送帧数据
 
-4. **前端页面** (`web/static/index.html`)
+4. **前端页面** (`framework/app/web/static/index.html`)
    - 优先使用 WebSocket 连接获取实时数据推送（延迟 < 50ms）
    - WebSocket 连接失败时自动回退到 HTTP 轮询（500ms 间隔）
    - 首次加载时创建拓扑图（Master 左，Relay 中，Slave 右）
@@ -121,36 +121,20 @@ Simulator.Run() 检查命令并执行
 ## 项目结构
 
 ```
-flow_control_sim/
-├── capabilities/             # 节点能力实现（路由、流控、统计等）
-├── hooks/                    # Hook Broker 与插件登记中心
-├── plugins/
-│   ├── incentives/           # 激励插件注册器与示例实现
-│   └── visualization/        # 可视化插件注册器
-├── visual/                   # Visualizer 接口与 Null 实现
-├── node.go                   # Node 基类定义（统一节点架构）
-├── visualization.go          # 可视化数据模型（帧、节点快照等）
-├── web_visualizer.go         # Web 可视化器实现
-├── web_server.go             # Web 服务器和 REST API
-├── rn.go                     # RequestNode (Master) 节点实现
-├── sn.go                     # SlaveNode 节点实现
-├── hn.go                     # HomeNode (Relay) 节点实现
-├── simulator.go              # 模拟器主循环，负责骨架与插件装配
-├── channel.go                # 通信信道 (Link)
-├── models.go                 # 数据模型与 Config 定义
-├── stats.go                  # 统计功能
-├── request_generator.go      # 请求生成器接口和实现
-├── soc_configs.go            # 预定义网络配置
-├── benchmark.go              # 性能基准测试
-├── main.go                   # 程序入口
-├── web/
-│   └── static/
-│       └── index.html        # Cytoscape.js 前端页面
-├── go.mod                    # Go 模块定义
-├── README.md                 # 项目说明
-├── DEVELOPMENT_PLAN.md       # 开发计划文档
-├── TEST_RESULTS.md           # 测试结果文档
-└── TODO.md                   # 待办事项
+flow_sim/
+├── doc/                      # 架构、设计、进展等中文文档
+├── framework/
+│   ├── core/                 # CHI 基础实体、队列、事务等性能关键逻辑
+│   │   ├── queue/            # 流水线与追踪队列实现
+│   │   └── slicc/            # 状态机描述工具
+│   ├── hook/                 # PluginBroker、Registry 与 Hook 类型
+│   ├── plugins/              # 能力封装与可插拔插件（capabilities/incentives/visualization 等）
+│   └── app/                  # 模拟器、节点实现、Web API、可视化桥接与前端资源
+├── configs/                  # Go 代码定义的拓扑/能力配置与注册
+├── ref/                      # gem5/RAG/Vector 数据、示例脚本等参考资料
+├── main.go                   # CLI 入口，装配 `framework/app`
+├── go.mod / go.sum           # Go 模块定义
+└── README.md                 # 项目说明
 ```
 骨架组件和插件目录遵循“骨架最小化、能力可插拔”原则，详细设计请参阅 `doc/design.md`。
 
@@ -250,22 +234,22 @@ go mod download
 **运行模拟器（Headless 模式）**:
 ```bash
 # 使用默认配置运行
-go run *.go -headless
+go run . -headless
 
 # 使用指定预设配置运行
-go run *.go -headless -config backpressure_test
+go run . -headless -config backpressure_test
 
 # 或使用测试
-go test -v
+go test ./...
 ```
 
 **运行 Web 可视化模式**:
 ```bash
 # 启动模拟器（默认使用 Web 可视化）
-go run *.go
+go run .
 
 # 使用指定预设配置启动
-go run *.go -config multi_master_multi_slave
+go run . -config multi_master_multi_slave
 
 # 模拟器启动后，Web 服务器会在 http://127.0.0.1:8080 启动
 # 在浏览器中打开 http://127.0.0.1:8080 即可查看可视化界面
@@ -299,7 +283,7 @@ curl http://127.0.0.1:8080/api/configs
 **运行性能测试（Benchmark）**:
 ```bash
 # 运行性能基准测试，测试 headless 模式下的仿真性能
-go run *.go -benchmark
+go run . -benchmark
 # 或使用编译后的二进制文件
 ./flow_control_sim -benchmark
 ```
@@ -583,7 +567,7 @@ Content-Type: application/json
 
 ### 静态文件服务
 
-**GET /** - 返回 `web/static/index.html` 前端页面
+**GET /** - 返回 `framework/app/web/static/index.html` 前端页面
 
 所有对 `/` 路径的请求都会返回前端页面，前端通过相对路径调用 API 端点。
 

@@ -5,7 +5,7 @@
 ## 前端交互流程
 
 1. 用户在 `Transaction View` 页面输入 Transaction ID 并点击 `Load Timeline`（或按 Enter）。
-2. `web/static/js/views/txnView.js` 调用 `loadTimeline(txnId)`：
+2. `framework/app/web/static/js/views/txnView.js` 调用 `loadTimeline(txnId)`：
    - 校验 ID 是否为正整数；否则提示 `Please enter a valid transaction ID`。
    - 通过 `fetch('/api/transaction/${id}/timeline')` 访问 REST 接口。
 3. 根据返回结果：

@@ -4,9 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"time"
+
+	"github.com/Readm/flow_sim/configs"
+	app "github.com/Readm/flow_sim/framework/app"
 )
 
 func main() {
+	app.SetConfigProvider(configs.Provider())
+
 	var headless = flag.Bool("headless", false, "Run in headless mode (no GUI)")
 	var benchmark = flag.Bool("benchmark", false, "Run performance benchmark test")
 	var configName = flag.String("config", "", "Predefined configuration name (e.g., 'backpressure_test', 'multi_master_multi_slave')")
@@ -15,22 +20,22 @@ func main() {
 
 	// If benchmark mode, run benchmark suite
 	if *benchmark {
-		RunBenchmarkSuite()
+		app.RunBenchmarkSuite()
 		return
 	}
 
 	// Use predefined configuration
-	configs := GetPredefinedConfigs()
-	var cfg *Config
+	available := app.GetPredefinedConfigs()
+	var cfg *app.Config
 
 	// If config name is specified, use it; otherwise use first config
 	selectedConfigName := *configName
-	if selectedConfigName == "" && len(configs) > 0 {
-		selectedConfigName = configs[0].Name
+	if selectedConfigName == "" && len(available) > 0 {
+		selectedConfigName = available[0].Name
 	}
 
 	if selectedConfigName != "" {
-		cfg = GetConfigByName(selectedConfigName)
+		cfg = app.GetConfigByName(selectedConfigName)
 		if cfg == nil {
 			fmt.Printf("Warning: Configuration '%s' not found, using default\n", selectedConfigName)
 		} else {
@@ -42,7 +47,7 @@ func main() {
 
 	if cfg == nil {
 		// Fallback to default if GetConfigByName fails or no configs available
-		cfg = &Config{
+		cfg = &app.Config{
 			NumMasters:         3,
 			NumSlaves:          2,
 			NumRelays:          1,
@@ -61,18 +66,18 @@ func main() {
 	}
 
 	if *traceEvents {
-		SetPacketEventTrace(true)
-		GetLogger().Infof("Packet event tracing enabled. Logs will include TRACE entries.")
+		app.SetPacketEventTrace(true)
+		app.GetLogger().Infof("Packet event tracing enabled. Logs will include TRACE entries.")
 	}
 
-	sim := NewSimulator(cfg)
+	sim := app.NewSimulator(cfg)
 
 	if *headless {
 		// Headless mode: run simulation and exit
 		sim.Run()
 		stats := sim.CollectStats()
 		if stats != nil {
-			PrintStats(stats)
+			app.PrintStats(stats)
 		}
 	} else {
 		// Web mode: run simulation in goroutine and keep server alive

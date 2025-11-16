@@ -4,6 +4,16 @@
 
 ## 架构概览
 
+- **目录布局（2025 重构）**：
+  - `doc/`：设计、状态、进度等所有文档（含本文件、DEVELOPMENT_PLAN、TEST_RESULTS、TODO）。
+  - `framework/core/`：CHI 协议最小实体、queue/slicc 等性能基础。
+  - `framework/hook/`：Hook 注册中心、PluginBroker。
+  - `framework/plugins/`：内置能力、策略封装与用户级插件（cache、directory、visualization、incentives 等）。
+  - `framework/app/`：模拟器、节点实现、Web API、可视化桥接与 `framework/app/web/static` 前端资源。
+  - `configs/`：集中管理所有 Go 代码形式的拓扑/能力配置，通过 `configs.Register` 注册到 Provider。
+  - `ref/`：与核心逻辑解耦的参考资料（gem5、RAG、VectorDB、示例脚本等）。
+  - `main.go`：命令行入口，根据参数装配 `framework/app`、选择配置并启动模拟。
+
 - **核心层（Core）**：仅定义协议最小实体（`Packet`、`Transaction`、`Node` 基础信息、事件类型等），并提供 Metadata API。核心层不包含任何策略或决策逻辑。
 - **节点层（Nodes）**：负责节点生命周期调度、队列管理以及触发 Hook。节点层不得直接实现路由、流控、一致性等策略功能。
 - **Hook 系统（Hooks）**：`PluginBroker` 串行触发所有 Hook，并通过 `RouteContext` / `MessageContext` / `ProcessContext` 等上下文将必要数据暴露给外部。Hook 是核心与外部扩展之间唯一合法的交互层。
