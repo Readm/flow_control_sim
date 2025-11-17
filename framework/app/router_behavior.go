@@ -7,7 +7,7 @@ import (
 
 	"github.com/Readm/flow_sim/framework/core"
 	"github.com/Readm/flow_sim/framework/core/queue"
-	"github.com/Readm/flow_sim/framework/hook"
+	hooks "github.com/Readm/flow_sim/framework/hook"
 	"github.com/Readm/flow_sim/framework/plugins/capabilities"
 )
 
@@ -23,9 +23,10 @@ type RingRouterNode struct {
 	txnMgr    *TransactionManager
 	packetIDs *PacketIDAllocator
 
-	capabilities          []capabilities.NodeCapability
-	capabilityRegistry    map[string]struct{}
-	defaultCapsRegistered bool
+	capabilities       []capabilities.NodeCapability
+	capabilityRegistry map[string]struct{}
+
+	runtime *RingRouterRuntime
 }
 
 // NewRingRouterNode constructs a router node with default queue capacities.
@@ -51,10 +52,43 @@ func NewRingRouterNode(id int) *RingRouterNode {
 	return rr
 }
 
+// Init wires dependencies according to NodeBehavior interface.
+func (rr *RingRouterNode) Init(ctx *BehaviorContext) error {
+	if ctx == nil {
+		return fmt.Errorf("ring router %d missing behavior context", rr.ID)
+	}
+	rr.runtime = &RingRouterRuntime{
+		Link:            ctx.Link,
+		ResolveLatency:  ctx.ResolveLatency,
+		TransactionMgr:  ctx.TransactionManager,
+		PacketAllocator: ctx.PacketAllocator,
+	}
+	if ctx.PluginBroker != nil {
+		rr.SetPluginBroker(ctx.PluginBroker)
+	}
+	if ctx.TransactionManager != nil {
+		rr.SetTransactionManager(ctx.TransactionManager)
+	}
+	if ctx.PacketAllocator != nil {
+		rr.SetPacketIDAllocator(ctx.PacketAllocator)
+	}
+	return nil
+}
+
 func (rr *RingRouterNode) makeStageMutator(stage pipelineStageName) queue.MutateFunc {
 	return func(length int, capacity int) {
 		rr.UpdateQueueState(string(stage), length, capacity)
 	}
+}
+
+// ID returns the router identifier.
+func (rr *RingRouterNode) NodeID() int {
+	return rr.Node.ID
+}
+
+// NodeType returns the router type.
+func (rr *RingRouterNode) NodeType() core.NodeType {
+	return rr.Node.Type
 }
 
 // SetPluginBroker assigns the hook broker and registers capabilities.
@@ -114,6 +148,20 @@ func (rr *RingRouterNode) CapabilityNames() []string {
 	return capabilityNameList(rr.capabilities)
 }
 
+// Snapshot exposes router queues and stats.
+func (rr *RingRouterNode) Snapshot() NodeSnapshot {
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	return NodeSnapshot{
+		ID:           rr.ID,
+		Type:         rr.Type,
+		Label:        "",
+		Queues:       cloneQueues(rr.GetQueueInfo()),
+		Capabilities: rr.CapabilityNames(),
+		Payload:      map[string]any{},
+	}
+}
+
 // CanReceive checks whether the router can accept additional packets on the incoming edge.
 func (rr *RingRouterNode) CanReceive(edgeKey EdgeKey, _ int) bool {
 	q := rr.inQueue()
@@ -158,6 +206,14 @@ func (rr *RingRouterNode) OnPackets(messages []*InFlightMessage, cycle int) {
 			GetLogger().Warnf("RingRouterNode %d: in_queue full, dropping packet %d", rr.ID, msg.Packet.ID)
 		}
 	}
+}
+
+// Tick implements the NodeBehavior interface.
+func (rr *RingRouterNode) Tick(cycle int) {
+	if rr.runtime == nil {
+		return
+	}
+	rr.executeTick(cycle, rr.runtime)
 }
 
 // GetQueuePackets collects packet snapshots for visualization.
@@ -260,14 +316,14 @@ func (rr *RingRouterNode) RunRuntime(ctx *RingRouterRuntime) {
 		}
 		rr.bindings.WaitIncoming(cycle)
 		rr.bindings.SignalReceive(cycle)
-		rr.Tick(cycle, ctx)
+		rr.executeTick(cycle, ctx)
 		rr.bindings.SignalSend(cycle)
 		coord.MarkDone(componentID, cycle)
 	}
 }
 
 // Tick advances router state for a single cycle.
-func (rr *RingRouterNode) Tick(cycle int, ctx *RingRouterRuntime) {
+func (rr *RingRouterNode) executeTick(cycle int, ctx *RingRouterRuntime) {
 	rr.mu.Lock()
 	defer rr.mu.Unlock()
 

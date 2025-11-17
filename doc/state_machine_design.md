@@ -50,7 +50,7 @@ type StateMachineSpec struct {
 - `CurrentState(address)`：查询当前状态。
 - 可选绑定 `RequestCache`，当状态改变时同步 MESI 状态。
 
-节点在 `ensureDefaultCapabilities` 中，通过工厂方法注入对应的状态机能力。
+节点在 Capability Catalog 装配阶段会根据 Graph capability 自动注入对应的状态机能力。
 
 ## 可插拔能力矩阵
 

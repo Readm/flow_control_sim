@@ -1,0 +1,33 @@
+{
+  "meta": {
+    "name": "backpressure_test",
+    "description": "Backpressure Test: High load, slow processing"
+  },
+  "defaults": {
+    "total_cycles": 500,
+    "request_rate": 1.0,
+    "slave_process_rate": 1,
+    "bandwidth_limit": 3,
+    "slave_weights": [1],
+    "master_relay_latency": 1,
+    "relay_master_latency": 1,
+    "relay_slave_latency": 1,
+    "slave_relay_latency": 1,
+    "visual_mode": "web",
+    "headless": false
+  },
+  "nodes": [
+    {"id": "rn0", "label": "Request 0", "capabilities": ["requester"]},
+    {"id": "rn1", "label": "Request 1", "capabilities": ["requester"]},
+    {"id": "rn2", "label": "Request 2", "capabilities": ["requester"]},
+    {"id": "hn0", "label": "Home", "capabilities": ["home_directory"]},
+    {"id": "sn0", "label": "Slave 0", "capabilities": ["slave_target"], "params": {"weight": 1}}
+  ],
+  "links": [
+    {"from": "rn0", "to": "hn0", "latency": 1, "bandwidth": 3, "bidirectional": true},
+    {"from": "rn1", "to": "hn0", "latency": 1, "bandwidth": 3, "bidirectional": true},
+    {"from": "rn2", "to": "hn0", "latency": 1, "bandwidth": 3, "bidirectional": true},
+    {"from": "hn0", "to": "sn0", "latency": 1, "bandwidth": 1, "bidirectional": true}
+  ]
+}
+

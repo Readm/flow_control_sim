@@ -288,7 +288,7 @@ flowchart LR
 
 - 三类节点均共享 `PacketPipeline`/`StageQueue` 实现，`OnBeforeProcess`/`OnAfterProcess` Hook 在相应阶段触发。
 - RN/HN 默认挂载 LRU 替换能力，容量可通过 `Config.RequestCacheCapacity`、`Config.HomeCacheCapacity` 调整。
-- Ring 模式下，RN 使用 `RingAddressInterleaver` 依据地址条带选择 SN，`RingRoutingCapability` 在 `BeforeRoute` 阶段推进下一跳。
+- Graph 模式下，由 `links` 显式给出全部跳数；RN 通过 Policy/Router 能力在 `BeforeRoute` 中解析下一跳，不再依赖 `RingAddressInterleaver` 或自动挂载 router。
 
 ---
 
@@ -304,9 +304,9 @@ flowchart LR
   - 接口：`ResolveRoute`、`CheckFlowControl`、`DomainOf`
   - 默认实现提供空策略，可通过 `WithRouter/WithFlowController/WithDomainMapper` 组合自定义逻辑
 - **节点注入**
-  - RequestNode：`SetTxFactory`、`SetPluginBroker`、`SetPolicyManager`
-  - HomeNode：`SetPluginBroker`、`SetPolicyManager`，转发路径已接入 Hook 与策略
-  - SlaveNode：`SetPluginBroker`，在处理前后触发 Hook 并记录事件
+  - RequestNode：由 Capability Catalog 基于 Graph capability 挂载 TxFactory/Cache/CHI 能力
+  - HomeNode：通过 Catalog 注入 cache/directory/CHI home 能力，`SetPluginBroker`/`SetPolicyManager` 仅传递引用
+  - SlaveNode：通过 Catalog 注入处理 Hook 与 CHI Slave 能力
 - **测试覆盖**
   - `hooks/broker_test.go` 验证 Hook 注册顺序与错误短路
   - `policy/manager_test.go` 验证默认策略与流控拦截

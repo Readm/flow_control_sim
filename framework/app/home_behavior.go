@@ -7,10 +7,10 @@ import (
 
 	"github.com/Readm/flow_sim/framework/core"
 	"github.com/Readm/flow_sim/framework/core/queue"
-	"github.com/Readm/flow_sim/framework/hook"
+	hooks "github.com/Readm/flow_sim/framework/hook"
 	"github.com/Readm/flow_sim/framework/plugins/capabilities"
 	chicap "github.com/Readm/flow_sim/framework/plugins/capabilities/chi"
-	"github.com/Readm/flow_sim/framework/plugins/policy_manager"
+	policy "github.com/Readm/flow_sim/framework/plugins/policy_manager"
 )
 
 // CacheLine represents a single cache line in the HomeNode cache.
@@ -46,7 +46,6 @@ type HomeNode struct {
 	cacheStore      capabilities.HomeCache
 	cacheCapacity   int
 	cacheEvictor    capabilities.CacheEvictor
-	routerID        int
 
 	// Directory: tracks which RequestNodes have cached which addresses
 	// map[address] -> set of RequestNode IDs
@@ -58,9 +57,9 @@ type HomeNode struct {
 
 	chiHome chicap.HomeCapability
 
-	capabilities          []capabilities.NodeCapability
-	capabilityRegistry    map[string]struct{}
-	defaultCapsRegistered bool
+	capabilities       []capabilities.NodeCapability
+	capabilityRegistry map[string]struct{}
+	runtime            *HomeNodeRuntime
 }
 
 func NewHomeNode(id int) *HomeNode {
@@ -93,10 +92,45 @@ func NewHomeNode(id int) *HomeNode {
 	return hn
 }
 
+// Init wires dependencies required by the NodeBehavior interface.
+func (hn *HomeNode) Init(ctx *BehaviorContext) error {
+	if ctx == nil {
+		return fmt.Errorf("home node %d missing behavior context", hn.ID)
+	}
+	hn.runtime = &HomeNodeRuntime{
+		Config:          ctx.Config,
+		Link:            ctx.Link,
+		PacketAllocator: ctx.PacketAllocator,
+	}
+	if ctx.PluginBroker != nil {
+		hn.SetPluginBroker(ctx.PluginBroker)
+	}
+	if ctx.PolicyManager != nil {
+		hn.SetPolicyManager(ctx.PolicyManager)
+	}
+	if ctx.PacketAllocator != nil {
+		hn.SetPacketIDAllocator(ctx.PacketAllocator)
+	}
+	if ctx.TransactionManager != nil {
+		hn.SetTransactionManager(ctx.TransactionManager)
+	}
+	return nil
+}
+
 func (hn *HomeNode) makeStageMutator(stage pipelineStageName) queue.MutateFunc {
 	return func(length int, capacity int) {
 		hn.UpdateQueueState(string(stage), length, capacity)
 	}
+}
+
+// ID returns the node identifier.
+func (hn *HomeNode) NodeID() int {
+	return hn.Node.ID
+}
+
+// NodeType returns the node type.
+func (hn *HomeNode) NodeType() core.NodeType {
+	return hn.Node.Type
 }
 
 func (hn *HomeNode) enqueueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
@@ -136,29 +170,42 @@ func (hn *HomeNode) SetTransactionManager(txnMgr *TransactionManager) {
 	hn.txnMgr = txnMgr
 }
 
+// Tick implements the NodeBehavior interface.
+func (hn *HomeNode) Tick(cycle int) {
+	hn.executeTick(cycle, hn.runtime)
+}
+
 // SetPluginBroker assigns the hook broker for routing and sending stages.
 func (hn *HomeNode) SetPluginBroker(b *hooks.PluginBroker) {
 	hn.broker = b
-	hn.ensureDefaultCapabilities()
 }
 
 // SetPolicyManager assigns the policy manager used during routing decisions.
 func (hn *HomeNode) SetPolicyManager(m policy.Manager) {
 	hn.policyMgr = m
-	hn.ensureDefaultCapabilities()
-}
-
-// SetRouterID binds the router node used for ring forwarding.
-func (hn *HomeNode) SetRouterID(id int) {
-	hn.mu.Lock()
-	defer hn.mu.Unlock()
-	hn.routerID = id
 }
 
 func (hn *HomeNode) CapabilityNames() []string {
 	hn.mu.Lock()
 	defer hn.mu.Unlock()
 	return capabilityNameList(hn.capabilities)
+}
+
+// Snapshot returns a visualization snapshot for the node.
+func (hn *HomeNode) Snapshot() NodeSnapshot {
+	hn.mu.Lock()
+	defer hn.mu.Unlock()
+	payload := map[string]any{
+		"capabilityCount": len(hn.capabilities),
+	}
+	return NodeSnapshot{
+		ID:           hn.ID,
+		Type:         hn.Type,
+		Label:        "",
+		Queues:       cloneQueues(hn.GetQueueInfo()),
+		Capabilities: hn.CapabilityNames(),
+		Payload:      payload,
+	}
 }
 
 // SetCacheCapacity overrides the occupancy limit for the home cache before capability init.
@@ -172,84 +219,6 @@ func (hn *HomeNode) SetCacheCapacity(capacity int) {
 // SetPacketIDAllocator assigns the packet ID allocator for generating response packets.
 func (hn *HomeNode) SetPacketIDAllocator(allocator *PacketIDAllocator) {
 	hn.packetIDs = allocator
-	hn.ensureDefaultCapabilities()
-}
-
-func (hn *HomeNode) ensureDefaultCapabilities() {
-	if hn.defaultCapsRegistered && hn.policyMgr != nil {
-		return
-	}
-	if hn.broker == nil {
-		return
-	}
-	caps := []capabilities.NodeCapability{}
-	if hn.cacheStore == nil {
-		caps = append(caps, capabilities.NewHomeCacheCapability(
-			fmt.Sprintf("home-cache-%d", hn.ID),
-		))
-	}
-	if hn.directoryStore == nil {
-		caps = append(caps, capabilities.NewDirectoryCapability(
-			fmt.Sprintf("home-directory-%d", hn.ID),
-		))
-	}
-	if hn.policyMgr != nil {
-		caps = append(caps,
-			capabilities.NewRoutingCapability(
-				fmt.Sprintf("home-routing-%d", hn.ID),
-				hn.policyMgr,
-			),
-			capabilities.NewFlowControlCapability(
-				fmt.Sprintf("home-flow-%d", hn.ID),
-				hn.policyMgr,
-			),
-		)
-	}
-	for _, cap := range caps {
-		hn.registerCapability(cap)
-	}
-	if hn.cacheStore != nil && hn.cacheEvictor == nil {
-		lruCap := capabilities.NewLRUEvictionCapability(
-			fmt.Sprintf("home-cache-lru-%d", hn.ID),
-			capabilities.LRUEvictionConfig{
-				Capacity:  hn.cacheCapacity,
-				HomeCache: hn.cacheStore,
-			},
-		)
-		hn.registerCapability(lruCap)
-	}
-	if hn.cacheStore != nil && hn.directoryStore != nil && hn.chiHome == nil {
-		packetAllocator := func() (int64, error) {
-			if hn.packetIDs == nil {
-				return 0, fmt.Errorf("packet allocator not configured")
-			}
-			return hn.packetIDs.Allocate(), nil
-		}
-		metadataRecorder := func(txnID int64, key, value string) {
-			if hn.txnMgr != nil {
-				hn.txnMgr.AddMetadata(txnID, key, value)
-			}
-		}
-		homeCap, err := chicap.NewHomeCapability(chicap.HomeConfig{
-			Name:             fmt.Sprintf("chi-home-%d", hn.ID),
-			NodeID:           hn.ID,
-			Cache:            hn.cacheStore,
-			Directory:        hn.directoryStore,
-			CacheEvictor:     hn.cacheEvictor,
-			PacketAllocator:  packetAllocator,
-			Recorder:         packetRecorderAdapter{tm: hn.txnMgr},
-			MetadataRecorder: metadataRecorder,
-			SetFinalTarget:   hn.ensureFinalTargetMetadata,
-		})
-		if err != nil {
-			GetLogger().Warnf("HomeNode %d: init CHI home capability failed: %v", hn.ID, err)
-		} else {
-			hn.registerCapability(homeCap)
-		}
-	}
-	if hn.policyMgr != nil {
-		hn.defaultCapsRegistered = true
-	}
 }
 
 func (hn *HomeNode) registerCapability(cap capabilities.NodeCapability) {
@@ -347,10 +316,12 @@ func (hn *HomeNode) OnPacket(p *core.Packet, cycle int, ch *Link, cfg *Config) {
 }
 
 // Tick processes pipeline stages and returns the number of packets sent this cycle.
-func (hn *HomeNode) Tick(cycle int, ch *Link, cfg *Config) int {
-	if cfg == nil || ch == nil {
+func (hn *HomeNode) executeTick(cycle int, runtime *HomeNodeRuntime) int {
+	if runtime == nil || runtime.Config == nil || runtime.Link == nil {
 		return 0
 	}
+	cfg := runtime.Config
+	ch := runtime.Link
 
 	hn.mu.Lock()
 	defer hn.mu.Unlock()
@@ -554,10 +525,6 @@ func (hn *HomeNode) defaultRoute(p *core.Packet, cfg *Config) (target int, laten
 	}
 
 	hn.ensureFinalTargetMetadata(p, finalTarget)
-
-	if cfg != nil && cfg.RingEnabled && hn.routerID != 0 {
-		return hn.routerID, finalLatency, true
-	}
 	return finalTarget, finalLatency, true
 }
 
@@ -621,8 +588,9 @@ func (hn *HomeNode) enqueueDefaultForward(packet *core.Packet, cfg *Config, cycl
 
 // HomeNodeRuntime contains dependencies required during runtime execution.
 type HomeNodeRuntime struct {
-	Config *Config
-	Link   *Link
+	Config          *Config
+	Link            *Link
+	PacketAllocator *PacketIDAllocator
 }
 
 // RunRuntime executes the home node logic driven by the coordinator.
@@ -642,7 +610,7 @@ func (hn *HomeNode) RunRuntime(ctx *HomeNodeRuntime) {
 		}
 		hn.bindings.WaitIncoming(cycle)
 		hn.bindings.SignalReceive(cycle)
-		hn.Tick(cycle, ctx.Link, ctx.Config)
+		hn.executeTick(cycle, ctx)
 		hn.bindings.SignalSend(cycle)
 		coord.MarkDone(componentID, cycle)
 	}

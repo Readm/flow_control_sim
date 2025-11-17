@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -137,6 +138,7 @@ func TestBasicFlow(t *testing.T) {
 		Headless:           true, // Test in headless mode
 		VisualMode:         "none",
 	}
+	cfg.Graph = buildTestGraph(cfg)
 
 	sim := NewSimulator(cfg)
 	sim.Run()
@@ -192,6 +194,7 @@ func TestReadNoSnpTransaction(t *testing.T) {
 		Headless:           true,
 		VisualMode:         "none",
 	}
+	cfg.Graph = buildTestGraph(cfg)
 
 	sim := NewSimulator(cfg)
 	sim.Run()
@@ -249,23 +252,22 @@ func TestReadNoSnpTransaction(t *testing.T) {
 
 func TestFrameIncludesCapabilities(t *testing.T) {
 	cfg := &Config{
-		NumMasters:           1,
-		NumSlaves:            1,
-		NumRelays:            1,
-		TotalCycles:          10,
-		MasterRelayLatency:   2,
-		RelayMasterLatency:   2,
-		RelaySlaveLatency:    1,
-		SlaveRelayLatency:    1,
-		SlaveProcessRate:     1,
-		RequestRateConfig:    0.0,
-		BandwidthLimit:       1,
-		SlaveWeights:         []int{1},
-		RingEnabled:          true,
-		RingInterleaveStride: 1,
-		Headless:             true,
-		VisualMode:           "none",
+		NumMasters:         1,
+		NumSlaves:          1,
+		NumRelays:          1,
+		TotalCycles:        10,
+		MasterRelayLatency: 2,
+		RelayMasterLatency: 2,
+		RelaySlaveLatency:  1,
+		SlaveRelayLatency:  1,
+		SlaveProcessRate:   1,
+		RequestRateConfig:  0.0,
+		BandwidthLimit:     1,
+		SlaveWeights:       []int{1},
+		Headless:           true,
+		VisualMode:         "none",
 	}
+	cfg.Graph = buildTestGraph(cfg)
 
 	sim := NewSimulator(cfg)
 	if sim == nil {
@@ -304,7 +306,6 @@ func TestFrameIncludesCapabilities(t *testing.T) {
 	assertHasCapability(t, NodeTypeRN, frame.Nodes, "request-routing-")
 	assertHasCapability(t, NodeTypeHN, frame.Nodes, "home-routing-")
 	assertHasCapability(t, NodeTypeSN, frame.Nodes, "slave-processing-")
-	assertHasCapability(t, NodeTypeRT, frame.Nodes, "ring-router-forward-")
 }
 
 // TestReadOnceCacheMechanism verifies the simplest cache mechanism:
@@ -353,6 +354,7 @@ func TestReadOnceCacheMechanism(t *testing.T) {
 			},
 		},
 	}
+	cfg.Graph = buildTestGraph(cfg)
 
 	sim := NewSimulator(cfg)
 	sim.Run()
@@ -489,6 +491,7 @@ func TestReadOnceMESISnoop(t *testing.T) {
 			},
 		},
 	}
+	cfg.Graph = buildTestGraph(cfg)
 
 	sim := NewSimulator(cfg)
 	sim.Run()
@@ -560,7 +563,7 @@ func TestReadOnceMESISnoop(t *testing.T) {
 }
 
 func newInteractiveConfig(totalCycles int) *Config {
-	return &Config{
+	cfg := &Config{
 		NumMasters:         1,
 		NumSlaves:          1,
 		NumRelays:          1,
@@ -576,6 +579,8 @@ func newInteractiveConfig(totalCycles int) *Config {
 		Headless:           false,
 		VisualMode:         "web",
 	}
+	cfg.Graph = buildTestGraph(cfg)
+	return cfg
 }
 
 // TestSimulatorControlFlowRun verifies pause->run flow without manual intervention.
@@ -669,4 +674,75 @@ func TestSimulatorControlFlowReset(t *testing.T) {
 	}
 
 	viz.close()
+}
+
+func buildTestGraph(cfg *Config) *GraphConfig {
+	bandwidth := cfg.BandwidthLimit
+	if bandwidth <= 0 {
+		bandwidth = 1
+	}
+	nodes := make([]GraphNode, 0, cfg.NumMasters+cfg.NumSlaves+1)
+	for i := 0; i < cfg.NumMasters; i++ {
+		nodes = append(nodes, GraphNode{
+			ID:           fmt.Sprintf("rn%d", i),
+			Label:        fmt.Sprintf("Request %d", i),
+			Capabilities: []string{"requester"},
+		})
+	}
+	nodes = append(nodes, GraphNode{
+		ID:           "hn0",
+		Label:        "Home",
+		Capabilities: []string{"home_directory"},
+	})
+	for i := 0; i < cfg.NumSlaves; i++ {
+		nodes = append(nodes, GraphNode{
+			ID:           fmt.Sprintf("sn%d", i),
+			Label:        fmt.Sprintf("Slave %d", i),
+			Capabilities: []string{"slave_target"},
+		})
+	}
+
+	edges := make([]GraphEdge, 0, (cfg.NumMasters+cfg.NumSlaves)*2)
+	for i := 0; i < cfg.NumMasters; i++ {
+		nodeID := fmt.Sprintf("rn%d", i)
+		edges = append(edges,
+			GraphEdge{
+				From:      nodeID,
+				To:        "hn0",
+				Latency:   ensurePositiveLatency(cfg.MasterRelayLatency),
+				Bandwidth: bandwidth,
+			},
+			GraphEdge{
+				From:      "hn0",
+				To:        nodeID,
+				Latency:   ensurePositiveLatency(cfg.RelayMasterLatency),
+				Bandwidth: bandwidth,
+			},
+		)
+	}
+	for i := 0; i < cfg.NumSlaves; i++ {
+		nodeID := fmt.Sprintf("sn%d", i)
+		edges = append(edges,
+			GraphEdge{
+				From:      "hn0",
+				To:        nodeID,
+				Latency:   ensurePositiveLatency(cfg.RelaySlaveLatency),
+				Bandwidth: bandwidth,
+			},
+			GraphEdge{
+				From:      nodeID,
+				To:        "hn0",
+				Latency:   ensurePositiveLatency(cfg.SlaveRelayLatency),
+				Bandwidth: bandwidth,
+			},
+		)
+	}
+	return &GraphConfig{Nodes: nodes, Edges: edges}
+}
+
+func ensurePositiveLatency(value int) int {
+	if value <= 0 {
+		return 1
+	}
+	return value
 }

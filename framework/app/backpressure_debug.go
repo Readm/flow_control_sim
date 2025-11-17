@@ -20,6 +20,19 @@ func DebugBackpressure() {
 		Headless:           true,
 		VisualMode:         "none",
 	}
+	cfg.Graph = &GraphConfig{
+		Nodes: []GraphNode{
+			{ID: "rn0", Label: "Request 0", Capabilities: []string{"requester"}},
+			{ID: "hn0", Label: "Home", Capabilities: []string{"home_directory"}},
+			{ID: "sn0", Label: "Slave 0", Capabilities: []string{"slave_target"}},
+		},
+		Edges: []GraphEdge{
+			{From: "rn0", To: "hn0", Latency: cfg.MasterRelayLatency, Bandwidth: cfg.BandwidthLimit},
+			{From: "hn0", To: "rn0", Latency: cfg.RelayMasterLatency, Bandwidth: cfg.BandwidthLimit},
+			{From: "hn0", To: "sn0", Latency: cfg.RelaySlaveLatency, Bandwidth: cfg.BandwidthLimit},
+			{From: "sn0", To: "hn0", Latency: cfg.SlaveRelayLatency, Bandwidth: cfg.BandwidthLimit},
+		},
+	}
 
 	sim := NewSimulator(cfg)
 

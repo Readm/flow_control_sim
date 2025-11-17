@@ -8,11 +8,10 @@ import (
 
 	"github.com/Readm/flow_sim/framework/core"
 	"github.com/Readm/flow_sim/framework/core/queue"
-	"github.com/Readm/flow_sim/framework/hook"
+	hooks "github.com/Readm/flow_sim/framework/hook"
 	"github.com/Readm/flow_sim/framework/plugins/capabilities"
 	chicap "github.com/Readm/flow_sim/framework/plugins/capabilities/chi"
-	"github.com/Readm/flow_sim/framework/plugins/policy_manager"
-	protochi "github.com/Readm/flow_sim/framework/plugins/protocols/chi"
+	policy "github.com/Readm/flow_sim/framework/plugins/policy_manager"
 )
 
 // RequestNode (RN) represents a CHI Request Node that initiates transactions.
@@ -29,8 +28,6 @@ type RequestNode struct {
 	outInFlightBlock  queue.BlockIndex
 	cacheCapacity     int
 	cacheEvictor      capabilities.CacheEvictor
-	addrMapper        AddressMapper
-	routerID          int
 
 	// track request generation times by request id (for statistics)
 	generatedAtByReq map[int64]int
@@ -54,15 +51,15 @@ type RequestNode struct {
 	mu       sync.Mutex
 	bindings *NodeCycleBindings
 
-	capabilities          []capabilities.NodeCapability
-	capabilityRegistry    map[string]struct{}
-	defaultCapsRegistered bool
+	capabilities       []capabilities.NodeCapability
+	capabilityRegistry map[string]struct{}
+	cacheCapability    capabilities.CacheWithRequestStore
+	cacheStore         capabilities.RequestCache
+	chiRequest         chicap.RequestCapability
+	txnCapability      capabilities.TransactionCapability
+	txnCreator         capabilities.TransactionCreator
 
-	cacheCapability capabilities.CacheWithRequestStore
-	cacheStore      capabilities.RequestCache
-	chiRequest      chicap.RequestCapability
-	txnCapability   capabilities.TransactionCapability
-	txnCreator      capabilities.TransactionCreator
+	runtime *RequestNodeRuntime
 }
 
 func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *RequestNode {
@@ -107,10 +104,78 @@ func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *Reques
 	return rn
 }
 
+// Init satisfies the NodeBehavior interface by wiring runtime dependencies.
+func (rn *RequestNode) Init(ctx *BehaviorContext) error {
+	if ctx == nil {
+		return fmt.Errorf("request node %d missing behavior context", rn.ID)
+	}
+	rn.runtime = &RequestNodeRuntime{
+		Config:             ctx.Config,
+		Link:               ctx.Link,
+		PacketAllocator:    ctx.PacketAllocator,
+		TransactionManager: ctx.TransactionManager,
+	}
+	if ctx.PluginBroker != nil {
+		rn.SetPluginBroker(ctx.PluginBroker)
+	}
+	if ctx.PolicyManager != nil {
+		rn.SetPolicyManager(ctx.PolicyManager)
+	}
+	if ctx.PacketAllocator != nil {
+		rn.SetPacketIDAllocator(ctx.PacketAllocator)
+	}
+	if ctx.TransactionManager != nil {
+		rn.SetTransactionManager(ctx.TransactionManager)
+	}
+	return nil
+}
+
+// BindHomeNode assigns the home node identifier used for routing.
+func (rn *RequestNode) BindHomeNode(id int) {
+	if rn.runtime == nil {
+		rn.runtime = &RequestNodeRuntime{}
+	}
+	rn.runtime.HomeNodeID = id
+}
+
+// BindSlaves sets the slave node references used for address mapping.
+func (rn *RequestNode) BindSlaves(slaves []*SlaveNode) {
+	if rn.runtime == nil {
+		rn.runtime = &RequestNodeRuntime{}
+	}
+	rn.runtime.Slaves = slaves
+}
+
+// BindLink overrides the link reference used for sending packets.
+func (rn *RequestNode) BindLink(link *Link) {
+	if rn.runtime == nil {
+		rn.runtime = &RequestNodeRuntime{}
+	}
+	rn.runtime.Link = link
+}
+
 func (rn *RequestNode) makeStageMutator(stage pipelineStageName) queue.MutateFunc {
 	return func(length int, capacity int) {
 		rn.UpdateQueueState(string(stage), length, capacity)
 	}
+}
+
+// NodeID returns the node identifier.
+func (rn *RequestNode) NodeID() int {
+	return rn.Node.ID
+}
+
+// NodeType returns the node type.
+func (rn *RequestNode) NodeType() core.NodeType {
+	return rn.Node.Type
+}
+
+// Tick implements the NodeBehavior interface.
+func (rn *RequestNode) Tick(cycle int) {
+	if rn.runtime == nil {
+		return
+	}
+	rn.executeTick(cycle, rn.runtime)
 }
 
 func (rn *RequestNode) dispatchEnqueueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
@@ -153,52 +218,44 @@ func (rn *RequestNode) SetCacheCapacity(capacity int) {
 	rn.cacheCapacity = capacity
 }
 
-// SetAddressMapper configures the address mapper used for slave selection.
-func (rn *RequestNode) SetAddressMapper(mapper AddressMapper) {
-	rn.addrMapper = mapper
-}
-
-// SetTxFactory installs a transaction capability backed by the provided factory.
-func (rn *RequestNode) SetTxFactory(factory *TxFactory) {
-	if factory == nil {
-		return
-	}
-	cap := capabilities.NewTransactionCapability(
-		fmt.Sprintf("request-txn-factory-%d", rn.ID),
-		func(params capabilities.TxRequestParams) (*core.Packet, *core.Transaction, error) {
-			packet, txn := factory.CreateRequest(params)
-			if packet == nil {
-				return nil, txn, fmt.Errorf("tx factory returned nil packet")
-			}
-			return packet, txn, nil
-		},
-	)
-	rn.registerCapability(cap)
-}
-
 // SetPluginBroker assigns the hook broker for lifecycle callbacks.
 func (rn *RequestNode) SetPluginBroker(b *hooks.PluginBroker) {
 	rn.broker = b
-	rn.ensureDefaultCapabilities()
 }
 
 // SetPolicyManager assigns the policy manager for routing decisions.
 func (rn *RequestNode) SetPolicyManager(m policy.Manager) {
 	rn.policyMgr = m
-	rn.ensureDefaultCapabilities()
-}
-
-// SetRouterID sets the router node used for ring forwarding.
-func (rn *RequestNode) SetRouterID(id int) {
-	rn.mu.Lock()
-	defer rn.mu.Unlock()
-	rn.routerID = id
 }
 
 func (rn *RequestNode) CapabilityNames() []string {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
 	return capabilityNameList(rn.capabilities)
+}
+
+// Snapshot returns the current visualization snapshot.
+func (rn *RequestNode) Snapshot() NodeSnapshot {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	stats := rn.SnapshotStats()
+	payload := map[string]any{
+		"totalRequests":     rn.TotalRequests,
+		"completedRequests": rn.CompletedCount,
+		"maxDelay":          rn.MaxDelay,
+		"minDelay":          rn.MinDelay,
+	}
+	if stats != nil {
+		payload["avgDelay"] = stats.AvgDelay
+	}
+	return NodeSnapshot{
+		ID:           rn.ID,
+		Type:         rn.Type,
+		Label:        "",
+		Queues:       cloneQueues(rn.GetQueueInfo()),
+		Capabilities: rn.CapabilityNames(),
+		Payload:      payload,
+	}
 }
 
 // GenerateReadNoSnpRequest creates a CHI ReadNoSnp transaction request packet.
@@ -227,17 +284,25 @@ func (rn *RequestNode) GenerateReadNoSnpRequest(reqID int64, cycle int, dstSNID 
 
 // Tick may generate request(s) per cycle based on the configured RequestGenerator.
 // Implements unified pipeline phases: generate -> in_queue -> process_queue -> out_queue.
-func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, packetIDs *PacketIDAllocator, slaves []*SlaveNode, txnMgr *TransactionManager) {
+func (rn *RequestNode) executeTick(cycle int, runtime *RequestNodeRuntime) {
+	if runtime == nil {
+		return
+	}
+	cfg := runtime.Config
+	if cfg == nil {
+		return
+	}
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
 
-	if packetIDs != nil {
-		rn.packetIDs = packetIDs
+	if runtime.PacketAllocator != nil {
+		rn.packetIDs = runtime.PacketAllocator
 	}
-	if txnMgr != nil {
-		rn.txnMgr = txnMgr
+	if runtime.TransactionManager != nil {
+		rn.txnMgr = runtime.TransactionManager
 	}
 
+	homeNodeID := runtime.HomeNodeID
 	if homeNodeID < 0 {
 		return
 	}
@@ -253,10 +318,10 @@ func (rn *RequestNode) Tick(cycle int, cfg *Config, homeNodeID int, ch *Link, pa
 		bandwidth = 1
 	}
 
-	rn.generateRequests(cycle, slaves)
+	rn.generateRequests(cycle, runtime.Slaves)
 	rn.releaseToProcess(bandwidth, cycle)
 	rn.processStage(bandwidth, cycle, cfg, homeNodeID)
-	rn.sendFromOutQueue(bandwidth, cycle, cfg, ch, homeNodeID)
+	rn.sendFromOutQueue(bandwidth, cycle, cfg, runtime.Link, homeNodeID)
 }
 
 // CanReceive checks if the RequestNode can receive packets from the given edge.
@@ -281,105 +346,6 @@ func (rn *RequestNode) SetTransactionManager(txnMgr *TransactionManager) {
 // SetPacketIDAllocator assigns the packet ID allocator for generating snoop response packets.
 func (rn *RequestNode) SetPacketIDAllocator(allocator *PacketIDAllocator) {
 	rn.packetIDs = allocator
-}
-
-func (rn *RequestNode) ensureDefaultCapabilities() {
-	if rn.defaultCapsRegistered && rn.policyMgr != nil {
-		return
-	}
-	if rn.broker == nil {
-		return
-	}
-	caps := []capabilities.NodeCapability{}
-	if rn.cacheStore == nil {
-		caps = append(caps, capabilities.NewMESICacheCapability(
-			fmt.Sprintf("request-cache-%d", rn.ID),
-		))
-	}
-	if rn.txnCreator == nil {
-		packetAllocator := func() (int64, error) {
-			if rn.packetIDs == nil {
-				return 0, fmt.Errorf("packet allocator not configured")
-			}
-			return rn.packetIDs.Allocate(), nil
-		}
-		transactionCreator := func(txType core.CHITransactionType, addr uint64, cycle int) *core.Transaction {
-			if rn.txnMgr == nil {
-				return nil
-			}
-			txn := rn.txnMgr.CreateTransaction(txType, addr, cycle)
-			if txn == nil {
-				return nil
-			}
-			return txn
-		}
-		caps = append(caps, capabilities.NewDefaultTransactionCapability(
-			fmt.Sprintf("request-txn-default-%d", rn.ID),
-			packetAllocator,
-			transactionCreator,
-		))
-	}
-	if rn.policyMgr != nil {
-		caps = append(caps,
-			capabilities.NewRoutingCapability(
-				fmt.Sprintf("request-routing-%d", rn.ID),
-				rn.policyMgr,
-			),
-			capabilities.NewFlowControlCapability(
-				fmt.Sprintf("request-flow-%d", rn.ID),
-				rn.policyMgr,
-			),
-		)
-	}
-	for _, cap := range caps {
-		rn.registerCapability(cap)
-	}
-
-	if rn.cacheStore != nil && rn.txnCreator != nil && rn.chiRequest == nil {
-		smCap, err := protochi.NewMESIMidStateMachine(rn.cacheStore)
-		if err != nil {
-			GetLogger().Warnf("RequestNode %d: init CHI state machine failed: %v", rn.ID, err)
-		} else {
-			rn.registerCapability(smCap)
-			handler, ok := rn.cacheCapability.(capabilities.RequestCacheHandler)
-			if !ok {
-				GetLogger().Warnf("RequestNode %d: cache capability missing RequestCacheHandler, skip CHI capability", rn.ID)
-				return
-			}
-			reqCap, err := chicap.NewRequestCapability(chicap.RequestConfig{
-				Creator:      rn.txnCreator,
-				Cache:        rn.cacheStore,
-				StateMachine: smCap,
-				CacheHandler: handler,
-				PacketAllocator: func() (int64, error) {
-					if rn.packetIDs == nil {
-						return 0, fmt.Errorf("packet allocator not configured")
-					}
-					return rn.packetIDs.Allocate(), nil
-				},
-			})
-			if err != nil {
-				GetLogger().Warnf("RequestNode %d: init CHI request capability failed: %v", rn.ID, err)
-			} else {
-				rn.registerCapability(reqCap)
-				rn.chiRequest = reqCap
-			}
-		}
-	}
-
-	if rn.cacheStore != nil && rn.cacheEvictor == nil {
-		lruCap := capabilities.NewLRUEvictionCapability(
-			fmt.Sprintf("request-cache-lru-%d", rn.ID),
-			capabilities.LRUEvictionConfig{
-				Capacity:     rn.cacheCapacity,
-				RequestCache: rn.cacheStore,
-			},
-		)
-		rn.registerCapability(lruCap)
-	}
-	if rn.policyMgr != nil {
-		rn.defaultCapsRegistered = true
-	}
 }
 
 func (rn *RequestNode) registerCapability(cap capabilities.NodeCapability) {
@@ -643,7 +609,7 @@ func (rn *RequestNode) RunRuntime(ctx *RequestNodeRuntime) {
 		}
 		rn.bindings.WaitIncoming(cycle)
 		rn.bindings.SignalReceive(cycle)
-		rn.Tick(cycle, ctx.Config, ctx.HomeNodeID, ctx.Link, ctx.PacketAllocator, ctx.Slaves, ctx.TransactionManager)
+		rn.executeTick(cycle, ctx)
 		rn.bindings.SignalSend(cycle)
 		coord.MarkDone(componentID, cycle)
 	}
@@ -691,9 +657,6 @@ func (rn *RequestNode) handleSnoopRequestLocked(snoopReq *core.Packet, cycle int
 	}
 
 	var snoopResp *core.Packet
-	if rn.chiRequest == nil {
-		rn.ensureDefaultCapabilities()
-	}
 	if rn.chiRequest == nil {
 		GetLogger().Warnf("RequestNode %d: CHI request capability missing, cannot respond to snoop", rn.ID)
 		return
@@ -830,16 +793,10 @@ func (rn *RequestNode) generateRequests(cycle int, slaves []*SlaveNode) {
 			rn.cacheEvictor.Touch(address)
 		}
 
-		var targetSlave *SlaveNode
-		if rn.addrMapper != nil {
-			targetSlave = rn.addrMapper.TargetSlave(address)
+		if result.SlaveIndex < 0 || result.SlaveIndex >= len(slaves) {
+			continue
 		}
-		if targetSlave == nil {
-			if result.SlaveIndex < 0 || result.SlaveIndex >= len(slaves) {
-				continue
-			}
-			targetSlave = slaves[result.SlaveIndex]
-		}
+		targetSlave := slaves[result.SlaveIndex]
 		if targetSlave == nil {
 			continue
 		}
@@ -855,10 +812,6 @@ func (rn *RequestNode) generateRequests(cycle int, slaves []*SlaveNode) {
 		}
 
 		requestCap := rn.chiRequest
-		if requestCap == nil {
-			rn.ensureDefaultCapabilities()
-			requestCap = rn.chiRequest
-		}
 		if requestCap == nil {
 			GetLogger().Warnf("RequestNode %d CHI request capability missing", rn.ID)
 			continue
@@ -940,9 +893,6 @@ func (rn *RequestNode) processStage(limit int, cycle int, cfg *Config, homeNodeI
 		packet := msg.Packet
 		rn.emitProcessHook(packet, cycle, true)
 		targetID := homeNodeID
-		if cfg != nil && cfg.RingEnabled && rn.routerID != 0 {
-			targetID = rn.routerID
-		}
 		latency := cfg.MasterRelayLatency
 
 		switch msg.Kind {
@@ -1009,11 +959,7 @@ func (rn *RequestNode) sendFromOutQueue(limit int, cycle int, cfg *Config, ch *L
 			defaultTarget = msg.DefaultTarget
 		}
 		if defaultTarget < 0 {
-			targetRouter := homeNodeID
-			if cfg != nil && cfg.RingEnabled && rn.routerID != 0 {
-				targetRouter = rn.routerID
-			}
-			defaultTarget = targetRouter
+			defaultTarget = homeNodeID
 		}
 		latency := msg.Latency
 		if latency <= 0 {

@@ -169,6 +169,25 @@ func TestWebServer_ControlEndpoint(t *testing.T) {
 		RequestRateConfig: 0.5,
 		SlaveWeights:      []int{1, 1},
 	}
+	cfg.Graph = &GraphConfig{
+		Nodes: []GraphNode{
+			{ID: "rn0", Capabilities: []string{"requester"}},
+			{ID: "rn1", Capabilities: []string{"requester"}},
+			{ID: "hn0", Capabilities: []string{"home_directory"}},
+			{ID: "sn0", Capabilities: []string{"slave_target"}},
+			{ID: "sn1", Capabilities: []string{"slave_target"}},
+		},
+		Edges: []GraphEdge{
+			{From: "rn0", To: "hn0", Latency: 2, Bandwidth: 1},
+			{From: "hn0", To: "rn0", Latency: 2, Bandwidth: 1},
+			{From: "rn1", To: "hn0", Latency: 2, Bandwidth: 1},
+			{From: "hn0", To: "rn1", Latency: 2, Bandwidth: 1},
+			{From: "hn0", To: "sn0", Latency: 1, Bandwidth: 1},
+			{From: "sn0", To: "hn0", Latency: 1, Bandwidth: 1},
+			{From: "hn0", To: "sn1", Latency: 1, Bandwidth: 1},
+			{From: "sn1", To: "hn0", Latency: 1, Bandwidth: 1},
+		},
+	}
 	cfgJSON, _ := json.Marshal(map[string]interface{}{
 		"type":   "reset",
 		"config": cfg,

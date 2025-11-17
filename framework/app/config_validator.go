@@ -11,14 +11,11 @@ func ValidateConfig(cfg *Config) error {
 		return errors.New("config is nil")
 	}
 
-	if cfg.NumMasters <= 0 {
-		return fmt.Errorf("NumMasters must be positive, got %d", cfg.NumMasters)
+	if cfg.Graph == nil || len(cfg.Graph.Nodes) == 0 {
+		return errors.New("graph configuration is required (cfg.Graph.nodes must be non-empty)")
 	}
-	if cfg.NumSlaves <= 0 {
-		return fmt.Errorf("NumSlaves must be positive, got %d", cfg.NumSlaves)
-	}
-	if cfg.NumRelays < 0 {
-		return fmt.Errorf("NumRelays must be non-negative, got %d", cfg.NumRelays)
+	if len(cfg.Graph.Edges) == 0 {
+		return errors.New("graph configuration must define at least one link")
 	}
 	if cfg.TotalCycles <= 0 {
 		return fmt.Errorf("TotalCycles must be positive, got %d", cfg.TotalCycles)
@@ -28,13 +25,6 @@ func ValidateConfig(cfg *Config) error {
 	}
 	if cfg.DispatchQueueCapacity == -1 {
 		return errors.New("DispatchQueueCapacity cannot be -1")
-	}
-
-	if cfg.SlaveWeights == nil || len(cfg.SlaveWeights) != cfg.NumSlaves {
-		cfg.SlaveWeights = make([]int, cfg.NumSlaves)
-		for i := range cfg.SlaveWeights {
-			cfg.SlaveWeights[i] = 1
-		}
 	}
 
 	if cfg.BandwidthLimit <= 0 {
@@ -52,9 +42,6 @@ func ValidateConfig(cfg *Config) error {
 	}
 	if cfg.HomeCacheCapacity <= 0 {
 		cfg.HomeCacheCapacity = DefaultHomeCacheCapacity
-	}
-	if cfg.RingInterleaveStride <= 0 {
-		cfg.RingInterleaveStride = DefaultRingInterleaveStride
 	}
 
 	return nil

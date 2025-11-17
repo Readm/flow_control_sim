@@ -46,23 +46,8 @@ func main() {
 	}
 
 	if cfg == nil {
-		// Fallback to default if GetConfigByName fails or no configs available
-		cfg = &app.Config{
-			NumMasters:         3,
-			NumSlaves:          2,
-			NumRelays:          1,
-			TotalCycles:        1000,
-			MasterRelayLatency: 2,
-			RelayMasterLatency: 2,
-			RelaySlaveLatency:  1,
-			SlaveRelayLatency:  1,
-			SlaveProcessRate:   1,
-			RequestRateConfig:  0.8,
-			BandwidthLimit:     1,
-			SlaveWeights:       []int{1, 1},
-			Headless:           *headless,
-			VisualMode:         "web",
-		}
+		fmt.Println("no configuration available; please provide a JSON topology via --config")
+		return
 	}
 
 	if *traceEvents {

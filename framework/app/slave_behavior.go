@@ -7,7 +7,7 @@ import (
 
 	"github.com/Readm/flow_sim/framework/core"
 	"github.com/Readm/flow_sim/framework/core/queue"
-	"github.com/Readm/flow_sim/framework/hook"
+	hooks "github.com/Readm/flow_sim/framework/hook"
 	"github.com/Readm/flow_sim/framework/plugins/capabilities"
 	chicap "github.com/Readm/flow_sim/framework/plugins/capabilities/chi"
 )
@@ -20,7 +20,6 @@ type SlaveNode struct {
 	pipeline    *PacketPipeline
 	txnMgr      *TransactionManager // for recording packet events
 	broker      *hooks.PluginBroker
-	routerID    int
 
 	chiSlave chicap.SlaveCapability
 
@@ -33,9 +32,9 @@ type SlaveNode struct {
 	mu       sync.Mutex
 	bindings *NodeCycleBindings
 
-	capabilities          []capabilities.NodeCapability
-	capabilityRegistry    map[string]struct{}
-	defaultCapsRegistered bool
+	capabilities       []capabilities.NodeCapability
+	capabilityRegistry map[string]struct{}
+	runtime            *SlaveNodeRuntime
 }
 
 type slavePacketRecorder struct {
@@ -78,6 +77,24 @@ func NewSlaveNode(id int, rate int) *SlaveNode {
 	return sn
 }
 
+// Init wires runtime dependencies for NodeBehavior usage.
+func (sn *SlaveNode) Init(ctx *BehaviorContext) error {
+	if ctx == nil {
+		return fmt.Errorf("slave node %d missing behavior context", sn.ID)
+	}
+	sn.runtime = &SlaveNodeRuntime{
+		PacketAllocator: ctx.PacketAllocator,
+		Link:            ctx.Link,
+	}
+	if ctx.PluginBroker != nil {
+		sn.SetPluginBroker(ctx.PluginBroker)
+	}
+	if ctx.TransactionManager != nil {
+		sn.SetTransactionManager(ctx.TransactionManager)
+	}
+	return nil
+}
+
 func (sn *SlaveNode) makeStageMutator(stage pipelineStageName) queue.MutateFunc {
 	return func(length int, capacity int) {
 		sn.UpdateQueueState(string(stage), length, capacity)
@@ -85,6 +102,16 @@ func (sn *SlaveNode) makeStageMutator(stage pipelineStageName) queue.MutateFunc 
 			sn.MaxQueueLength = length
 		}
 	}
+}
+
+// ID returns the node identifier.
+func (sn *SlaveNode) NodeID() int {
+	return sn.Node.ID
+}
+
+// NodeType returns the node type.
+func (sn *SlaveNode) NodeType() core.NodeType {
+	return sn.Node.Type
 }
 
 func (sn *SlaveNode) enqueueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
@@ -122,20 +149,20 @@ func (sn *SlaveNode) dequeueHook(entryID queue.EntryID, msg *PipelineMessage, cy
 // SetTransactionManager sets the transaction manager for event recording
 func (sn *SlaveNode) SetTransactionManager(txnMgr *TransactionManager) {
 	sn.txnMgr = txnMgr
-	sn.ensureDefaultCapabilities()
 }
 
 // SetPluginBroker assigns the hook broker for process lifecycle callbacks.
 func (sn *SlaveNode) SetPluginBroker(b *hooks.PluginBroker) {
 	sn.broker = b
-	sn.ensureDefaultCapabilities()
 }
 
-// SetRouterID configures the router used for forwarding responses when ring is enabled.
-func (sn *SlaveNode) SetRouterID(id int) {
-	sn.mu.Lock()
-	defer sn.mu.Unlock()
-	sn.routerID = id
+// BindRelay configures the default relay target.
+func (sn *SlaveNode) BindRelay(targetID int, latency int) {
+	if sn.runtime == nil {
+		sn.runtime = &SlaveNodeRuntime{}
+	}
+	sn.runtime.RelayID = targetID
+	sn.runtime.RelayLatency = latency
 }
 
 func (sn *SlaveNode) CapabilityNames() []string {
@@ -144,69 +171,22 @@ func (sn *SlaveNode) CapabilityNames() []string {
 	return capabilityNameList(sn.capabilities)
 }
 
-func (sn *SlaveNode) ensureDefaultCapabilities() {
-	if sn.defaultCapsRegistered {
-		return
+// Snapshot returns visualization data for the slave.
+func (sn *SlaveNode) Snapshot() NodeSnapshot {
+	sn.mu.Lock()
+	defer sn.mu.Unlock()
+	payload := map[string]any{
+		"processed": sn.ProcessedCount,
+		"maxQueue":  sn.MaxQueueLength,
 	}
-	if sn.broker == nil {
-		return
+	return NodeSnapshot{
+		ID:           sn.ID,
+		Type:         sn.Type,
+		Label:        "",
+		Queues:       cloneQueues(sn.GetQueueInfo()),
+		Capabilities: sn.CapabilityNames(),
+		Payload:      payload,
 	}
-	before := func(ctx *hooks.ProcessContext) error {
-		if sn.txnMgr == nil || ctx == nil || ctx.Packet == nil || ctx.Packet.TransactionID == 0 {
-			return nil
-		}
-		event := &PacketEvent{
-			TransactionID:  ctx.Packet.TransactionID,
-			PacketID:       ctx.Packet.ID,
-			ParentPacketID: ctx.Packet.ParentPacketID,
-			NodeID:         ctx.NodeID,
-			EventType:      PacketProcessingStart,
-			Cycle:          ctx.Cycle,
-			EdgeKey:        nil,
-		}
-		sn.txnMgr.RecordPacketEvent(event)
-		return nil
-	}
-	after := func(ctx *hooks.ProcessContext) error {
-		if sn.txnMgr == nil || ctx == nil || ctx.Packet == nil || ctx.Packet.TransactionID == 0 {
-			return nil
-		}
-		event := &PacketEvent{
-			TransactionID:  ctx.Packet.TransactionID,
-			PacketID:       ctx.Packet.ID,
-			ParentPacketID: ctx.Packet.ParentPacketID,
-			NodeID:         ctx.NodeID,
-			EventType:      PacketProcessingEnd,
-			Cycle:          ctx.Cycle,
-			EdgeKey:        nil,
-		}
-		sn.txnMgr.RecordPacketEvent(event)
-		return nil
-	}
-	cap := capabilities.NewHookCapability(
-		fmt.Sprintf("slave-processing-%d", sn.ID),
-		hooks.PluginCategoryInstrumentation,
-		"default slave processing instrumentation",
-		hooks.HookBundle{
-			BeforeProcess: []hooks.BeforeProcessHook{before},
-			AfterProcess:  []hooks.AfterProcessHook{after},
-		},
-	)
-	sn.registerCapability(cap)
-	if sn.chiSlave == nil {
-		slaveCap, err := chicap.NewSlaveCapability(chicap.SlaveConfig{
-			Name:           fmt.Sprintf("chi-slave-%d", sn.ID),
-			NodeID:         sn.ID,
-			Recorder:       slavePacketRecorder{tm: sn.txnMgr},
-			SetFinalTarget: sn.setFinalTargetMetadata,
-		})
-		if err != nil {
-			GetLogger().Warnf("SlaveNode %d: init CHI slave capability failed: %v", sn.ID, err)
-		} else {
-			sn.registerCapability(slaveCap)
-		}
-	}
-	sn.defaultCapsRegistered = true
 }
 
 func (sn *SlaveNode) registerCapability(cap capabilities.NodeCapability) {
@@ -297,8 +277,17 @@ func (sn *SlaveNode) EnqueueRequest(p *Packet) {
 	}
 }
 
+// Tick implements the NodeBehavior interface.
+func (sn *SlaveNode) Tick(cycle int) {
+	if sn.runtime == nil {
+		return
+	}
+	responses := sn.executeTick(cycle, sn.runtime.PacketAllocator)
+	sn.forwardResponses(responses, cycle, sn.runtime)
+}
+
 // Tick processes up to ProcessRate requests from the pipeline and returns generated responses.
-func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
+func (sn *SlaveNode) executeTick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 	sn.mu.Lock()
 	defer sn.mu.Unlock()
 
@@ -320,6 +309,26 @@ func (sn *SlaveNode) Tick(cycle int, packetIDs *PacketIDAllocator) []*Packet {
 
 	responses := sn.flushOutQueue(cycle)
 	return responses
+}
+
+func (sn *SlaveNode) forwardResponses(responses []*Packet, cycle int, runtime *SlaveNodeRuntime) {
+	if runtime == nil || runtime.Link == nil || len(responses) == 0 {
+		return
+	}
+	targetID := runtime.RelayID
+	latency := runtime.RelayLatency
+	if targetID < 0 {
+		return
+	}
+	if latency <= 0 {
+		latency = 1
+	}
+	for _, resp := range responses {
+		if resp == nil {
+			continue
+		}
+		runtime.Link.Send(resp, sn.ID, targetID, cycle, latency)
+	}
 }
 
 func (sn *SlaveNode) releaseToProcess(limit int, cycle int) {
@@ -481,8 +490,6 @@ type SlaveNodeRuntime struct {
 	Link            *Link
 	RelayID         int
 	RelayLatency    int
-	RouterID        int
-	RouterLatency   int
 }
 
 // RunRuntime executes the slave node logic driven by the coordinator.
@@ -503,26 +510,8 @@ func (sn *SlaveNode) RunRuntime(ctx *SlaveNodeRuntime) {
 		}
 		sn.bindings.WaitIncoming(cycle)
 		sn.bindings.SignalReceive(cycle)
-		responses := sn.Tick(cycle, ctx.PacketAllocator)
-		for _, resp := range responses {
-			if resp == nil {
-				continue
-			}
-			targetID := ctx.RelayID
-			latency := ctx.RelayLatency
-			if ctx.RouterID > 0 {
-				targetID = ctx.RouterID
-				if ctx.RouterLatency > 0 {
-					latency = ctx.RouterLatency
-				}
-			}
-			if latency <= 0 {
-				latency = 1
-			}
-			if ctx.Link != nil && targetID >= 0 {
-				ctx.Link.Send(resp, sn.ID, targetID, cycle, latency)
-			}
-		}
+		responses := sn.executeTick(cycle, ctx.PacketAllocator)
+		sn.forwardResponses(responses, cycle, ctx)
 		sn.bindings.SignalSend(cycle)
 		coord.MarkDone(componentID, cycle)
 	}

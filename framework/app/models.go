@@ -23,7 +23,6 @@ const (
 	DefaultDispatchQueueCapacity = 1024 // Default capacity for dispatch queue
 	DefaultRequestCacheCapacity  = 64   // Default number of cache lines for RequestNode
 	DefaultHomeCacheCapacity     = 128  // Default number of cache lines for HomeNode
-	DefaultRingInterleaveStride  = 1    // Adjacent cache lines map to different slaves
 
 	// Link and bandwidth constants
 	DefaultBandwidthLimit = 1 // Default maximum packets per slot in pipeline
@@ -144,10 +143,6 @@ type Config struct {
 	RequestCacheCapacity int // max cache lines per RequestNode (LRU eviction), <=0 uses default
 	HomeCacheCapacity    int // max cache lines for HomeNode (LRU eviction), <=0 uses default
 
-	// Ring topology configuration
-	RingEnabled          bool // enable ring routing/topology
-	RingInterleaveStride int  // cache line stride for slave interleave (>=1)
-
 	// visualization settings
 	Headless   bool   // true to run without visualization
 	VisualMode string // "gui" | "web" | "none" (default: "gui" if Headless is false)
@@ -163,6 +158,33 @@ type Config struct {
 	MaxPacketHistorySize  int    // Maximum packet history size (0 = unlimited, default: 0)
 	HistoryOverflowMode   string // "circular" or "initial" (default: "circular")
 	MaxTransactionHistory int    // Maximum number of transactions to keep history for (default: 1000)
+
+	// Graph describes an optional arbitrary topology graph.
+	Graph *GraphConfig
+}
+
+// GraphConfig captures optional arbitrary directed graph information.
+type GraphConfig struct {
+	Nodes []GraphNode
+	Edges []GraphEdge
+}
+
+// GraphNode represents a node in the topology graph.
+type GraphNode struct {
+	ID           string
+	Label        string
+	Capabilities []string
+	Metadata     map[string]string
+	Position     *Position
+}
+
+// GraphEdge represents a directed edge with latency/bandwidth attributes.
+type GraphEdge struct {
+	From      string
+	To        string
+	Latency   int
+	Bandwidth int
+	Metadata  map[string]string
 }
 
 // NodeIDAllocator provides simple incremental ids for nodes.
@@ -205,7 +227,14 @@ func computeConfigHash(cfg *Config) string {
 		return ""
 	}
 	// Create a string representation of key config fields that affect topology
-	hashInput := fmt.Sprintf("%d-%d-%d-%d-%d-%d-%d-%d-%d",
+	graphNodeCount := 0
+	graphEdgeCount := 0
+	if cfg.Graph != nil {
+		graphNodeCount = len(cfg.Graph.Nodes)
+		graphEdgeCount = len(cfg.Graph.Edges)
+	}
+
+	hashInput := fmt.Sprintf("%d-%d-%d-%d-%d-%d-%d-%d-%d-%d-%d",
 		cfg.NumMasters,
 		cfg.NumSlaves,
 		cfg.NumRelays,
@@ -214,7 +243,9 @@ func computeConfigHash(cfg *Config) string {
 		cfg.RelaySlaveLatency,
 		cfg.SlaveRelayLatency,
 		cfg.BandwidthLimit,
-		len(cfg.SlaveWeights))
+		len(cfg.SlaveWeights),
+		graphNodeCount,
+		graphEdgeCount)
 
 	// Compute SHA256 hash
 	hash := sha256.Sum256([]byte(hashInput))

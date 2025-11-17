@@ -5,6 +5,45 @@ import (
 	"time"
 )
 
+func buildBenchmarkGraph(numMasters, numSlaves, bandwidth int, masterToHome, homeToMaster, homeToSlave, slaveToHome int) *GraphConfig {
+	nodes := make([]GraphNode, 0, numMasters+numSlaves+1)
+	for i := 0; i < numMasters; i++ {
+		nodes = append(nodes, GraphNode{
+			ID:           fmt.Sprintf("rn%d", i),
+			Label:        fmt.Sprintf("Request %d", i),
+			Capabilities: []string{"requester"},
+		})
+	}
+	nodes = append(nodes, GraphNode{
+		ID:           "hn0",
+		Label:        "Home",
+		Capabilities: []string{"home_directory"},
+	})
+	for i := 0; i < numSlaves; i++ {
+		nodes = append(nodes, GraphNode{
+			ID:           fmt.Sprintf("sn%d", i),
+			Label:        fmt.Sprintf("Slave %d", i),
+			Capabilities: []string{"slave_target"},
+		})
+	}
+	edges := make([]GraphEdge, 0, (numMasters+numSlaves)*2)
+	for i := 0; i < numMasters; i++ {
+		id := fmt.Sprintf("rn%d", i)
+		edges = append(edges,
+			GraphEdge{From: id, To: "hn0", Latency: masterToHome, Bandwidth: bandwidth},
+			GraphEdge{From: "hn0", To: id, Latency: homeToMaster, Bandwidth: bandwidth},
+		)
+	}
+	for i := 0; i < numSlaves; i++ {
+		id := fmt.Sprintf("sn%d", i)
+		edges = append(edges,
+			GraphEdge{From: "hn0", To: id, Latency: homeToSlave, Bandwidth: bandwidth},
+			GraphEdge{From: id, To: "hn0", Latency: slaveToHome, Bandwidth: bandwidth},
+		)
+	}
+	return &GraphConfig{Nodes: nodes, Edges: edges}
+}
+
 // BenchmarkResult stores performance test results
 type BenchmarkResult struct {
 	TotalCycles      int
@@ -60,6 +99,15 @@ func RunBenchmarkSuite() {
 		Headless:           true,
 		VisualMode:         "none",
 	}
+	baseCfg.Graph = buildBenchmarkGraph(
+		baseCfg.NumMasters,
+		baseCfg.NumSlaves,
+		baseCfg.BandwidthLimit,
+		baseCfg.MasterRelayLatency,
+		baseCfg.RelayMasterLatency,
+		baseCfg.RelaySlaveLatency,
+		baseCfg.SlaveRelayLatency,
+	)
 
 	// Test with different cycle counts to get accurate measurements
 	testSizes := []int{10000, 50000, 100000}

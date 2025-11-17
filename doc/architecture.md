@@ -10,7 +10,7 @@
   - `framework/hook/`：Hook 注册中心、PluginBroker。
   - `framework/plugins/`：内置能力、策略封装与用户级插件（cache、directory、visualization、incentives 等）。
   - `framework/app/`：模拟器、节点实现、Web API、可视化桥接与 `framework/app/web/static` 前端资源。
-  - `configs/`：集中管理所有 Go 代码形式的拓扑/能力配置，通过 `configs.Register` 注册到 Provider。
+  - `configs/`：集中管理所有 JSON 拓扑/能力配置（`configs/json/*.json` + loader），通过 `configs.Register` 注册到 Provider。
   - `ref/`：与核心逻辑解耦的参考资料（gem5、RAG、VectorDB、示例脚本等）。
   - `main.go`：命令行入口，根据参数装配 `framework/app`、选择配置并启动模拟。
 
@@ -54,6 +54,20 @@
 - **能力注入**：默认策略以 Capability 的形式注册为 Hook，形成“核心 -> Hook -> 能力”链路，方便替换或禁用。
 - **原子能力**：缓存（`NewCacheCapability` 及其包装 `NewMESICacheCapability` / `NewHomeCacheCapability`）、目录（`NewDirectoryCapability`）与事务（`NewTransactionCapability`）均通过能力封装，节点仅保存接口引用，禁止直接维护内部 map。
 - **外部桥接**：若需要对接外部模拟器或可视化系统，应通过 `OnAfterProcess`、`OnAfterSend` 等 Hook 输出事件，而不是直接耦合在核心代码中。
+
+### Graph capability → NodeCapability 映射（2025 版）
+
+| Graph capability | 注入的 NodeCapability / 行为 | 说明 |
+| --- | --- | --- |
+| `requester` | • Transaction factory（`capabilities.TransactionCapability`）<br>• Request cache（`capabilities.NewMESICacheCapability`）<br>• CHI 请求构造（`capabilities/chi.RequestCapability`）<br>• 基础 instrumentation（记录 enqueue/dequeue） | 负责请求生成、缓存管理、Hook 触发；`params` 可覆盖 request rate、cache 容量等 |
+| `home_directory` | • Home cache（`capabilities.NewHomeCacheCapability`）<br>• Directory（`capabilities.NewDirectoryCapability`）<br>• CHI Home 能力（`capabilities/chi.HomeCapability`）<br>• 路由/发送 Hook | 维持目录与 snoop 流程，可从 `params.cache.*` 调整容量 |
+| `slave_target` | • CHI Slave 能力（`capabilities/chi.SlaveCapability`）<br>• Process instrumentation Hook | `params.process_rate` 控制吞吐，默认生成 CompData 响应 |
+| `router` / `ring_router` | • Routing / FlowControl 能力（`capabilities.NewRoutingCapability`、`capabilities.NewFlowControlCapability`）<br>• 可选 instrumentation Hook | Graph 必须显式声明 router 节点与边，构建器不再自动挂接默认 ring |
+| `cache:<tier>`（可选） | • tier 对应的 cache 能力，覆盖默认配置 | 例如 `cache:L1`、`cache:L3` 用于细化容量和策略 |
+| `directory`（可选） | • 附加目录能力或显式标记 | 与 `home_directory` 组合时仅作为声明 |
+| `policy:<name>`（可选） | • 指定路由/策略能力，包装 `policy.Manager` | 支持节点粒度的策略选择 |
+
+> 以上映射由 `CapabilityCatalog` 维护：拓扑构建阶段根据 Graph node 的 `capabilities` / `params` 决定装配的能力集合，节点层只负责加载与触发 Hook。
 
 ## 约束摘要
 
