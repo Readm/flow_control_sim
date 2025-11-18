@@ -745,6 +745,21 @@ func (rn *RequestNode) stageQueue(stage pipelineStageName) *queue.StageQueue[*Pi
 	return rn.pipeline.queue(stage)
 }
 
+func findSlaveByGraphID(slaves []*SlaveNode, graphID string) *SlaveNode {
+	if graphID == "" {
+		return nil
+	}
+	for _, sl := range slaves {
+		if sl == nil {
+			continue
+		}
+		if sl.GraphID == graphID {
+			return sl
+		}
+	}
+	return nil
+}
+
 func (rn *RequestNode) inQueue() *queue.StageQueue[*PipelineMessage] {
 	return rn.stageQueue(pipelineStageIn)
 }
@@ -788,10 +803,16 @@ func (rn *RequestNode) generateRequests(cycle int, slaves []*SlaveNode) {
 			rn.cacheEvictor.Touch(address)
 		}
 
-		if result.SlaveIndex < 0 || result.SlaveIndex >= len(slaves) {
-			continue
+		var targetSlave *SlaveNode
+		if result.Target != "" {
+			targetSlave = findSlaveByGraphID(slaves, result.Target)
 		}
-		targetSlave := slaves[result.SlaveIndex]
+		if targetSlave == nil {
+			if result.SlaveIndex < 0 || result.SlaveIndex >= len(slaves) {
+				continue
+			}
+			targetSlave = slaves[result.SlaveIndex]
+		}
 		if targetSlave == nil {
 			continue
 		}

@@ -70,19 +70,13 @@ func TestTopologyJSONLoader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToAppConfig: %v", err)
 	}
-	if cfg.NumMasters != 1 || cfg.NumSlaves != 1 {
-		t.Fatalf("unexpected node counts: masters=%d slaves=%d", cfg.NumMasters, cfg.NumSlaves)
-	}
 	if cfg.TotalCycles != 120 {
 		t.Fatalf("unexpected total cycles %d", cfg.TotalCycles)
 	}
-	if cfg.SlaveProcessRate != 2 {
-		t.Fatalf("unexpected slave process rate %d", cfg.SlaveProcessRate)
+	if cfg.NodeSchedules == nil || len(cfg.NodeSchedules["rn0"][0]) != 1 {
+		t.Fatalf("schedule not parsed: %#v", cfg.NodeSchedules)
 	}
-	if cfg.ScheduleConfig == nil || len(cfg.ScheduleConfig[0][0]) != 1 {
-		t.Fatalf("schedule not parsed: %#v", cfg.ScheduleConfig)
-	}
-	item := cfg.ScheduleConfig[0][0][0]
+	item := cfg.NodeSchedules["rn0"][0][0]
 	if item.TransactionType != app.CHITxnReadOnce {
 		t.Fatalf("transaction type mismatch: %v", item.TransactionType)
 	}

@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 )
 
@@ -93,17 +94,12 @@ func (b *graphTopologyBuilder) instantiatePrimaryNodes() error {
 		return fmt.Errorf("graph must include exactly one home_directory node (found %d)", homesExpected)
 	}
 
-	b.cfg.NumMasters = mastersExpected
-	b.cfg.NumSlaves = slavesExpected
-	b.cfg.NumRelays = homesExpected
-	b.ensureSlaveWeights(slavesExpected)
-
 	masterIndex := 0
 	for _, node := range b.cfg.Graph.Nodes {
 		role := classifyGraphRole(node.Capabilities)
 		switch role {
 		case graphRoleRequester:
-			generator := b.selectRequestGenerator(masterIndex)
+			generator := b.selectRequestGenerator(node)
 			reqNode := NewRequestNode(b.idAlloc.Allocate(), masterIndex, generator)
 			reqNode.SetCacheCapacity(b.cfg.RequestCacheCapacity)
 			b.registerNode(node, reqNode.ID, reqNode, role)
@@ -119,10 +115,7 @@ func (b *graphTopologyBuilder) instantiatePrimaryNodes() error {
 			b.registerNode(node, homeNode.ID, homeNode, role)
 			b.artifacts.Relay = homeNode
 		case graphRoleSlave:
-			processRate := b.cfg.SlaveProcessRate
-			if processRate < 0 {
-				processRate = 1
-			}
+			processRate := b.selectProcessRate(node)
 			slaveNode := NewSlaveNode(b.idAlloc.Allocate(), processRate)
 			b.registerNode(node, slaveNode.ID, slaveNode, role)
 			b.artifacts.Slaves = append(b.artifacts.Slaves, slaveNode)
@@ -140,11 +133,11 @@ func (b *graphTopologyBuilder) instantiatePrimaryNodes() error {
 	if b.artifacts.Relay == nil {
 		return fmt.Errorf("graph must include one home_directory node")
 	}
-	if len(b.artifacts.Masters) != mastersExpected {
-		return fmt.Errorf("expected %d requester nodes, got %d", mastersExpected, len(b.artifacts.Masters))
+	if len(b.artifacts.Masters) == 0 {
+		return fmt.Errorf("no requester nodes instantiated")
 	}
-	if len(b.artifacts.Slaves) != slavesExpected {
-		return fmt.Errorf("expected %d slave nodes, got %d", slavesExpected, len(b.artifacts.Slaves))
+	if len(b.artifacts.Slaves) == 0 {
+		return fmt.Errorf("no slave nodes instantiated")
 	}
 	return nil
 }
@@ -188,48 +181,51 @@ func (b *graphTopologyBuilder) recordProfile(nodeID int, role graphNodeRole, met
 	}
 }
 
-func (b *graphTopologyBuilder) selectRequestGenerator(index int) RequestGenerator {
-	if len(b.cfg.RequestGenerators) > index && b.cfg.RequestGenerators[index] != nil {
-		return b.cfg.RequestGenerators[index]
+func (b *graphTopologyBuilder) selectRequestGenerator(node GraphNode) RequestGenerator {
+	if b.cfg.NodeSchedules != nil {
+		if schedule, ok := b.cfg.NodeSchedules[node.ID]; ok && len(schedule) > 0 {
+			return NewScheduleGenerator(cloneNodeSchedule(schedule))
+		}
 	}
 	if b.cfg.RequestGenerator != nil {
 		return b.cfg.RequestGenerator
-	}
-	if len(b.cfg.ScheduleConfig) > 0 {
-		return NewScheduleGenerator(b.cfg.ScheduleConfig)
 	}
 	rate := b.cfg.RequestRateConfig
 	if rate <= 0 {
 		rate = 0.5
 	}
-	slaveWeights := b.cfg.SlaveWeights
-	if len(slaveWeights) == 0 {
-		slaveWeights = make([]int, len(b.artifacts.Slaves))
-		for i := range slaveWeights {
-			slaveWeights[i] = 1
+	if params := extractParams(node.Metadata); params != nil {
+		if override, ok := params["request_rate"]; ok {
+			if value, err := strconv.ParseFloat(override, 64); err == nil && value >= 0 && value <= 1 {
+				rate = value
+			}
 		}
-		b.cfg.SlaveWeights = slaveWeights
 	}
-	return NewProbabilityGenerator(rate, slaveWeights, b.rng)
+	return NewProbabilityGenerator(rate, nil, b.rng)
 }
 
-func (b *graphTopologyBuilder) ensureSlaveWeights(expected int) {
-	if expected <= 0 {
-		b.cfg.SlaveWeights = nil
-		return
-	}
-	if len(b.cfg.SlaveWeights) == expected {
-		return
-	}
-	weights := make([]int, expected)
-	for i := range weights {
-		if i < len(b.cfg.SlaveWeights) && b.cfg.SlaveWeights[i] > 0 {
-			weights[i] = b.cfg.SlaveWeights[i]
-		} else {
-			weights[i] = 1
+func (b *graphTopologyBuilder) selectProcessRate(node GraphNode) int {
+	if params := extractParams(node.Metadata); params != nil {
+		if raw, ok := params["process_rate"]; ok {
+			if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+				return value
+			}
 		}
 	}
-	b.cfg.SlaveWeights = weights
+	return 1
+}
+
+func cloneNodeSchedule(schedule map[int][]ScheduleItem) map[int][]ScheduleItem {
+	if len(schedule) == 0 {
+		return nil
+	}
+	cloned := make(map[int][]ScheduleItem, len(schedule))
+	for cycle, items := range schedule {
+		copied := make([]ScheduleItem, len(items))
+		copy(copied, items)
+		cloned[cycle] = copied
+	}
+	return cloned
 }
 
 func (b *graphTopologyBuilder) buildEdges() error {

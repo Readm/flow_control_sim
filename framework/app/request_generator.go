@@ -10,6 +10,7 @@ import (
 type RequestGenerationResult struct {
 	ShouldGenerate  bool
 	SlaveIndex      int
+	Target          string
 	TransactionType core.CHITransactionType
 	Address         uint64 // 0 means auto-increment
 	DataSize        int    // 0 means default (DefaultCacheLineSize)
@@ -61,7 +62,15 @@ func (pg *ProbabilityGenerator) ShouldGenerate(cycle int, masterIndex int, numSl
 		return nil
 	}
 
-	slaveIndex := weightedChoose(pg.rng, pg.SlaveWeights)
+	var slaveIndex int
+	if len(pg.SlaveWeights) == 0 {
+		if numSlaves <= 0 {
+			return nil
+		}
+		slaveIndex = pg.rng.Intn(numSlaves)
+	} else {
+		slaveIndex = weightedChoose(pg.rng, pg.SlaveWeights)
+	}
 	if slaveIndex < 0 || slaveIndex >= numSlaves {
 		return nil
 	}
@@ -78,85 +87,65 @@ func (pg *ProbabilityGenerator) ShouldGenerate(cycle int, masterIndex int, numSl
 // ScheduleItem defines a single request in the schedule
 type ScheduleItem struct {
 	SlaveIndex      int
+	Target          string
 	TransactionType core.CHITransactionType
 	Address         uint64 // 0 means auto-increment
 	DataSize        int    // 0 means default (DefaultCacheLineSize)
 }
 
 // ScheduleGenerator implements deterministic request generation based on a schedule
-// Schedule format: cycle -> masterIndex -> []ScheduleItem
-// Supports multiple requests per cycle per master
+// Schedule format: cycle -> []ScheduleItem (per requester node)
 type ScheduleGenerator struct {
 	BaseGenerator
-	schedule         map[int]map[int][]ScheduleItem // cycle -> masterIndex -> []ScheduleItem
-	originalSchedule map[int]map[int][]ScheduleItem // backup for Reset()
-	currentCycle     int
+	schedule         map[int][]ScheduleItem
+	originalSchedule map[int][]ScheduleItem
 }
 
 // NewScheduleGenerator creates a new schedule-based request generator
-func NewScheduleGenerator(schedule map[int]map[int][]ScheduleItem) *ScheduleGenerator {
-	// Deep copy schedule for reset capability
-	originalSchedule := make(map[int]map[int][]ScheduleItem)
-	for cycle, masterMap := range schedule {
-		originalSchedule[cycle] = make(map[int][]ScheduleItem)
-		for masterIdx, items := range masterMap {
-			itemsCopy := make([]ScheduleItem, len(items))
-			copy(itemsCopy, items)
-			originalSchedule[cycle][masterIdx] = itemsCopy
-		}
+func NewScheduleGenerator(schedule map[int][]ScheduleItem) *ScheduleGenerator {
+	original := make(map[int][]ScheduleItem, len(schedule))
+	for cycle, items := range schedule {
+		copied := make([]ScheduleItem, len(items))
+		copy(copied, items)
+		original[cycle] = copied
 	}
-
+	cloned := make(map[int][]ScheduleItem, len(schedule))
+	for cycle, items := range schedule {
+		copied := make([]ScheduleItem, len(items))
+		copy(copied, items)
+		cloned[cycle] = copied
+	}
 	return &ScheduleGenerator{
-		schedule:         schedule,
-		originalSchedule: originalSchedule,
-		currentCycle:     0,
+		schedule:         cloned,
+		originalSchedule: original,
 	}
 }
 
 func (sg *ScheduleGenerator) ShouldGenerate(cycle int, masterIndex int, numSlaves int) []RequestGenerationResult {
-	sg.currentCycle = cycle
-
-	cycleSchedule, exists := sg.schedule[cycle]
-	if !exists {
+	items, exists := sg.schedule[cycle]
+	if !exists || len(items) == 0 {
 		return nil
 	}
-
-	masterSchedule, exists := cycleSchedule[masterIndex]
-	if !exists || len(masterSchedule) == 0 {
-		return nil
-	}
-
-	// Return all items for this master at this cycle
-	results := make([]RequestGenerationResult, 0, len(masterSchedule))
-	for _, item := range masterSchedule {
+	results := make([]RequestGenerationResult, 0, len(items))
+	for _, item := range items {
 		results = append(results, RequestGenerationResult{
 			ShouldGenerate:  true,
 			SlaveIndex:      item.SlaveIndex,
+			Target:          item.Target,
 			TransactionType: item.TransactionType,
 			Address:         item.Address,
 			DataSize:        item.DataSize,
 		})
 	}
-
-	// Remove consumed items from schedule
-	delete(sg.schedule[cycle], masterIndex)
-	if len(sg.schedule[cycle]) == 0 {
-		delete(sg.schedule, cycle)
-	}
-
+	delete(sg.schedule, cycle)
 	return results
 }
 
 func (sg *ScheduleGenerator) Reset() {
-	// Restore original schedule
-	sg.schedule = make(map[int]map[int][]ScheduleItem)
-	for cycle, masterMap := range sg.originalSchedule {
-		sg.schedule[cycle] = make(map[int][]ScheduleItem)
-		for masterIdx, items := range masterMap {
-			itemsCopy := make([]ScheduleItem, len(items))
-			copy(itemsCopy, items)
-			sg.schedule[cycle][masterIdx] = itemsCopy
-		}
+	sg.schedule = make(map[int][]ScheduleItem, len(sg.originalSchedule))
+	for cycle, items := range sg.originalSchedule {
+		copied := make([]ScheduleItem, len(items))
+		copy(copied, items)
+		sg.schedule[cycle] = copied
 	}
-	sg.currentCycle = 0
 }

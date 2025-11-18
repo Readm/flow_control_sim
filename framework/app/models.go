@@ -91,66 +91,39 @@ type PluginConfig struct {
 
 // Config holds simulation configuration values.
 type Config struct {
-	NumMasters int
-	NumSlaves  int
-	NumRelays  int // first phase = 1
-
 	TotalCycles int
 
-	// fixed one-way latencies in cycles
-	MasterRelayLatency int // Master -> Relay
-	RelayMasterLatency int // Relay  -> Master
-	RelaySlaveLatency  int // Relay  -> Slave
-	SlaveRelayLatency  int // Slave  -> Relay
+	// Request generation configuration
+	RequestGenerator  RequestGenerator                  // optional override applied to all requester nodes
+	RequestRateConfig float64                           // probability for default probability generator (0.0-1.0)
+	NodeSchedules     map[string]map[int][]ScheduleItem // graphNodeID -> cycle -> items
 
-	// processing and generation
-	SlaveProcessRate int // requests processed per cycle per slave
-
-	// Request generation: uses RequestGenerator interface
-	// Generators are created in Simulator initialization (requires rng)
-	// If RequestGenerators is nil or empty, RequestGenerator is used for all masters
-	// If RequestGenerators is provided, it overrides RequestGenerator per master
-	RequestGenerator  RequestGenerator   // default generator for all masters (created in Simulator init)
-	RequestGenerators []RequestGenerator // per-master override (optional, len should match NumMasters)
-
-	// Generator configuration (used to create generators if not already set)
-	// These fields are used when RequestGenerator is nil
-	RequestRateConfig float64 // probability for ProbabilityGenerator (0.0-1.0)
-
-	// ScheduleGenerator configuration (optional)
-	// If ScheduleConfig is non-nil, ScheduleGenerator will be created instead of ProbabilityGenerator
-	ScheduleConfig map[int]map[int][]ScheduleItem // cycle -> masterIndex -> []ScheduleItem
-
-	// channel bandwidth limit
-	BandwidthLimit int // maximum packets per slot in pipeline (per edge per cycle)
+	// channel bandwidth limit (default for edges without explicit bandwidth)
+	BandwidthLimit int
 
 	// dispatch queue capacity for RequestNode
-	DispatchQueueCapacity int // dispatch_queue capacity (default: 1024, -1 is invalid)
-
-	// weighting for choosing destination slave (length == NumSlaves)
-	SlaveWeights []int
+	DispatchQueueCapacity int
 
 	// Cache configuration
 	RequestCacheCapacity int // max cache lines per RequestNode (LRU eviction), <=0 uses default
 	HomeCacheCapacity    int // max cache lines for HomeNode (LRU eviction), <=0 uses default
 
 	// visualization settings
-	Headless   bool   // true to run without visualization
-	VisualMode string // "gui" | "web" | "none" (default: "gui" if Headless is false)
+	Headless   bool
+	VisualMode string // "gui" | "web" | "none"
 
 	Plugins PluginConfig
 
 	// Initial cache state (for test scenarios)
-	// Format: map[nodeID]map[address]CacheState
 	InitialCacheState map[int]map[uint64]CacheState
 
 	// Packet history tracking configuration
-	EnablePacketHistory   bool   // Enable packet history tracking (default: true)
-	MaxPacketHistorySize  int    // Maximum packet history size (0 = unlimited, default: 0)
-	HistoryOverflowMode   string // "circular" or "initial" (default: "circular")
-	MaxTransactionHistory int    // Maximum number of transactions to keep history for (default: 1000)
+	EnablePacketHistory   bool
+	MaxPacketHistorySize  int
+	HistoryOverflowMode   string
+	MaxTransactionHistory int
 
-	// Graph describes an optional arbitrary topology graph.
+	// Graph describes an arbitrary topology graph (required)
 	Graph *GraphConfig
 }
 
@@ -225,16 +198,12 @@ func computeConfigHash(cfg *Config) string {
 		graphEdgeCount = len(cfg.Graph.Edges)
 	}
 
-	hashInput := fmt.Sprintf("%d-%d-%d-%d-%d-%d-%d-%d-%d-%d-%d",
-		cfg.NumMasters,
-		cfg.NumSlaves,
-		cfg.NumRelays,
-		cfg.MasterRelayLatency,
-		cfg.RelayMasterLatency,
-		cfg.RelaySlaveLatency,
-		cfg.SlaveRelayLatency,
+	hashInput := fmt.Sprintf("%d-%f-%d-%d-%t-%d-%d",
+		cfg.TotalCycles,
+		cfg.RequestRateConfig,
+		cfg.DispatchQueueCapacity,
 		cfg.BandwidthLimit,
-		len(cfg.SlaveWeights),
+		cfg.Headless,
 		graphNodeCount,
 		graphEdgeCount)
 

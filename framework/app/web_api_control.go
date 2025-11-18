@@ -40,8 +40,12 @@ func (ws *WebServer) handleControl(w http.ResponseWriter, r *http.Request) {
 	if cmd.Type == visual.CommandReset {
 		GetLogger().Debugf("Processing reset command, ConfigName=%s", req.ConfigName)
 		if cfg, ok := cmd.ConfigOverride.(*Config); ok {
-			GetLogger().Debugf("Found config '%s': NumMasters=%d, NumSlaves=%d, TotalCycles=%d",
-				req.ConfigName, cfg.NumMasters, cfg.NumSlaves, cfg.TotalCycles)
+			nodeCount := 0
+			if cfg.Graph != nil {
+				nodeCount = len(cfg.Graph.Nodes)
+			}
+			GetLogger().Debugf("Found config '%s': Nodes=%d, TotalCycles=%d",
+				req.ConfigName, nodeCount, cfg.TotalCycles)
 		}
 	}
 

@@ -72,19 +72,14 @@ func cloneConfig(cfg *app.Config) *app.Config {
 	}
 	copyCfg := *cfg
 
-	if cfg.SlaveWeights != nil {
-		copyCfg.SlaveWeights = make([]int, len(cfg.SlaveWeights))
-		copy(copyCfg.SlaveWeights, cfg.SlaveWeights)
-	}
-
-	if cfg.ScheduleConfig != nil {
-		copyCfg.ScheduleConfig = make(map[int]map[int][]app.ScheduleItem)
-		for cycle, masterMap := range cfg.ScheduleConfig {
-			copyCfg.ScheduleConfig[cycle] = make(map[int][]app.ScheduleItem)
-			for masterIdx, items := range masterMap {
+	if cfg.NodeSchedules != nil {
+		copyCfg.NodeSchedules = make(map[string]map[int][]app.ScheduleItem, len(cfg.NodeSchedules))
+		for nodeID, schedule := range cfg.NodeSchedules {
+			copyCfg.NodeSchedules[nodeID] = make(map[int][]app.ScheduleItem, len(schedule))
+			for cycle, items := range schedule {
 				itemsCopy := make([]app.ScheduleItem, len(items))
 				copy(itemsCopy, items)
-				copyCfg.ScheduleConfig[cycle][masterIdx] = itemsCopy
+				copyCfg.NodeSchedules[nodeID][cycle] = itemsCopy
 			}
 		}
 	}

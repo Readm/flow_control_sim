@@ -259,10 +259,6 @@ func NewSimulator(cfg *Config) *Simulator {
 	}
 	// Metadata locking is only required when visualization threads read packet metadata.
 	core.EnableMetadataLocking(!cfg.Headless && cfg.VisualMode != "none")
-	factory := NewConfigGeneratorFactory()
-	defaultGen := factory.BuildDefault(cfg)
-	cfg.RequestGenerator = defaultGen
-	cfg.RequestGenerators = factory.BuildPerMaster(cfg, defaultGen)
 
 	pktAlloc := NewPacketIDAllocator()
 	txnMgr := NewTransactionManager()
@@ -955,18 +951,11 @@ func (s *Simulator) reset(newCfg *Config) {
 	}
 
 	if newCfg != nil {
-		GetLogger().Debugf("Simulator.reset: Applying new config: NumMasters=%d, NumSlaves=%d, TotalCycles=%d",
-			newCfg.NumMasters, newCfg.NumSlaves, newCfg.TotalCycles)
+		GetLogger().Debugf("Simulator.reset: Applying new config (TotalCycles=%d)", newCfg.TotalCycles)
 		s.cfg = newCfg
 	} else {
 		GetLogger().Debugf("Simulator.reset: No new config provided, using existing config")
 	}
-
-	// Prepare generators based on new config
-	factory := NewConfigGeneratorFactory()
-	defaultGen := factory.BuildDefault(s.cfg)
-	s.cfg.RequestGenerator = defaultGen
-	s.cfg.RequestGenerators = factory.BuildPerMaster(s.cfg, defaultGen)
 
 	// Reinitialize simulator with new config
 	pktAlloc := NewPacketIDAllocator()

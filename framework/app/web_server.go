@@ -174,17 +174,20 @@ func (ws *WebServer) applyPolicyDraftToConfig(cfg *Config) {
 }
 
 func (ws *WebServer) validateConfig(cfg *Config) error {
-	if cfg.NumMasters <= 0 || cfg.NumSlaves <= 0 {
-		return &validationError{msg: "NumMasters and NumSlaves must be positive"}
+	if cfg == nil {
+		return &validationError{msg: "config cannot be nil"}
+	}
+	if cfg.Graph == nil || len(cfg.Graph.Nodes) == 0 {
+		return &validationError{msg: "graph must contain at least one node"}
+	}
+	if len(cfg.Graph.Edges) == 0 {
+		return &validationError{msg: "graph must contain at least one link"}
 	}
 	if cfg.TotalCycles <= 0 {
 		return &validationError{msg: "TotalCycles must be positive"}
 	}
 	if cfg.RequestRateConfig < 0 || cfg.RequestRateConfig > 1 {
 		return &validationError{msg: "RequestRateConfig must be between 0 and 1"}
-	}
-	if len(cfg.SlaveWeights) != cfg.NumSlaves {
-		return &validationError{msg: "SlaveWeights length must match NumSlaves"}
 	}
 	return nil
 }

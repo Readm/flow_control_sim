@@ -30,17 +30,11 @@ type DefaultsBlock struct {
 	BandwidthLimit        int              `json:"bandwidth_limit"`
 	DispatchQueueCapacity int              `json:"dispatch_queue_capacity"`
 	RequestRate           float64          `json:"request_rate"`
-	SlaveProcessRate      int              `json:"slave_process_rate"`
 	RequestCacheCapacity  int              `json:"request_cache_capacity"`
 	HomeCacheCapacity     int              `json:"home_cache_capacity"`
-	MasterRelayLatency    int              `json:"master_relay_latency"`
-	RelayMasterLatency    int              `json:"relay_master_latency"`
-	RelaySlaveLatency     int              `json:"relay_slave_latency"`
-	SlaveRelayLatency     int              `json:"slave_relay_latency"`
 	Headless              *bool            `json:"headless"`
 	VisualMode            string           `json:"visual_mode"`
 	Plugins               app.PluginConfig `json:"plugins"`
-	SlaveWeights          []int            `json:"slave_weights"`
 	EnablePacketHistory   *bool            `json:"enable_packet_history"`
 	MaxPacketHistorySize  int              `json:"max_packet_history_size"`
 	HistoryOverflowMode   string           `json:"history_overflow_mode"`

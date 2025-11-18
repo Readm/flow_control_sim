@@ -29,60 +29,60 @@ func runSimulatorWithTimeout(t *testing.T, cfg *Config, timeout time.Duration) *
 
 func saturatedConfig(totalCycles int) *Config {
 	cfg := &Config{
-		NumMasters:         1,
-		NumSlaves:          1,
-		NumRelays:          1,
-		TotalCycles:        totalCycles,
-		MasterRelayLatency: 1,
-		RelayMasterLatency: 1,
-		RelaySlaveLatency:  1,
-		SlaveRelayLatency:  1,
-		SlaveProcessRate:   0,
-		RequestRateConfig:  1.0,
-		BandwidthLimit:     2,
-		SlaveWeights:       []int{1},
-		Headless:           true,
-		VisualMode:         "none",
+		TotalCycles:       totalCycles,
+		RequestRateConfig: 1.0,
+		BandwidthLimit:    2,
+		Headless:          true,
+		VisualMode:        "none",
 	}
-	cfg.Graph = buildSingleRelayGraph(cfg)
+	cfg.Graph = &GraphConfig{
+		Nodes: []GraphNode{
+			{ID: "rn0", Label: "Request 0", Capabilities: []string{"requester"}},
+			{ID: "hn0", Label: "Home", Capabilities: []string{"home_directory"}},
+			{
+				ID:           "sn0",
+				Label:        "Slave 0",
+				Capabilities: []string{"slave_target"},
+				Metadata:     map[string]string{"param.process_rate": "0"},
+			},
+		},
+		Edges: []GraphEdge{
+			{From: "rn0", To: "hn0", Latency: 1, Bandwidth: cfg.BandwidthLimit},
+			{From: "hn0", To: "rn0", Latency: 1, Bandwidth: cfg.BandwidthLimit},
+			{From: "hn0", To: "sn0", Latency: 1, Bandwidth: cfg.BandwidthLimit},
+			{From: "sn0", To: "hn0", Latency: 1, Bandwidth: cfg.BandwidthLimit},
+		},
+	}
 	return cfg
 }
 
 func responsiveConfig(totalCycles int) *Config {
 	cfg := &Config{
-		NumMasters:         1,
-		NumSlaves:          1,
-		NumRelays:          1,
-		TotalCycles:        totalCycles,
-		MasterRelayLatency: 1,
-		RelayMasterLatency: 1,
-		RelaySlaveLatency:  1,
-		SlaveRelayLatency:  1,
-		SlaveProcessRate:   4,
-		RequestRateConfig:  0.4,
-		BandwidthLimit:     1,
-		SlaveWeights:       []int{1},
-		Headless:           true,
-		VisualMode:         "none",
+		TotalCycles:       totalCycles,
+		RequestRateConfig: 0.4,
+		BandwidthLimit:    1,
+		Headless:          true,
+		VisualMode:        "none",
 	}
-	cfg.Graph = buildSingleRelayGraph(cfg)
-	return cfg
-}
-
-func buildSingleRelayGraph(cfg *Config) *GraphConfig {
-	return &GraphConfig{
+	cfg.Graph = &GraphConfig{
 		Nodes: []GraphNode{
 			{ID: "rn0", Label: "Request 0", Capabilities: []string{"requester"}},
 			{ID: "hn0", Label: "Home", Capabilities: []string{"home_directory"}},
-			{ID: "sn0", Label: "Slave 0", Capabilities: []string{"slave_target"}},
+			{
+				ID:           "sn0",
+				Label:        "Slave 0",
+				Capabilities: []string{"slave_target"},
+				Metadata:     map[string]string{"param.process_rate": "4"},
+			},
 		},
 		Edges: []GraphEdge{
-			{From: "rn0", To: "hn0", Latency: cfg.MasterRelayLatency, Bandwidth: cfg.BandwidthLimit},
-			{From: "hn0", To: "rn0", Latency: cfg.RelayMasterLatency, Bandwidth: cfg.BandwidthLimit},
-			{From: "hn0", To: "sn0", Latency: cfg.RelaySlaveLatency, Bandwidth: cfg.BandwidthLimit},
-			{From: "sn0", To: "hn0", Latency: cfg.SlaveRelayLatency, Bandwidth: cfg.BandwidthLimit},
+			{From: "rn0", To: "hn0", Latency: 1, Bandwidth: cfg.BandwidthLimit},
+			{From: "hn0", To: "rn0", Latency: 1, Bandwidth: cfg.BandwidthLimit},
+			{From: "hn0", To: "sn0", Latency: 1, Bandwidth: cfg.BandwidthLimit},
+			{From: "sn0", To: "hn0", Latency: 1, Bandwidth: cfg.BandwidthLimit},
 		},
 	}
+	return cfg
 }
 
 func TestBackpressureHistoryWhenDownstreamSaturated(t *testing.T) {

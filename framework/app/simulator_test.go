@@ -123,22 +123,13 @@ func (m *mockVisualizer) assertNoAdvanceBeyond(t *testing.T, limit int, duration
 // TestBasicFlow runs a short simulation and verifies basic invariants.
 func TestBasicFlow(t *testing.T) {
 	cfg := &Config{
-		NumMasters:         2,
-		NumSlaves:          3,
-		NumRelays:          1,
-		TotalCycles:        300,
-		MasterRelayLatency: 2,
-		RelayMasterLatency: 2,
-		RelaySlaveLatency:  1,
-		SlaveRelayLatency:  1,
-		SlaveProcessRate:   1,
-		RequestRateConfig:  0.5,
-		BandwidthLimit:     1,
-		SlaveWeights:       []int{1, 1, 1},
-		Headless:           true, // Test in headless mode
-		VisualMode:         "none",
+		TotalCycles:       300,
+		RequestRateConfig: 0.5,
+		BandwidthLimit:    1,
+		Headless:          true, // Test in headless mode
+		VisualMode:        "none",
 	}
-	cfg.Graph = buildTestGraph(cfg)
+	cfg.Graph = buildTestGraph(2, 3, cfg.BandwidthLimit, 2, 2, 1, 1)
 
 	sim := NewSimulator(cfg)
 	sim.Run()
@@ -160,11 +151,11 @@ func TestBasicFlow(t *testing.T) {
 	if g.CompletionRate < 0 || g.CompletionRate > 100 {
 		t.Fatalf("completion rate out of range: %.2f", g.CompletionRate)
 	}
-	if len(stats.PerMaster) != cfg.NumMasters {
-		t.Fatalf("expected %d masters stats, got %d", cfg.NumMasters, len(stats.PerMaster))
+	if len(stats.PerMaster) != 2 {
+		t.Fatalf("expected 2 masters stats, got %d", len(stats.PerMaster))
 	}
-	if len(stats.PerSlave) != cfg.NumSlaves {
-		t.Fatalf("expected %d slaves stats, got %d", cfg.NumSlaves, len(stats.PerSlave))
+	if len(stats.PerSlave) != 3 {
+		t.Fatalf("expected 3 slaves stats, got %d", len(stats.PerSlave))
 	}
 	// With enough cycles and non-zero rates, we expect at least some completion.
 	if g.Completed == 0 {
@@ -676,13 +667,12 @@ func TestSimulatorControlFlowReset(t *testing.T) {
 	viz.close()
 }
 
-func buildTestGraph(cfg *Config) *GraphConfig {
-	bandwidth := cfg.BandwidthLimit
+func buildTestGraph(numMasters, numSlaves, bandwidth, masterToHome, homeToMaster, homeToSlave, slaveToHome int) *GraphConfig {
 	if bandwidth <= 0 {
 		bandwidth = 1
 	}
-	nodes := make([]GraphNode, 0, cfg.NumMasters+cfg.NumSlaves+1)
-	for i := 0; i < cfg.NumMasters; i++ {
+	nodes := make([]GraphNode, 0, numMasters+numSlaves+1)
+	for i := 0; i < numMasters; i++ {
 		nodes = append(nodes, GraphNode{
 			ID:           fmt.Sprintf("rn%d", i),
 			Label:        fmt.Sprintf("Request %d", i),
@@ -694,7 +684,7 @@ func buildTestGraph(cfg *Config) *GraphConfig {
 		Label:        "Home",
 		Capabilities: []string{"home_directory"},
 	})
-	for i := 0; i < cfg.NumSlaves; i++ {
+	for i := 0; i < numSlaves; i++ {
 		nodes = append(nodes, GraphNode{
 			ID:           fmt.Sprintf("sn%d", i),
 			Label:        fmt.Sprintf("Slave %d", i),
@@ -702,37 +692,37 @@ func buildTestGraph(cfg *Config) *GraphConfig {
 		})
 	}
 
-	edges := make([]GraphEdge, 0, (cfg.NumMasters+cfg.NumSlaves)*2)
-	for i := 0; i < cfg.NumMasters; i++ {
+	edges := make([]GraphEdge, 0, (numMasters+numSlaves)*2)
+	for i := 0; i < numMasters; i++ {
 		nodeID := fmt.Sprintf("rn%d", i)
 		edges = append(edges,
 			GraphEdge{
 				From:      nodeID,
 				To:        "hn0",
-				Latency:   ensurePositiveLatency(cfg.MasterRelayLatency),
+				Latency:   ensurePositiveLatency(masterToHome),
 				Bandwidth: bandwidth,
 			},
 			GraphEdge{
 				From:      "hn0",
 				To:        nodeID,
-				Latency:   ensurePositiveLatency(cfg.RelayMasterLatency),
+				Latency:   ensurePositiveLatency(homeToMaster),
 				Bandwidth: bandwidth,
 			},
 		)
 	}
-	for i := 0; i < cfg.NumSlaves; i++ {
+	for i := 0; i < numSlaves; i++ {
 		nodeID := fmt.Sprintf("sn%d", i)
 		edges = append(edges,
 			GraphEdge{
 				From:      "hn0",
 				To:        nodeID,
-				Latency:   ensurePositiveLatency(cfg.RelaySlaveLatency),
+				Latency:   ensurePositiveLatency(homeToSlave),
 				Bandwidth: bandwidth,
 			},
 			GraphEdge{
 				From:      nodeID,
 				To:        "hn0",
-				Latency:   ensurePositiveLatency(cfg.SlaveRelayLatency),
+				Latency:   ensurePositiveLatency(slaveToHome),
 				Bandwidth: bandwidth,
 			},
 		)

@@ -26,12 +26,6 @@ type configBuilder struct {
 	doc       *TopologyDocument
 	nodeByID  map[string]*NodeDocument
 	roleIndex roleIndex
-	edgeMap   map[string][]edgeEntry
-}
-
-type edgeEntry struct {
-	to      string
-	latency int
 }
 
 type roleIndex struct {
@@ -89,7 +83,6 @@ func newConfigBuilder(doc *TopologyDocument) (*configBuilder, error) {
 	if err := builder.validateLinks(); err != nil {
 		return nil, err
 	}
-	builder.buildEdgeMap()
 	return builder, nil
 }
 
@@ -162,38 +155,10 @@ func (b *configBuilder) validateLinks() error {
 	return nil
 }
 
-func (b *configBuilder) buildEdgeMap() {
-	if len(b.doc.Links) == 0 {
-		return
-	}
-	b.edgeMap = make(map[string][]edgeEntry, len(b.doc.Links))
-	for _, link := range b.doc.Links {
-		b.edgeMap[link.From] = append(b.edgeMap[link.From], edgeEntry{
-			to:      link.To,
-			latency: link.Latency,
-		})
-		if link.Bidirectional {
-			b.edgeMap[link.To] = append(b.edgeMap[link.To], edgeEntry{
-				to:      link.From,
-				latency: link.Latency,
-			})
-		}
-	}
-}
-
 func (b *configBuilder) buildConfig() (*app.Config, error) {
 	defaults := b.doc.Defaults
-	latencies := b.deriveLatencyHints()
 	cfg := &app.Config{
-		NumMasters:            len(b.roleIndex.masters),
-		NumSlaves:             len(b.roleIndex.slaves),
-		NumRelays:             len(b.roleIndex.homes),
 		TotalCycles:           choosePositive(defaults.TotalCycles, 1000),
-		MasterRelayLatency:    latencies.masterToHome,
-		RelayMasterLatency:    latencies.homeToMaster,
-		RelaySlaveLatency:     latencies.homeToSlave,
-		SlaveRelayLatency:     latencies.slaveToHome,
-		SlaveProcessRate:      choosePositive(defaults.SlaveProcessRate, 1),
 		RequestRateConfig:     clamp01(defaults.RequestRate),
 		BandwidthLimit:        defaults.BandwidthLimit,
 		DispatchQueueCapacity: defaults.DispatchQueueCapacity,
@@ -213,14 +178,13 @@ func (b *configBuilder) buildConfig() (*app.Config, error) {
 	} else {
 		cfg.EnablePacketHistory = true
 	}
-	cfg.SlaveWeights = b.buildSlaveWeights()
 
-	schedule, err := b.buildSchedule()
+	schedule, err := b.buildNodeSchedules()
 	if err != nil {
 		return nil, err
 	}
 	if len(schedule) > 0 {
-		cfg.ScheduleConfig = schedule
+		cfg.NodeSchedules = schedule
 	}
 
 	initialState, err := b.buildInitialCacheState()
@@ -236,101 +200,6 @@ func (b *configBuilder) buildConfig() (*app.Config, error) {
 	}
 
 	return cfg, nil
-}
-
-type latencyHints struct {
-	masterToHome int
-	homeToMaster int
-	homeToSlave  int
-	slaveToHome  int
-}
-
-func (b *configBuilder) deriveLatencyHints() latencyHints {
-	defaults := b.doc.Defaults
-	hints := latencyHints{
-		masterToHome: defaults.MasterRelayLatency,
-		homeToMaster: defaults.RelayMasterLatency,
-		homeToSlave:  defaults.RelaySlaveLatency,
-		slaveToHome:  defaults.SlaveRelayLatency,
-	}
-	if hints.masterToHome <= 0 {
-		if latency, ok := b.shortestLatency(b.roleIndex.masters, b.roleIndex.homes); ok {
-			hints.masterToHome = latency
-		}
-	}
-	if hints.homeToMaster <= 0 {
-		if latency, ok := b.shortestLatency(b.roleIndex.homes, b.roleIndex.masters); ok {
-			hints.homeToMaster = latency
-		}
-	}
-	if hints.homeToSlave <= 0 {
-		if latency, ok := b.shortestLatency(b.roleIndex.homes, b.roleIndex.slaves); ok {
-			hints.homeToSlave = latency
-		}
-	}
-	if hints.slaveToHome <= 0 {
-		if latency, ok := b.shortestLatency(b.roleIndex.slaves, b.roleIndex.homes); ok {
-			hints.slaveToHome = latency
-		}
-	}
-	if hints.masterToHome <= 0 {
-		hints.masterToHome = 1
-	}
-	if hints.homeToMaster <= 0 {
-		hints.homeToMaster = 1
-	}
-	if hints.homeToSlave <= 0 {
-		hints.homeToSlave = 1
-	}
-	if hints.slaveToHome <= 0 {
-		hints.slaveToHome = 1
-	}
-	return hints
-}
-
-func (b *configBuilder) shortestLatency(starts []string, targets []string) (int, bool) {
-	if len(starts) == 0 || len(targets) == 0 || len(b.edgeMap) == 0 {
-		return 0, false
-	}
-	targetSet := make(map[string]struct{}, len(targets))
-	for _, id := range targets {
-		targetSet[id] = struct{}{}
-	}
-	dist := make(map[string]int, len(b.edgeMap))
-	visited := make(map[string]bool, len(b.edgeMap))
-	for _, id := range starts {
-		dist[id] = 0
-	}
-	for {
-		current := ""
-		best := math.MaxInt32
-		for id, d := range dist {
-			if visited[id] {
-				continue
-			}
-			if d < best {
-				best = d
-				current = id
-			}
-		}
-		if current == "" {
-			break
-		}
-		if _, ok := targetSet[current]; ok {
-			return best, true
-		}
-		visited[current] = true
-		for _, edge := range b.edgeMap[current] {
-			if edge.latency <= 0 {
-				continue
-			}
-			nextDist := best + edge.latency
-			if existing, ok := dist[edge.to]; !ok || nextDist < existing {
-				dist[edge.to] = nextDist
-			}
-		}
-	}
-	return 0, false
 }
 
 func (b *configBuilder) buildGraph() *app.GraphConfig {
@@ -404,22 +273,24 @@ func (b *configBuilder) buildSlaveWeights() []int {
 	return weights
 }
 
-func (b *configBuilder) buildSchedule() (map[int]map[int][]app.ScheduleItem, error) {
+func (b *configBuilder) buildNodeSchedules() (map[string]map[int][]app.ScheduleItem, error) {
 	if len(b.doc.Schedules) == 0 {
 		return nil, nil
 	}
-	result := make(map[int]map[int][]app.ScheduleItem)
+	result := make(map[string]map[int][]app.ScheduleItem)
 	for idx, sched := range b.doc.Schedules {
 		if sched.Tick < 0 {
 			return nil, fmt.Errorf("schedule[%d] tick must be non-negative", idx)
 		}
 		sourceID := strings.TrimSpace(sched.Source)
-		masterIdx, ok := b.roleIndex.masterLookup[sourceID]
-		if !ok {
+		if _, ok := b.roleIndex.masterLookup[sourceID]; !ok {
 			return nil, fmt.Errorf("schedule[%d] references unknown source %q", idx, sched.Source)
 		}
 		if len(sched.Transactions) == 0 {
 			continue
+		}
+		if _, exists := result[sourceID]; !exists {
+			result[sourceID] = make(map[int][]app.ScheduleItem)
 		}
 		for txnIdx, txn := range sched.Transactions {
 			item, err := b.buildScheduleItem(txn)
@@ -433,11 +304,9 @@ func (b *configBuilder) buildSchedule() (map[int]map[int][]app.ScheduleItem, err
 					return nil, fmt.Errorf("schedule[%d].transactions[%d]: unknown target %q", idx, txnIdx, txn.Target)
 				}
 				item.SlaveIndex = slaveIdx
+				item.Target = targetID
 			}
-			if _, exists := result[sched.Tick]; !exists {
-				result[sched.Tick] = make(map[int][]app.ScheduleItem)
-			}
-			result[sched.Tick][masterIdx] = append(result[sched.Tick][masterIdx], item)
+			result[sourceID][sched.Tick] = append(result[sourceID][sched.Tick], item)
 		}
 	}
 	return result, nil

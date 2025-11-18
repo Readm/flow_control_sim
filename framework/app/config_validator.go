@@ -33,9 +33,6 @@ func ValidateConfig(cfg *Config) error {
 	if cfg.DispatchQueueCapacity <= 0 {
 		cfg.DispatchQueueCapacity = DefaultDispatchQueueCapacity
 	}
-	if cfg.SlaveProcessRate < 0 {
-		cfg.SlaveProcessRate = 1
-	}
 
 	if cfg.RequestCacheCapacity <= 0 {
 		cfg.RequestCacheCapacity = DefaultRequestCacheCapacity
