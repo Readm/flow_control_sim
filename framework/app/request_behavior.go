@@ -66,7 +66,7 @@ func NewRequestNode(id int, masterIndex int, generator RequestGenerator) *Reques
 	rn := &RequestNode{
 		Node: Node{
 			ID:   id,
-			Type: core.NodeTypeRN,
+			Role: "requester",
 		},
 		generator:         generator,
 		masterIndex:       masterIndex,
@@ -165,11 +165,6 @@ func (rn *RequestNode) NodeID() int {
 	return rn.Node.ID
 }
 
-// NodeType returns the node type.
-func (rn *RequestNode) NodeType() core.NodeType {
-	return rn.Node.Type
-}
-
 // Tick implements the NodeBehavior interface.
 func (rn *RequestNode) Tick(cycle int) {
 	if rn.runtime == nil {
@@ -250,7 +245,7 @@ func (rn *RequestNode) Snapshot() NodeSnapshot {
 	}
 	return NodeSnapshot{
 		ID:           rn.ID,
-		Type:         rn.Type,
+		Type:         rn.Role,
 		Label:        "",
 		Queues:       cloneQueues(rn.GetQueueInfo()),
 		Capabilities: rn.CapabilityNames(),

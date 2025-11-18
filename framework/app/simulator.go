@@ -662,6 +662,18 @@ func (s *Simulator) attachNodeCapabilities(txFactory *TxFactory) {
 			}
 		}
 	}
+	s.updateTransactionManagerRoles()
+}
+
+func (s *Simulator) updateTransactionManagerRoles() {
+	if s.txnMgr == nil || s.nodeProfiles == nil {
+		return
+	}
+	roles := make(map[int]string, len(s.nodeProfiles))
+	for id, profile := range s.nodeProfiles {
+		roles[id] = profile.role.String()
+	}
+	s.txnMgr.SetNodeRoles(roles)
 }
 
 func (s *Simulator) onCycleAdvanced() {
@@ -723,7 +735,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"avgDelay":          stats.AvgDelay,
 			"maxDelay":          stats.MaxDelay,
 			"minDelay":          stats.MinDelay,
-			"nodeType":          "RN", // CHI Request Node
+			"nodeType":          m.Role,
 			"chiProtocol":       true,
 		}
 		queuePackets := m.GetQueuePackets()
@@ -746,7 +758,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		}
 		nodes = append(nodes, NodeSnapshot{
 			ID:           m.ID,
-			Type:         m.Type,
+			Type:         m.Role,
 			Label:        label,
 			Queues:       clonedQueues,
 			Capabilities: m.CapabilityNames(),
@@ -760,7 +772,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			"totalProcessed": stats.TotalProcessed,
 			"maxQueue":       stats.MaxQueueLength,
 			"avgQueue":       stats.AvgQueueLength,
-			"nodeType":       "SN", // CHI Slave Node
+			"nodeType":       sl.Role,
 			"chiProtocol":    true,
 		}
 		queuePackets := sl.GetQueuePackets()
@@ -783,7 +795,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		}
 		nodes = append(nodes, NodeSnapshot{
 			ID:           sl.ID,
-			Type:         sl.Type,
+			Type:         sl.Role,
 			Label:        label,
 			Queues:       clonedQueues,
 			Capabilities: sl.CapabilityNames(),
@@ -810,12 +822,12 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 			label = fmt.Sprintf("RT %d", rt.ID)
 		}
 		payload := map[string]any{
-			"nodeType":    "RT",
+			"nodeType":    rt.Role,
 			"chiProtocol": true,
 		}
 		nodes = append(nodes, NodeSnapshot{
 			ID:           rt.ID,
-			Type:         rt.Type,
+			Type:         rt.Role,
 			Label:        label,
 			Queues:       clonedQueues,
 			Capabilities: rt.CapabilityNames(),
@@ -834,7 +846,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		}
 		payload := map[string]any{
 			"queueLength": queueLength,
-			"nodeType":    "HN", // CHI Home Node
+			"nodeType":    s.Relay.Role,
 			"chiProtocol": true,
 		}
 		queuePackets := s.Relay.GetQueuePackets()
@@ -855,7 +867,7 @@ func (s *Simulator) buildFrame(cycle int) *SimulationFrame {
 		}
 		nodes = append(nodes, NodeSnapshot{
 			ID:           s.Relay.ID,
-			Type:         s.Relay.Type,
+			Type:         s.Relay.Role,
 			Label:        label,
 			Queues:       queueInfoCloned,
 			Capabilities: s.Relay.CapabilityNames(),

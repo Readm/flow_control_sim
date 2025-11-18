@@ -208,22 +208,22 @@ func TestReadNoSnpTransaction(t *testing.T) {
 	if len(sim.Masters) != 1 {
 		t.Fatalf("expected 1 Request Node, got %d", len(sim.Masters))
 	}
-	if sim.Masters[0].Type != NodeTypeRN {
-		t.Fatalf("expected Request Node type RN, got %s", sim.Masters[0].Type)
+	if sim.Masters[0].Role != "requester" {
+		t.Fatalf("expected Request Node role requester, got %s", sim.Masters[0].Role)
 	}
 
 	if len(sim.Slaves) != 1 {
 		t.Fatalf("expected 1 Slave Node, got %d", len(sim.Slaves))
 	}
-	if sim.Slaves[0].Type != NodeTypeSN {
-		t.Fatalf("expected Slave Node type SN, got %s", sim.Slaves[0].Type)
+	if sim.Slaves[0].Role != "slave_target" {
+		t.Fatalf("expected Slave Node role slave_target, got %s", sim.Slaves[0].Role)
 	}
 
 	if sim.Relay == nil {
 		t.Fatalf("expected Home Node, got nil")
 	}
-	if sim.Relay.Type != NodeTypeHN {
-		t.Fatalf("expected Home Node type HN, got %s", sim.Relay.Type)
+	if sim.Relay.Role != "home_directory" {
+		t.Fatalf("expected Home Node role home_directory, got %s", sim.Relay.Role)
 	}
 
 	// Verify that ReadNoSnp transactions completed
@@ -279,7 +279,7 @@ func TestFrameIncludesCapabilities(t *testing.T) {
 		t.Fatalf("expected non-nil frame")
 	}
 
-	assertHasCapability := func(t *testing.T, nodeType NodeType, nodes []NodeSnapshot, expectedPrefix string) {
+	assertHasCapability := func(t *testing.T, nodeType string, nodes []NodeSnapshot, expectedPrefix string) {
 		t.Helper()
 		for _, node := range nodes {
 			if node.Type != nodeType {
@@ -303,9 +303,9 @@ func TestFrameIncludesCapabilities(t *testing.T) {
 		t.Fatalf("node type %s not found in frame", nodeType)
 	}
 
-	assertHasCapability(t, NodeTypeRN, frame.Nodes, "request-routing-")
-	assertHasCapability(t, NodeTypeHN, frame.Nodes, "home-routing-")
-	assertHasCapability(t, NodeTypeSN, frame.Nodes, "slave-processing-")
+	assertHasCapability(t, "requester", frame.Nodes, "request-routing-")
+	assertHasCapability(t, "home_directory", frame.Nodes, "home-routing-")
+	assertHasCapability(t, "slave_target", frame.Nodes, "slave-processing-")
 }
 
 // TestReadOnceCacheMechanism verifies the simplest cache mechanism:

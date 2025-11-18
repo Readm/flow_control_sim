@@ -161,6 +161,20 @@ func (b *graphTopologyBuilder) registerNode(node GraphNode, id int, receiver Nod
 	}
 	b.recordProfile(id, role, node.Metadata)
 	applyGraphPosition(receiver, node.Position)
+	switch n := receiver.(type) {
+	case *RequestNode:
+		n.GraphID = node.ID
+		n.Role = role.String()
+	case *HomeNode:
+		n.GraphID = node.ID
+		n.Role = role.String()
+	case *SlaveNode:
+		n.GraphID = node.ID
+		n.Role = role.String()
+	case *RingRouterNode:
+		n.GraphID = node.ID
+		n.Role = role.String()
+	}
 }
 
 func (b *graphTopologyBuilder) recordProfile(nodeID int, role graphNodeRole, metadata map[string]string) {

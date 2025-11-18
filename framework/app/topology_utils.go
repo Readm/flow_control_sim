@@ -69,6 +69,21 @@ func positiveOrDefault(value int, fallback int) int {
 	return fallback
 }
 
+func (r graphNodeRole) String() string {
+	switch r {
+	case graphRoleRequester:
+		return "requester"
+	case graphRoleHome:
+		return "home_directory"
+	case graphRoleSlave:
+		return "slave_target"
+	case graphRoleRouter:
+		return "router"
+	default:
+		return "node"
+	}
+}
+
 func applyGraphPosition(receiver NodeReceiver, pos *Position) {
 	if pos == nil {
 		return

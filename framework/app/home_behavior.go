@@ -66,7 +66,7 @@ func NewHomeNode(id int) *HomeNode {
 	hn := &HomeNode{
 		Node: Node{
 			ID:   id,
-			Type: core.NodeTypeHN,
+			Role: "home_directory",
 		},
 		txnMgr:        nil, // will be set by simulator
 		bindings:      NewNodeCycleBindings(),
@@ -126,11 +126,6 @@ func (hn *HomeNode) makeStageMutator(stage pipelineStageName) queue.MutateFunc {
 // ID returns the node identifier.
 func (hn *HomeNode) NodeID() int {
 	return hn.Node.ID
-}
-
-// NodeType returns the node type.
-func (hn *HomeNode) NodeType() core.NodeType {
-	return hn.Node.Type
 }
 
 func (hn *HomeNode) enqueueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
@@ -200,7 +195,7 @@ func (hn *HomeNode) Snapshot() NodeSnapshot {
 	}
 	return NodeSnapshot{
 		ID:           hn.ID,
-		Type:         hn.Type,
+		Type:         hn.Role,
 		Label:        "",
 		Queues:       cloneQueues(hn.GetQueueInfo()),
 		Capabilities: hn.CapabilityNames(),

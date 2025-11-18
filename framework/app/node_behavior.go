@@ -3,7 +3,6 @@ package app
 import (
 	"fmt"
 
-	"github.com/Readm/flow_sim/framework/core"
 	"github.com/Readm/flow_sim/framework/hook"
 	"github.com/Readm/flow_sim/framework/plugins/policy_manager"
 )
@@ -32,7 +31,6 @@ type NodeMeta struct {
 // NodeBehavior describes the runtime hooks a capability-driven node must expose.
 type NodeBehavior interface {
 	NodeID() int
-	NodeType() core.NodeType
 	Init(ctx *BehaviorContext) error
 	Tick(cycle int)
 	CanReceive(edgeKey EdgeKey, packetCount int) bool
@@ -79,13 +77,6 @@ func (n *BaseSimNode) ID() int {
 }
 
 // Type returns the node type reported by the behavior.
-func (n *BaseSimNode) Type() core.NodeType {
-	if n == nil || n.behavior == nil {
-		return ""
-	}
-	return n.behavior.NodeType()
-}
-
 // Tick advances the node state by one cycle.
 func (n *BaseSimNode) Tick(cycle int) {
 	if n == nil || n.behavior == nil {
@@ -141,9 +132,7 @@ func (n *BaseSimNode) Snapshot() NodeSnapshot {
 	if snapshot.ID == 0 {
 		snapshot.ID = n.behavior.NodeID()
 	}
-	if snapshot.Type == "" {
-		snapshot.Type = n.behavior.NodeType()
-	}
+	// Type filled by behavior snapshot or simulator metadata
 	if snapshot.Payload == nil {
 		snapshot.Payload = map[string]any{}
 	}

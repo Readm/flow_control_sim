@@ -3,7 +3,7 @@ package app
 // NodeSnapshot describes a node state in a given cycle for visualization.
 type NodeSnapshot struct {
 	ID           int            `json:"id"`
-	Type         NodeType       `json:"type"`
+	Type         string         `json:"type"`
 	Label        string         `json:"label"`
 	Queues       []QueueInfo    `json:"queues"`
 	Capabilities []string       `json:"capabilities,omitempty"`

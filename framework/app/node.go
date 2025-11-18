@@ -1,12 +1,11 @@
 package app
 
-import "github.com/Readm/flow_sim/framework/core"
-
 // Node is the base class for Master, Slave, and Relay.
 // It provides common functionality including visualization support.
 type Node struct {
 	ID       int
-	Type     core.NodeType
+	GraphID  string
+	Role     string
 	Queues   []QueueInfo
 	Position Position
 }

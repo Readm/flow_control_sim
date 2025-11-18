@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,6 +46,7 @@ type TransactionManager struct {
 	allPacketHistory []*PacketEvent           // all events (for full history mode)
 	historyConfig    *PacketHistoryConfig
 	nodeLabels       map[int]string // node ID -> label (set by simulator)
+	nodeRoles        map[int]string // node ID -> role hint
 
 	eventCh  chan *PacketEvent
 	eventSeq int64
@@ -67,6 +70,7 @@ func NewTransactionManager() *TransactionManager {
 			MaxTransactionHistory: 1000,
 		},
 		nodeLabels: make(map[int]string),
+		nodeRoles:  make(map[int]string),
 		eventCh:    make(chan *PacketEvent, transactionEventBufferSize),
 	}
 	go tm.runEventLoop()
@@ -290,6 +294,13 @@ func (tm *TransactionManager) SetNodeLabels(labels map[int]string) {
 	tm.nodeLabels = labels
 }
 
+// SetNodeRoles provides optional role hints for visualization/timeline.
+func (tm *TransactionManager) SetNodeRoles(roles map[int]string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.nodeRoles = roles
+}
+
 func (tm *TransactionManager) runEventLoop() {
 	for event := range tm.eventCh {
 		tm.handlePacketEvent(event)
@@ -449,9 +460,9 @@ func (tm *TransactionManager) GetAllTransactionSummaries() []*TransactionSummary
 
 // NodeInfo represents node information for timeline
 type NodeInfo struct {
-	ID    int      `json:"id"`
-	Label string   `json:"label"`
-	Type  NodeType `json:"type"`
+	ID    int    `json:"id"`
+	Label string `json:"label"`
+	Type  string `json:"type"`
 }
 
 // TimeRange represents a time range
@@ -491,7 +502,6 @@ func (tm *TransactionManager) GetTransactionTimeline(txnID int64) *TransactionTi
 
 	for _, event := range events {
 		if _, exists := nodeMap[event.NodeID]; !exists {
-			nodeType := NodeTypeRN // default
 			label := event.NodeLabel
 			if label == "" {
 				if tm.nodeLabels != nil {
@@ -501,22 +511,17 @@ func (tm *TransactionManager) GetTransactionTimeline(txnID int64) *TransactionTi
 					label = fmt.Sprintf("Node %d", event.NodeID)
 				}
 			}
-			// Try to infer node type from label
-			if len(label) >= 2 {
-				prefix := label[:2]
-				switch prefix {
-				case "RN":
-					nodeType = NodeTypeRN
-				case "HN":
-					nodeType = NodeTypeHN
-				case "SN":
-					nodeType = NodeTypeSN
-				}
+			role := ""
+			if tm.nodeRoles != nil {
+				role = tm.nodeRoles[event.NodeID]
+			}
+			if role == "" {
+				role = inferRoleFromLabel(label)
 			}
 			nodeMap[event.NodeID] = NodeInfo{
 				ID:    event.NodeID,
 				Label: label,
-				Type:  nodeType,
+				Type:  role,
 			}
 		}
 		if event.Cycle < minCycle {
@@ -533,20 +538,13 @@ func (tm *TransactionManager) GetTransactionTimeline(txnID int64) *TransactionTi
 		nodes = append(nodes, node)
 	}
 
-	// Sort nodes by type (RN -> HN -> SN) and then by ID
-	for i := 0; i < len(nodes)-1; i++ {
-		for j := i + 1; j < len(nodes); j++ {
-			typeOrder := map[NodeType]int{
-				NodeTypeRN: 0,
-				NodeTypeHN: 1,
-				NodeTypeSN: 2,
-			}
-			if typeOrder[nodes[i].Type] > typeOrder[nodes[j].Type] ||
-				(typeOrder[nodes[i].Type] == typeOrder[nodes[j].Type] && nodes[i].ID > nodes[j].ID) {
-				nodes[i], nodes[j] = nodes[j], nodes[i]
-			}
+	// Sort nodes by label then ID for deterministic output
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].Label == nodes[j].Label {
+			return nodes[i].ID < nodes[j].ID
 		}
-	}
+		return nodes[i].Label < nodes[j].Label
+	})
 
 	// Collect unique packet IDs
 	packetMap := make(map[int64]bool)
@@ -578,5 +576,23 @@ func (tm *TransactionManager) GetTransactionTimeline(txnID int64) *TransactionTi
 			End:   maxCycle,
 		},
 		Packets: packets,
+	}
+}
+
+func inferRoleFromLabel(label string) string {
+	if len(label) < 2 {
+		return "node"
+	}
+	switch strings.ToLower(label[:2]) {
+	case "rn":
+		return "requester"
+	case "hn":
+		return "home_directory"
+	case "sn":
+		return "slave_target"
+	case "rt":
+		return "router"
+	default:
+		return "node"
 	}
 }

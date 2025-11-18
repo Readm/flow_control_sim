@@ -52,7 +52,7 @@ func NewSlaveNode(id int, rate int) *SlaveNode {
 	sn := &SlaveNode{
 		Node: Node{
 			ID:   id,
-			Type: NodeTypeSN,
+			Role: "slave_target",
 		},
 		ProcessRate: rate,
 		txnMgr:      nil, // will be set by simulator
@@ -107,11 +107,6 @@ func (sn *SlaveNode) makeStageMutator(stage pipelineStageName) queue.MutateFunc 
 // ID returns the node identifier.
 func (sn *SlaveNode) NodeID() int {
 	return sn.Node.ID
-}
-
-// NodeType returns the node type.
-func (sn *SlaveNode) NodeType() core.NodeType {
-	return sn.Node.Type
 }
 
 func (sn *SlaveNode) enqueueHook(entryID queue.EntryID, msg *PipelineMessage, cycle int) {
@@ -181,7 +176,7 @@ func (sn *SlaveNode) Snapshot() NodeSnapshot {
 	}
 	return NodeSnapshot{
 		ID:           sn.ID,
-		Type:         sn.Type,
+		Type:         sn.Role,
 		Label:        "",
 		Queues:       cloneQueues(sn.GetQueueInfo()),
 		Capabilities: sn.CapabilityNames(),

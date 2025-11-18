@@ -34,7 +34,7 @@ func NewRingRouterNode(id int) *RingRouterNode {
 	rr := &RingRouterNode{
 		Node: Node{
 			ID:   id,
-			Type: core.NodeTypeRT,
+			Role: "router",
 		},
 		capabilityRegistry: make(map[string]struct{}),
 	}
@@ -84,11 +84,6 @@ func (rr *RingRouterNode) makeStageMutator(stage pipelineStageName) queue.Mutate
 // ID returns the router identifier.
 func (rr *RingRouterNode) NodeID() int {
 	return rr.Node.ID
-}
-
-// NodeType returns the router type.
-func (rr *RingRouterNode) NodeType() core.NodeType {
-	return rr.Node.Type
 }
 
 // SetPluginBroker assigns the hook broker and registers capabilities.
@@ -154,7 +149,7 @@ func (rr *RingRouterNode) Snapshot() NodeSnapshot {
 	defer rr.mu.Unlock()
 	return NodeSnapshot{
 		ID:           rr.ID,
-		Type:         rr.Type,
+		Type:         rr.Role,
 		Label:        "",
 		Queues:       cloneQueues(rr.GetQueueInfo()),
 		Capabilities: rr.CapabilityNames(),

@@ -80,18 +80,9 @@ type Packet = core.Packet
 // EdgeKey represents a unique edge in the network (fromID -> toID).
 type EdgeKey = core.EdgeKey
 
-type NodeType = core.NodeType
 type PacketInfo = core.PacketInfo
 type QueueInfo = core.QueueInfo
 type Position = core.Position
-
-// NodeType constants re-exported for compatibility.
-const (
-	NodeTypeRN core.NodeType = core.NodeTypeRN
-	NodeTypeHN core.NodeType = core.NodeTypeHN
-	NodeTypeSN core.NodeType = core.NodeTypeSN
-	NodeTypeRT core.NodeType = core.NodeTypeRT
-)
 
 // PluginConfig describes optional plugin selections.
 type PluginConfig struct {

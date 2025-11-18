@@ -36,9 +36,9 @@ type EdgeKey struct {
 
 // NodeInfo represents node information for timeline.
 type NodeInfo struct {
-	ID    int      `json:"id"`
-	Label string   `json:"label"`
-	Type  NodeType `json:"type"`
+	ID    int    `json:"id"`
+	Label string `json:"label"`
+	Type  string `json:"type"`
 }
 
 // TimeRange represents a time range.

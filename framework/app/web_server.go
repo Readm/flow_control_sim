@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/Readm/flow_sim/framework/app/visual"
-	"github.com/Readm/flow_sim/framework/hook"
+	hooks "github.com/Readm/flow_sim/framework/hook"
 )
 
 // WebServer provides HTTP endpoints for visualization and control.
