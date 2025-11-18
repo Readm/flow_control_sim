@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Control Simulator - Visualization</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qtip2@3.0.3/dist/jquery.qtip.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/qtip2@3.0.3/dist/jquery.qtip.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.27.0/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-qtip@2.8.0/cytoscape-qtip.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .control-panel {
+            width: 350px;
+            background: #f5f5f5;
+            border-right: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .control-section {
+            padding: 15px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .control-section h3 {
+            margin-bottom: 10px;
+            color: #333;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .control-buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .run-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        #runCycleCount {
+            width: 80px;
+            padding: 6px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        button {
+            padding: 8px 16px;
+            border: 1px solid #ccc;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            background: #f0f0f0;
+            border-color: #999;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button.primary {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+
+        button.primary:hover:not(:disabled) {
+            background: #0056b3;
+        }
+
+        button.danger {
+            background: #dc3545;
+            color: white;
+            border-color: #dc3545;
+        }
+
+        button.danger:hover:not(:disabled) {
+            background: #c82333;
+        }
+
+        .status-info {
+            font-size: 12px;
+            color: #666;
+            margin-top: 8px;
+        }
+
+        .status-info strong {
+            color: #333;
+        }
+
+        .config-form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .form-group label {
+            font-size: 12px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            padding: 6px 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+
+        .readonly-value {
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #f8f8f8;
+            font-size: 13px;
+            color: #333;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .form-row .form-group {
+            flex: 1;
+        }
+
+        .stats-panel {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .stats-item {
+            padding: 8px;
+            background: white;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+
+        .stats-item h4 {
+            margin-bottom: 6px;
+            color: #333;
+            font-size: 13px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .stats-value {
+            color: #666;
+        }
+
+        .stats-value strong {
+            color: #333;
+        }
+
+        .visualization-area {
+            flex: 1;
+            position: relative;
+            background: #fff;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .view-header {
+            padding: 12px 20px;
+            border-bottom: 1px solid #e5e5e5;
+            background: #fafafa;
+        }
+
+        .view-tabs {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .view-tab {
+            padding: 8px 16px;
+            border: 1px solid #ccc;
+            background: white;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 13px;
+            color: #555;
+            transition: all 0.2s ease;
+        }
+
+        .view-tab:hover:not(.active) {
+            background: #f0f0f0;
+        }
+
+        .view-tab.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+
+        .view-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .view-panel {
+            display: none;
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .view-panel.active {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .flow-view-canvas {
+            flex: 1;
+            position: relative;
+        }
+
+        .view-toolbar {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            padding: 16px 20px;
+            border-bottom: 1px solid #e5e5e5;
+            background: #fff;
+            align-items: flex-end;
+        }
+
+        .view-toolbar .form-group {
+            min-width: 220px;
+        }
+
+        .view-toolbar-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .transaction-available-panel {
+            padding: 16px 20px;
+            border-bottom: 1px solid #f0f0f0;
+            background: #fff;
+        }
+
+        .transaction-available-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            font-size: 13px;
+            color: #555;
+        }
+
+        .transaction-available-title {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .transaction-available-meta {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .transaction-id-list {
+            margin-top: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .transaction-id-pill {
+            padding: 6px 12px;
+            border: 1px solid #007bff;
+            border-radius: 999px;
+            font-size: 12px;
+            background: #fff;
+            color: #007bff;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .transaction-id-pill:hover {
+            background: #007bff;
+            color: #fff;
+        }
+
+        .transaction-id-pill:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .transaction-id-empty {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .timeline-content,
+        .topology-editor,
+        .policy-panel {
+            flex: 1;
+            overflow: auto;
+            padding: 20px;
+            background: #fff;
+        }
+
+        .topology-editor {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .topology-context-menu {
+            position: absolute;
+            min-width: 160px;
+            background: #fff;
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+            padding: 4px 0;
+            z-index: 40;
+            display: none;
+            font-size: 13px;
+        }
+
+        .topology-context-menu.show {
+            display: block;
+        }
+
+        .topology-context-menu button {
+            width: 100%;
+            background: transparent;
+            border: none;
+            padding: 8px 16px;
+            text-align: left;
+            cursor: pointer;
+            color: #333;
+        }
+
+        .topology-context-menu button:hover {
+            background: #f0f5ff;
+            color: #1d39c4;
+        }
+
+        .topology-context-menu .menu-section-title {
+            padding: 8px 16px 4px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #595959;
+        }
+
+        .topology-context-menu .menu-capability-item {
+            padding: 4px 16px;
+            font-size: 12px;
+            color: #595959;
+            white-space: nowrap;
+        }
+
+        .topology-context-menu .menu-divider {
+            margin: 4px 0;
+            border-top: 1px solid #f0f0f0;
+        }
+
+        .edgehandles-handle {
+            width: 12px;
+            height: 12px;
+            background: #1890ff;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            box-shadow: 0 0 6px rgba(24, 144, 255, 0.6);
+        }
+
+        .edgehandles-handle.edgehandles-hover {
+            background: #40a9ff;
+        }
+
+        .empty-state {
+            margin: auto;
+            text-align: center;
+            color: #888;
+            font-size: 14px;
+            max-width: 420px;
+            line-height: 1.6;
+        }
+
+        .toolbar-spacer {
+            flex: 1;
+        }
+
+        #cy {
+            width: 100%;
+            height: 100%;
+        }
+
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+
+        .error-message {
+            padding: 10px;
+            background: #fee;
+            border: 1px solid #fcc;
+            border-radius: 4px;
+            color: #c33;
+            font-size: 12px;
+            margin-top: 10px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .queue-info {
+            font-size: 11px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        /* Modal styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            max-height: 90vh;
+            width: 90%;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f5f5f5;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 18px;
+            color: #333;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #666;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+        }
+
+        .modal-close:hover {
+            background: #e0e0e0;
+            color: #333;
+        }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .queue-section {
+            margin-bottom: 30px;
+        }
+
+        .queue-section h3 {
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #007bff;
+        }
+
+        .queue-section.empty {
+            color: #999;
+            font-style: italic;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .packet-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            font-size: 13px;
+        }
+
+        .packet-table th {
+            background: #f5f5f5;
+            padding: 10px;
+            text-align: left;
+            border-bottom: 2px solid #ddd;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .packet-table td {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .packet-table tr:hover {
+            background: #f9f9f9;
+        }
+
+        .packet-id {
+            font-weight: 600;
+            color: #007bff;
+        }
+
+        .packet-field-label {
+            font-weight: 500;
+            color: #666;
+            width: 150px;
+        }
+
+        .packet-field-value {
+            color: #333;
+        }
+
+        /* Sequence diagram styles */
+        .sequence-diagram-container {
+            width: 100%;
+            height: 600px;
+            overflow: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fff;
+            padding: 20px;
+        }
+
+        .sequence-diagram-container .mermaid {
+            text-align: center;
+        }
+
+        .sequence-diagram-loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .sequence-diagram-error {
+            padding: 20px;
+            background: #fee;
+            border: 1px solid #fcc;
+            border-radius: 4px;
+            color: #c33;
+        }
+
+        .packet-item {
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .packet-item-header {
+            background: #f5f5f5;
+            padding: 10px 15px;
+            font-weight: 600;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .packet-item-body {
+            padding: 15px;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+
+            .control-panel {
+                width: 100%;
+                max-height: 40vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="control-panel">
+        <div class="control-section">
+            <h3>Simulation Control</h3>
+            <div class="control-buttons">
+                <button id="btnPause" class="primary">Pause</button>
+                <div class="run-controls">
+                    <input type="number" id="runCycleCount" min="1" value="1">
+                    <button id="btnRun" class="primary">Run</button>
+                </div>
+                <button id="btnReset" class="danger">Reset</button>
+            </div>
+            <div class="status-info">
+                <div>Cycle: <strong id="currentCycle">-</strong></div>
+                <div>In-Flight: <strong id="inFlightCount">-</strong></div>
+                <div id="simStatus">Status: <strong>Waiting</strong></div>
+            </div>
+            <div id="errorMessage" class="error-message"></div>
+        </div>
+
+        <div class="control-section">
+            <h3>Configuration</h3>
+            <div class="config-form">
+                <div class="form-group">
+                    <label>Network Configuration</label>
+                    <select id="networkConfig" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                        <option value="">Loading configurations...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Total Cycles</label>
+                    <div id="totalCycles" class="readonly-value">-</div>
+                </div>
+            </div>
+            <div class="status-info" style="margin-top: 10px; font-size: 11px; color: #999;">
+                Select a predefined network configuration. Changes take effect after Reset.
+            </div>
+        </div>
+
+        <div class="control-section">
+            <h3>Statistics</h3>
+            <div class="stats-panel" id="statsPanel">
+                <div class="stats-item">
+                    <div style="text-align: center; color: #999;">No data available</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="visualization-area">
+        <div class="view-header">
+            <div class="view-tabs">
+                <button class="view-tab active" data-view-target="flowView">Flow View</button>
+                <button class="view-tab" data-view-target="txnView">Transaction View</button>
+                <button class="view-tab" data-view-target="topologyView">Topology View</button>
+                <button class="view-tab" data-view-target="policyView">Policy View</button>
+            </div>
+        </div>
+        <div class="view-container">
+            <section id="flowView" class="view-panel active" data-view-key="flow">
+                <div class="flow-view-canvas">
+                    <div id="cy"></div>
+                    <svg id="pipelineOverlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10;"></svg>
+                    <div id="loading" class="loading" style="display: none;">
+                        <div>Loading simulation data...</div>
+                    </div>
+                </div>
+            </section>
+            <section id="txnView" class="view-panel" data-view-key="txn">
+                <div class="view-toolbar">
+                    <div class="form-group">
+                        <label for="transactionID">Transaction ID</label>
+                        <input type="number" id="transactionID" min="1" placeholder="Enter transaction ID">
+                    </div>
+                    <div class="view-toolbar-actions">
+                        <button id="btnLoadTimeline" class="primary">Load Timeline</button>
+                    </div>
+                    <div class="toolbar-spacer"></div>
+                    <div id="timelineError" class="error-message"></div>
+                </div>
+                <div class="transaction-available-panel">
+                    <div class="transaction-available-header">
+                        <div class="transaction-available-title">Available Transactions</div>
+                        <div id="transactionListStatus" class="transaction-available-meta">No transactions yet</div>
+                    </div>
+                    <div id="transactionList" class="transaction-id-list">
+                        <div class="transaction-id-empty">No transactions available.</div>
+                    </div>
+                </div>
+                <div class="timeline-content">
+                    <div id="sequenceDiagramContainer" class="sequence-diagram-container">
+                        <div class="sequence-diagram-loading">Enter a transaction ID and click Load Timeline.</div>
+                    </div>
+                </div>
+            </section>
+            <section id="topologyView" class="view-panel" data-view-key="topology">
+                <div class="view-toolbar">
+                    <div class="view-toolbar-actions">
+                        <button id="btnTopologyAddNode" class="primary">Add Node</button>
+                        <button id="btnTopologyAddLink">Add Link</button>
+                        <button id="btnTopologyDelete">Delete</button>
+                        <button id="btnTopologyUndo">Undo</button>
+                        <button id="btnTopologyRedo">Redo</button>
+                        <button id="btnTopologySave" class="primary">Save Draft</button>
+                        <button id="btnTopologyReload">Reload</button>
+                    </div>
+                    <div class="toolbar-spacer"></div>
+                    <div id="topologyStatus" class="status-info"></div>
+                </div>
+                <div id="topologyEditor" class="topology-editor">
+                    <div class="empty-state">
+                        Topology editor will appear here after we load the current network.
+                    </div>
+                </div>
+            </section>
+            <section id="policyView" class="view-panel" data-view-key="policy">
+                <div class="view-toolbar">
+                    <div class="view-toolbar-actions">
+                        <button id="btnPolicyRefresh" class="primary">Refresh</button>
+                        <button id="btnPolicyApply">Apply Changes</button>
+                    </div>
+                    <div class="toolbar-spacer"></div>
+                    <div id="policyStatus" class="status-info"></div>
+                </div>
+                <div id="policyConfigurator" class="policy-panel">
+                    <div class="empty-state">
+                        Policy configuration options will be available here. Select a node to inspect and update its strategies.
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <div id="packetModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Node Packet Information</h2>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape-edgehandles@4.0.2/cytoscape-edgehandles.min.js"></script>
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>

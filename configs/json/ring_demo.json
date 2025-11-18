@@ -1,0 +1,89 @@
+{
+  "meta": {
+    "name": "ring_demo",
+    "description": "Ring topology demo: 2 RNs with cache, 1 HN with directory/cache, 2 SNs on ring"
+  },
+  "defaults": {
+    "total_cycles": 400,
+    "request_rate": 0.6,
+    "slave_process_rate": 1,
+    "bandwidth_limit": 1,
+    "slave_weights": [1, 1],
+    "master_relay_latency": 2,
+    "relay_master_latency": 2,
+    "relay_slave_latency": 1,
+    "slave_relay_latency": 1,
+    "request_cache_capacity": 64,
+    "home_cache_capacity": 128,
+    "ring_enabled": true,
+    "ring_interleave_stride": 1,
+    "visual_mode": "web",
+    "headless": false
+  },
+  "nodes": [
+    {
+      "id": "rn0",
+      "label": "Request 0",
+      "capabilities": ["requester", "cache:L1"],
+      "params": {"request_rate": 0.6}
+    },
+    {
+      "id": "rn1",
+      "label": "Request 1",
+      "capabilities": ["requester", "cache:L1"],
+      "params": {"request_rate": 0.6}
+    },
+    {
+      "id": "hn0",
+      "label": "Home",
+      "capabilities": ["home_directory", "cache:L3", "directory"]
+    },
+    {
+      "id": "sn0",
+      "label": "Slave 0",
+      "capabilities": ["slave_target"],
+      "params": {"weight": 1}
+    },
+    {
+      "id": "sn1",
+      "label": "Slave 1",
+      "capabilities": ["slave_target"],
+      "params": {"weight": 1}
+    }
+  ],
+  "links": [
+    {
+      "from": "rn0",
+      "to": "hn0",
+      "latency": 2,
+      "bandwidth": 1,
+      "bidirectional": true,
+      "metadata": {"channel": "req"}
+    },
+    {
+      "from": "rn1",
+      "to": "hn0",
+      "latency": 2,
+      "bandwidth": 1,
+      "bidirectional": true,
+      "metadata": {"channel": "req"}
+    },
+    {
+      "from": "hn0",
+      "to": "sn0",
+      "latency": 1,
+      "bandwidth": 1,
+      "bidirectional": true,
+      "metadata": {"channel": "mem"}
+    },
+    {
+      "from": "hn0",
+      "to": "sn1",
+      "latency": 1,
+      "bandwidth": 1,
+      "bidirectional": true,
+      "metadata": {"channel": "mem"}
+    }
+  ]
+}
+
