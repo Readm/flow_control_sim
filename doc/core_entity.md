@@ -14,6 +14,7 @@
 - `link`：`internal/core/link/link.go` 中的 `Link` 结构使用固定 slot 的 ringbuffer 在逻辑 cycle 间缓存 Packet，并在 `Advance(cycle)` 时把 `(cycle, Packet)` 投递到目标 Flow 的 mailbox channel，无锁实现。
 - `dataflow`：`internal/dataflow/packet`/`flow` 提供正式的 Packet（`SourceID`/`TargetID` 均为 int）与 Flow（带 `Tick`、`Emit`、`DrainOutgoing`、`Mailbox` channel）。
 - `network`：持有 “节点为点、Link 为边” 的有向图。每个 cycle 先调用所有 Link `Advance` 让 Flow 收包，再并发执行节点 Tick，并在 Tick 结束后顺序路由 Flow 的 `DrainOutgoing()` 结果到对应的 Link。
+- `controller`：`pkg/controller` 暴露 `SimulationController` 接口，Interface 层通过它启动/停止 Network，并可在测试中注入 Mock Builder。
 
 ## 接口约定
 
@@ -58,6 +59,7 @@ type Manager interface {
 - **Link Mock**：直接使用生产代码中的 `link.Link`。若未来需要特殊行为，可在测试中扩展独立实现。
 - **时间延迟 Mock**：通过 `network.EnableMockDelay(time.Duration)` 注入真实时间等待，只在测试/Mock 时启用，避免污染正式逻辑。
 - **Config Mock**：测试可直接构造 `config.EntityConfig` 或者仅依赖 `NewManager` 所需的 graph 信息。
+- **Controller Mock**：CLI/Web 层只依赖 `SimulationController`，测试场景可以传入 Fake `ManagerBuilder`，而正式环境使用 Network + Mock Node 组合验证启停。
 
 ## 并行性测试
 
@@ -71,6 +73,18 @@ type Manager interface {
 
 ```
 go test ./internal/core/network -run TestNetworkNodesExchangePacketsThroughLink -timeout 5s
+```
+
+## 控制器测试
+
+- 位置：`pkg/controller/controller_test.go`
+- 测试方法：
+  1. 使用正式 `network.Manager` + Mock Node/Link 构建 `ManagerBuilder`，验证 `SimulationController` 的 `Start/Stop/State` 行为。
+  2. 断言重复 `Start` 会返回 `ErrAlreadyRunning`，未启动就 `Stop` 返回 `ErrNotRunning`，Stop 过程中上下文超时会正确传播。
+- 运行命令：
+
+```
+go test ./pkg/controller -timeout 5s
 ```
 
 ## 未来扩展
