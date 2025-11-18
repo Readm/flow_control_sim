@@ -7,41 +7,23 @@ import (
 
 	"github.com/Readm/flow_sim/internal/config"
 	"github.com/Readm/flow_sim/internal/core/network"
-)
-
-// Status represents the lifecycle state of the controller.
-type Status int
-
-const (
-	// StatusIdle indicates the controller has not started any simulation yet.
-	StatusIdle Status = iota
-	// StatusStarting means Start was invoked and the network goroutine is
-	// being prepared.
-	StatusStarting
-	// StatusRunning signals the network goroutine is active.
-	StatusRunning
-	// StatusStopping means Stop is waiting for the goroutine to exit.
-	StatusStopping
-	// StatusStopped indicates the last run finished (either naturally or by
-	// Stop) and no goroutine is active.
-	StatusStopped
+	"github.com/Readm/flow_sim/pkg/visual/frame"
+	"github.com/Readm/flow_sim/pkg/visual/recorder"
 )
 
 // Errors exposed for callers and tests.
 var (
-	ErrNoBuilder      = errors.New("controller requires a manager builder")
-	ErrAlreadyRunning = errors.New("simulation already running")
-	ErrNotRunning     = errors.New("simulation is not running")
-	ErrNoCycles       = errors.New("cycles must be greater than zero")
-	ErrNilContext     = errors.New("context cannot be nil")
+	ErrNoBuilder  = errors.New("controller requires a manager builder")
+	ErrNoCycles   = errors.New("cycles must be greater than zero")
+	ErrNilContext = errors.New("context cannot be nil")
 )
 
-// SimulationController exposes the minimal API used by CLI/Web layers to
-// orchestrate a simulation lifecycle.
+// SimulationController exposes the minimal API used by CLI/Web layers to run a
+// simulation to completion.
 type SimulationController interface {
-	Start(ctx context.Context, cfg config.EntityConfig, cycles uint64) error
-	Stop(ctx context.Context) error
-	State() Status
+	Run(ctx context.Context, cfg config.EntityConfig, cycles uint64) error
+	Frames() <-chan *frame.Frame
+	LatestFrame() *frame.Frame
 }
 
 // ManagerBuilder constructs a network.Manager and returns the default cycles
@@ -52,23 +34,25 @@ type ManagerBuilder func(cfg config.EntityConfig) (*network.Manager, uint64, err
 func New(builder ManagerBuilder) SimulationController {
 	return &managerController{
 		builder: builder,
-		status:  StatusIdle,
+		frameCh: make(chan *frame.Frame, 32),
 	}
 }
 
 type managerController struct {
 	builder ManagerBuilder
 
-	mu     sync.Mutex
-	status Status
+	mu sync.Mutex
 
-	manager *network.Manager
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	runErr  error
+	frameCh          chan *frame.Frame
+	frameRecorder    *recorder.Recorder
+	frameRelayCancel context.CancelFunc
+	frameMu          sync.RWMutex
+	latestFrame      *frame.Frame
 }
 
-func (c *managerController) Start(ctx context.Context, cfg config.EntityConfig, cycles uint64) error {
+// Run executes the simulation for the requested cycles. The call blocks until
+// the manager finishes or the context is canceled.
+func (c *managerController) Run(ctx context.Context, cfg config.EntityConfig, cycles uint64) error {
 	if ctx == nil {
 		return ErrNilContext
 	}
@@ -79,15 +63,7 @@ func (c *managerController) Start(ctx context.Context, cfg config.EntityConfig, 
 		return err
 	}
 
-	c.mu.Lock()
-	if c.status == StatusRunning || c.status == StatusStarting || c.status == StatusStopping {
-		c.mu.Unlock()
-		return ErrAlreadyRunning
-	}
-	builder := c.builder
-	c.mu.Unlock()
-
-	mgr, defaultCycles, err := builder(cfg)
+	mgr, defaultCycles, err := c.builder(cfg)
 	if err != nil {
 		return err
 	}
@@ -103,93 +79,85 @@ func (c *managerController) Start(ctx context.Context, cfg config.EntityConfig, 
 		return ErrNoCycles
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
+	rec := recorder.New(32)
+	rec.SetPaused(false)
+	mgr.SetCycleHook(rec)
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.status == StatusRunning || c.status == StatusStarting || c.status == StatusStopping {
-		cancel()
-		return ErrAlreadyRunning
-	}
-
-	c.manager = mgr
-	c.cancel = cancel
-	c.status = StatusStarting
-	c.runErr = nil
-
-	c.wg.Add(1)
-	go c.run(runCtx, runCycles)
-
-	c.status = StatusRunning
-	return nil
-}
-
-func (c *managerController) Stop(ctx context.Context) error {
-	if ctx == nil {
-		return ErrNilContext
-	}
-
-	c.mu.Lock()
-	if c.status != StatusRunning && c.status != StatusStarting {
-		c.mu.Unlock()
-		return ErrNotRunning
-	}
-	cancel := c.cancel
-	c.status = StatusStopping
+	c.stopFrameStreamingLocked()
+	c.frameRecorder = rec
+	c.startFrameRelayLocked(rec)
 	c.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
-	}
-
-	done := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-done:
-	}
+	err = mgr.Run(ctx, runCycles)
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	err := c.normalizeRunErr()
-	c.manager = nil
-	c.cancel = nil
-	c.status = StatusStopped
+	c.stopFrameStreamingLocked()
+	c.mu.Unlock()
+
 	return err
 }
 
-func (c *managerController) State() Status {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.status
+// Frames returns a non-blocking stream of visualization frames.
+func (c *managerController) Frames() <-chan *frame.Frame {
+	return c.frameCh
 }
 
-func (c *managerController) run(ctx context.Context, cycles uint64) {
-	defer c.wg.Done()
-	err := c.manager.Run(ctx, cycles)
+// LatestFrame returns a copy of the last recorded frame if available.
+func (c *managerController) LatestFrame() *frame.Frame {
+	c.frameMu.RLock()
+	defer c.frameMu.RUnlock()
+	if c.latestFrame == nil {
+		return nil
+	}
+	clone := *c.latestFrame
+	clone.Nodes = append([]frame.Node(nil), c.latestFrame.Nodes...)
+	clone.Edges = append([]frame.Edge(nil), c.latestFrame.Edges...)
+	return &clone
+}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.runErr = err
-	if c.status != StatusStopping {
-		c.status = StatusStopped
+func (c *managerController) startFrameRelayLocked(rec *recorder.Recorder) {
+	if rec == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.frameRelayCancel = cancel
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case fr, ok := <-rec.Frames():
+				if !ok {
+					return
+				}
+				c.publishFrame(fr)
+			}
+		}
+	}()
+}
+
+func (c *managerController) stopFrameStreamingLocked() {
+	if c.frameRelayCancel != nil {
+		c.frameRelayCancel()
+		c.frameRelayCancel = nil
+	}
+	if c.frameRecorder != nil {
+		c.frameRecorder.SetPaused(true)
+		c.frameRecorder.Close()
+		c.frameRecorder = nil
 	}
 }
 
-func (c *managerController) normalizeRunErr() error {
-	if c.runErr == nil {
-		return nil
+func (c *managerController) publishFrame(f *frame.Frame) {
+	if f == nil {
+		return
 	}
-	if errors.Is(c.runErr, context.Canceled) {
-		return nil
+	c.frameMu.Lock()
+	c.latestFrame = f
+	c.frameMu.Unlock()
+	select {
+	case c.frameCh <- f:
+	default:
 	}
-	if errors.Is(c.runErr, context.DeadlineExceeded) {
-		return c.runErr
-	}
-	return c.runErr
 }

@@ -7,7 +7,7 @@
 
 ## Interface 层
 - Web Interface：提供可视化配置与运行监控，负责将表单/请求映射为 `config` 文件，并触发 `run cycle`。
-- CLI Interface：面向批处理或 CI 场景，通过 `pkg/controller` 暴露的 `SimulationController` 启动/停止仿真，命令解析层只依赖接口方便注入 Mock。
+- CLI Interface：面向批处理或 CI 场景，通过 `pkg/controller` 暴露的 `SimulationController.Run` 一次性推进指定周期，命令解析层只依赖接口方便注入 Mock。
 - Interface 层统一通过配置服务写入 `config`，并在运行周期中接受 Network 的状态回执。
 
 ## Core 设计

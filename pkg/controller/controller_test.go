@@ -2,7 +2,6 @@ package controller_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -16,7 +15,7 @@ import (
 	"github.com/Readm/flow_sim/pkg/controller"
 )
 
-func TestControllerStartAndStop(t *testing.T) {
+func TestControllerRunEmitsFrames(t *testing.T) {
 	builder := newTestBuilder(t, 2*time.Millisecond)
 	ctrl := controller.New(builder)
 
@@ -27,29 +26,20 @@ func TestControllerStartAndStop(t *testing.T) {
 		Link: config.LinkConfig{},
 	}
 
-	startCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	if err := ctrl.Start(startCtx, cfg, 100); err != nil {
-		t.Fatalf("start failed: %v", err)
+	if err := ctrl.Run(ctx, cfg, 10); err != nil {
+		t.Fatalf("run failed: %v", err)
 	}
 
-	waitForState(t, ctrl, controller.StatusRunning)
-
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
-	defer stopCancel()
-
-	if err := ctrl.Stop(stopCtx); err != nil {
-		t.Fatalf("stop failed: %v", err)
-	}
-
-	if got := ctrl.State(); got != controller.StatusStopped {
-		t.Fatalf("expected state stopped, got %v", got)
+	if ctrl.LatestFrame() == nil {
+		t.Fatalf("expected latest frame to be populated")
 	}
 }
 
-func TestControllerRejectsConcurrentStart(t *testing.T) {
-	builder := newTestBuilder(t, time.Millisecond)
+func TestControllerRunRespectsContext(t *testing.T) {
+	builder := newTestBuilder(t, 5*time.Millisecond)
 	ctrl := controller.New(builder)
 
 	cfg := config.EntityConfig{
@@ -59,42 +49,33 @@ func TestControllerRejectsConcurrentStart(t *testing.T) {
 		Link: config.LinkConfig{},
 	}
 
-	if err := ctrl.Start(context.Background(), cfg, 50); err != nil {
-		t.Fatalf("first start failed: %v", err)
-	}
-
-	if err := ctrl.Start(context.Background(), cfg, 50); !errors.Is(err, controller.ErrAlreadyRunning) {
-		t.Fatalf("expected ErrAlreadyRunning, got %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := ctrl.Stop(ctx); err != nil {
-		t.Fatalf("stop failed: %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ctrl.Run(ctx, cfg, 5); err == nil {
+		t.Fatalf("expected context cancellation error")
 	}
 }
 
-func TestControllerStopWithoutRun(t *testing.T) {
-	ctrl := controller.New(newTestBuilder(t, time.Millisecond))
+func TestControllerRunRequiresCycles(t *testing.T) {
+	ctrl := controller.New(func(cfg config.EntityConfig) (*network.Manager, uint64, error) {
+		f := flow.NewFIFO(1, 2)
+		n := &mockNode{id: 1, delay: time.Millisecond, flow: f}
+		mgr, err := network.NewManager([]node.Node{n}, map[int][]*link.Link{
+			n.ID(): nil,
+		})
+		return mgr, 0, err
+	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	if err := ctrl.Stop(ctx); !errors.Is(err, controller.ErrNotRunning) {
-		t.Fatalf("expected ErrNotRunning, got %v", err)
+	cfg := config.EntityConfig{
+		Nodes: []config.NodeConfig{
+			{ID: 1},
+		},
+		Link: config.LinkConfig{},
 	}
-}
 
-func waitForState(t *testing.T, ctrl controller.SimulationController, expected controller.Status) {
-	t.Helper()
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if ctrl.State() == expected {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
+	if err := ctrl.Run(context.Background(), cfg, 0); err != controller.ErrNoCycles {
+		t.Fatalf("expected ErrNoCycles, got %v", err)
 	}
-	t.Fatalf("state did not reach %v within timeout (current %v)", expected, ctrl.State())
 }
 
 func newTestBuilder(t *testing.T, tickDelay time.Duration) controller.ManagerBuilder {
@@ -122,7 +103,7 @@ func newTestBuilder(t *testing.T, tickDelay time.Duration) controller.ManagerBui
 			return nil, 0, err
 		}
 
-		return mgr, 10, nil
+		return mgr, 0, nil
 	}
 }
 

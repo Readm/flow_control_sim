@@ -13,10 +13,11 @@ import (
 
 // Manager coordinates nodes and links inside a Network cycle.
 type Manager struct {
-	nodes    map[int]node.Node
-	order    []node.Node
-	outgoing map[int][]*link.Link
-	links    []*link.Link
+	nodes     map[int]node.Node
+	order     []node.Node
+	outgoing  map[int][]*link.Link
+	links     []*link.Link
+	cycleHook CycleHook
 }
 
 // NewManager builds a Manager with the provided nodes和图结构。graph 使用 node ID 作为 key，value 为从该节点出发的 Link。
@@ -87,6 +88,9 @@ func (m *Manager) Run(ctx context.Context, cycles uint64) error {
 		}
 		if err := m.dispatchCycle(ctx, cycle, delay); err != nil {
 			return err
+		}
+		if m.cycleHook != nil {
+			m.cycleHook.OnCycleEnd(cycle, m.order, m.links)
 		}
 		if mockDelayEnabled && cycle+1 < cycles {
 			if err := waitForLink(ctx, delay); err != nil {

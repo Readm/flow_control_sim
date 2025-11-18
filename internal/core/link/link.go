@@ -45,6 +45,25 @@ func (l *Link) TargetID() int {
 	return l.targetID
 }
 
+// Latency returns the configured delay in cycles.
+func (l *Link) Latency() uint64 {
+	return l.latency
+}
+
+// SlotCount returns the number of stages used to buffer packets.
+func (l *Link) SlotCount() uint64 {
+	return l.slotCount
+}
+
+// SnapshotOccupancy reports the pending packet count per slot.
+func (l *Link) SnapshotOccupancy() []int {
+	occupancy := make([]int, len(l.slots))
+	for i, bucket := range l.slots {
+		occupancy[i] = len(bucket)
+	}
+	return occupancy
+}
+
 // Transmit schedules a packet for delivery after the configured latency.
 func (l *Link) Transmit(cycle uint64, pkt packet.Packet) {
 	targetCycle := cycle + l.latency

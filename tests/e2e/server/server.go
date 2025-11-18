@@ -15,8 +15,8 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/Readm/flow_sim/internal/config"
+	"github.com/Readm/flow_sim/pkg/visual/frame"
 	"github.com/Readm/flow_sim/tests/e2e/mocks"
-	"github.com/Readm/flow_sim/tests/e2e/model"
 )
 
 // Options configures the bridge server.
@@ -39,7 +39,7 @@ type Server struct {
 	httpServer *httptest.Server
 
 	latestMu    sync.RWMutex
-	latestFrame *model.Frame
+	latestFrame *frame.Frame
 
 	hub    *wsHub
 	cancel context.CancelFunc
@@ -120,7 +120,7 @@ func (s *Server) consumeFrames(ctx context.Context) {
 	}
 }
 
-func (s *Server) broadcast(frame *model.Frame) {
+func (s *Server) broadcast(frame *frame.Frame) {
 	data, err := json.Marshal(frame)
 	if err != nil {
 		return
@@ -220,34 +220,29 @@ func (s *Server) applyControl(ctx context.Context, req *controlRequest) error {
 		return errors.New("control request is nil")
 	}
 	switch req.Type {
-	case "pause":
-		ctx, cancel := context.WithTimeout(ctx, time.Second)
-		defer cancel()
-		if err := s.controller.Stop(ctx); err != nil {
-			return err
-		}
-		s.controller.NotifyControl("pause", 0)
 	case "run":
 		cycles := req.Cycles
 		if cycles <= 0 {
 			cycles = 1
 		}
-		s.controller.NotifyControl("run", uint64(cycles))
+		s.startRun(uint64(cycles))
 	case "reset":
 		total := req.TotalCycles
 		if total <= 0 {
 			total = s.defaultCycles
 		}
-		ctx, cancel := context.WithTimeout(ctx, time.Second)
-		defer cancel()
-		if err := s.controller.Start(ctx, s.defaultConfig, uint64(total)); err != nil {
-			return err
-		}
-		s.controller.NotifyControl("reset", uint64(total))
+		s.startRun(uint64(total))
 	default:
 		return errors.New("invalid command type")
 	}
 	return nil
+}
+
+func (s *Server) startRun(cycles uint64) {
+	cfg := s.defaultConfig
+	go func() {
+		_ = s.controller.Run(context.Background(), cfg, cycles)
+	}()
 }
 
 type controlRequest struct {

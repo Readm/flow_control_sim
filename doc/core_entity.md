@@ -79,7 +79,7 @@ go test ./internal/core/network -run TestNetworkNodesExchangePacketsThroughLink 
 
 - 位置：`pkg/controller/controller_test.go`
 - 测试方法：
-  1. 使用正式 `network.Manager` + Mock Node/Link 构建 `ManagerBuilder`，验证 `SimulationController` 的 `Start/Stop/State` 行为。
+  1. 使用正式 `network.Manager` + Mock Node/Link 构建 `ManagerBuilder`，验证 `SimulationController.Run` 的执行与错误处理。
   2. 断言重复 `Start` 会返回 `ErrAlreadyRunning`，未启动就 `Stop` 返回 `ErrNotRunning`，Stop 过程中上下文超时会正确传播。
 - 运行命令：
 
