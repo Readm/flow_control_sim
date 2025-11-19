@@ -1,0 +1,269 @@
+package link
+
+import (
+	"context"
+	"testing"
+
+	"github.com/Readm/flow_sim/internal/dataflow/flow"
+	"github.com/Readm/flow_sim/internal/dataflow/packet"
+)
+
+// TestLinkBasicFunctionality tests basic packet transmission with fixed latency.
+func TestLinkBasicFunctionality(t *testing.T) {
+	t.Parallel()
+
+	f := flow.NewFIFO(1, 8, 0, 0)
+	link := NewLink(0, f, 2, 0) // latency = 2
+
+	pkt := packet.Packet{
+		SourceID: 0,
+		TargetID: 1,
+		Payload:  "test",
+	}
+
+	// Set noBackpressureUntil to allow transmission
+	link.SetNoBackpressureUntil(10)
+
+	// Transmit at cycle 0, should arrive at cycle 2
+	link.Transmit(0, pkt)
+	link.Advance(2)
+
+	// Verify packet was received
+	ctx := context.Background()
+	f.Tick(ctx, 2)
+	if f.ProcessedCount() != 1 {
+		t.Fatalf("expected 1 processed packet, got %d", f.ProcessedCount())
+	}
+}
+
+// TestLinkRingBufferMechanism tests that packets are stored in correct ring buffer slots.
+func TestLinkRingBufferMechanism(t *testing.T) {
+	t.Parallel()
+
+	f := flow.NewFIFO(1, 8, 0, 0)
+	link := NewLink(0, f, 3, 0) // latency = 3, slotCount = 4
+
+	pkt1 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test1"}
+	pkt2 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test2"}
+
+	// Transmit at cycle 0, should be in slot (0+3) % 4 = 3
+	link.Transmit(0, pkt1)
+	// Transmit at cycle 1, should be in slot (1+3) % 4 = 0
+	link.Transmit(1, pkt2)
+
+	// Verify occupancy
+	occupancy := link.SnapshotOccupancy()
+	if occupancy[3] != 1 {
+		t.Fatalf("expected 1 packet in slot 3, got %d", occupancy[3])
+	}
+	if occupancy[0] != 1 {
+		t.Fatalf("expected 1 packet in slot 0, got %d", occupancy[0])
+	}
+}
+
+// TestLinkSFC tests that Link SFC is correctly updated.
+func TestLinkSFC(t *testing.T) {
+	t.Parallel()
+
+	f := flow.NewFIFO(1, 8, 0, 0)
+	link := NewLink(0, f, 1, 0)
+
+	// Set noBackpressureUntil to allow advancement
+	link.SetNoBackpressureUntil(10)
+
+	// Initially SFC should be 0
+	if link.SendFinishedCycle() != 0 {
+		t.Fatalf("expected initial SFC 0, got %d", link.SendFinishedCycle())
+	}
+
+	// Advance to cycle 1, SFC should update
+	link.Advance(1)
+	if link.SendFinishedCycle() != 1 {
+		t.Fatalf("expected SFC 1, got %d", link.SendFinishedCycle())
+	}
+
+	// Advance to cycle 5, SFC should update
+	link.Advance(5)
+	if link.SendFinishedCycle() != 5 {
+		t.Fatalf("expected SFC 5, got %d", link.SendFinishedCycle())
+	}
+}
+
+// TestLinkBackpressurePausesCycle tests that backpressure pauses cycle advancement.
+func TestLinkBackpressurePausesCycle(t *testing.T) {
+	t.Parallel()
+
+	f := flow.NewFIFO(1, 2, 0, 0) // Small mailbox to trigger backpressure
+	link := NewLink(0, f, 1, 0)
+
+	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
+
+	// Set noBackpressureUntil to 2
+	link.SetNoBackpressureUntil(2)
+
+	// Transmit and advance to cycle 1 (within noBackpressureUntil)
+	link.Transmit(0, pkt)
+	link.Advance(1)
+
+	// Verify currentCycle advanced
+	if link.CurrentCycle() != 1 {
+		t.Fatalf("expected currentCycle 1, got %d", link.CurrentCycle())
+	}
+
+	// Try to advance to cycle 3 (beyond noBackpressureUntil)
+	link.Advance(3)
+
+	// Verify currentCycle did NOT advance (still 1)
+	if link.CurrentCycle() != 1 {
+		t.Fatalf("expected currentCycle to stay at 1, got %d", link.CurrentCycle())
+	}
+
+	// Update noBackpressureUntil to 5
+	link.SetNoBackpressureUntil(5)
+
+	// Now advance to cycle 3
+	link.Advance(3)
+
+	// Verify currentCycle advanced
+	if link.CurrentCycle() != 3 {
+		t.Fatalf("expected currentCycle 3, got %d", link.CurrentCycle())
+	}
+}
+
+// TestLinkDirectSendPath tests the optimization path when noBackpressureUntil >= targetCycle.
+func TestLinkDirectSendPath(t *testing.T) {
+	t.Parallel()
+
+	f := flow.NewFIFO(1, 8, 0, 0)
+	link := NewLink(0, f, 2, 0) // latency = 2
+
+	// Set noBackpressureUntil to 5 (>= 0+2)
+	link.SetNoBackpressureUntil(5)
+
+	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
+
+	// Transmit at cycle 0, should directly send to channel (targetCycle = 2 < 5)
+	link.Transmit(0, pkt)
+
+	// Verify SFC updated to targetCycle
+	if link.SendFinishedCycle() != 2 {
+		t.Fatalf("expected SFC 2, got %d", link.SendFinishedCycle())
+	}
+
+	// Verify packet was received directly (no need to call Advance)
+	ctx := context.Background()
+	f.Tick(ctx, 2)
+	if f.ProcessedCount() != 1 {
+		t.Fatalf("expected 1 processed packet, got %d", f.ProcessedCount())
+	}
+}
+
+// TestLinkRingBufferPath tests the ring buffer path when noBackpressureUntil < targetCycle.
+func TestLinkRingBufferPath(t *testing.T) {
+	t.Parallel()
+
+	f := flow.NewFIFO(1, 8, 0, 0)
+	link := NewLink(0, f, 3, 0) // latency = 3
+
+	// Set noBackpressureUntil to 2 (< 0+3)
+	link.SetNoBackpressureUntil(2)
+
+	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
+
+	// Transmit at cycle 0, should use ring buffer (targetCycle = 3 > 2)
+	link.Transmit(0, pkt)
+
+	// Verify SFC not updated yet (not sent)
+	if link.SendFinishedCycle() != 0 {
+		t.Fatalf("expected SFC 0, got %d", link.SendFinishedCycle())
+	}
+
+	// Advance to cycle 3, should send from ring buffer
+	link.SetNoBackpressureUntil(5) // Update to allow sending
+	link.Advance(3)
+
+	// Verify SFC updated
+	if link.SendFinishedCycle() != 3 {
+		t.Fatalf("expected SFC 3, got %d", link.SendFinishedCycle())
+	}
+
+	// Verify packet was received
+	ctx := context.Background()
+	f.Tick(ctx, 3)
+	if f.ProcessedCount() != 1 {
+		t.Fatalf("expected 1 processed packet, got %d", f.ProcessedCount())
+	}
+}
+
+// TestLinkReadFromFlow tests reading packets from Flow's out_queue based on Flow SFC.
+func TestLinkReadFromFlow(t *testing.T) {
+	t.Parallel()
+
+	f := flow.NewFIFO(1, 8, 0, 0)
+	link := NewLink(0, f, 1, 0)
+
+	// Set Flow currentCycle first
+	ctx := context.Background()
+	f.Tick(ctx, 1) // Advance to cycle 1
+
+	// Emit packets
+	pkt1 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test1"}
+	pkt2 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test2"}
+	f.Emit(pkt1, pkt2)
+
+	// Flow SFC should be updated to currentCycle
+	flowSFC := f.OutQueueSendFinishedCycle()
+	if flowSFC != 1 {
+		t.Fatalf("expected Flow SFC 1, got %d", flowSFC)
+	}
+
+	// Set link currentCycle to match Flow SFC
+	link.SetSendFinishedCycle(flowSFC)
+
+	// Read from Flow
+	link.ReadFromFlow(f)
+
+	// Verify packets were transmitted
+	occupancy := link.SnapshotOccupancy()
+	totalPackets := 0
+	for _, count := range occupancy {
+		totalPackets += count
+	}
+	if totalPackets != 2 {
+		t.Fatalf("expected 2 packets in link, got %d", totalPackets)
+	}
+}
+
+// TestLinkMultiplePackets tests handling multiple packets in sequence.
+func TestLinkMultiplePackets(t *testing.T) {
+	t.Parallel()
+
+	f := flow.NewFIFO(1, 8, 0, 0)
+	link := NewLink(0, f, 1, 0)
+	link.SetNoBackpressureUntil(10)
+
+	pkt1 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test1"}
+	pkt2 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test2"}
+	pkt3 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test3"}
+
+	// Transmit multiple packets
+	link.Transmit(0, pkt1)
+	link.Transmit(1, pkt2)
+	link.Transmit(2, pkt3)
+
+	// Advance to deliver all packets
+	link.Advance(1)
+	link.Advance(2)
+	link.Advance(3)
+
+	// Verify all packets were received
+	ctx := context.Background()
+	f.Tick(ctx, 1)
+	f.Tick(ctx, 2)
+	f.Tick(ctx, 3)
+
+	if f.ProcessedCount() != 3 {
+		t.Fatalf("expected 3 processed packets, got %d", f.ProcessedCount())
+	}
+}
+
