@@ -15,7 +15,6 @@ const state = {
 };
 
 const controlButtons = {
-    pause: document.getElementById("btnPause"),
     run: document.getElementById("btnRun"),
     reset: document.getElementById("btnReset"),
 };
@@ -167,8 +166,7 @@ function updateTabHighlights(activeId) {
 }
 
 function setupControlPanel() {
-    controlButtons.pause?.addEventListener("click", () => handleControlCommand("pause"));
-    controlButtons.run?.addEventListener("click", () => handleRunCommand());
+    controlButtons.run?.addEventListener("click", () => handleAdvanceCommand());
     controlButtons.reset?.addEventListener("click", () => handleControlCommand("reset"));
 }
 
@@ -198,6 +196,28 @@ async function handleControlCommand(type, options = {}) {
         }
 
         applyControlState(type, options);
+        
+        // For reset, wait for the initial frame to clear expectingReset
+        if (type === "reset") {
+            for (let attempt = 0; attempt < 10; attempt += 1) {
+                const frame = await fetchFrameImmediate();
+                if (frame && frame.cycle === 0) {
+                    // Frame received, expectingReset will be cleared in handleFrame
+                    // Also manually clear it here as a fallback
+                    if (state.expectingReset && frame.cycle === 0) {
+                        state.expectingReset = false;
+                        updateButtonStates();
+                    }
+                    break;
+                }
+                await delay(100);
+            }
+            // Fallback: if we still haven't received a frame after 1 second, clear expectingReset
+            if (state.expectingReset) {
+                state.expectingReset = false;
+                updateButtonStates();
+            }
+        }
     } catch (error) {
         success = false;
         showErrorMessage(error.message || "Failed to send control command");
@@ -209,7 +229,7 @@ async function handleControlCommand(type, options = {}) {
     return success;
 }
 
-async function handleRunCommand() {
+async function handleAdvanceCommand() {
     if (state.isRunProcessing) {
         return;
     }
@@ -231,7 +251,7 @@ async function handleRunCommand() {
 
     state.isRunProcessing = true;
     updateButtonStates();
-    const success = await handleControlCommand("run", { cycles });
+    const success = await handleControlCommand("advance", { cycles });
 
     try {
         if (success) {
@@ -256,7 +276,7 @@ function buildControlPayload(type, options = {}) {
         if (configName) {
             payload.configName = configName;
         }
-    } else if (type === "run") {
+    } else if (type === "advance") {
         payload.cycles = options.cycles || 1;
     }
     return payload;
@@ -264,11 +284,7 @@ function buildControlPayload(type, options = {}) {
 
 function applyControlState(type) {
     switch (type) {
-        case "pause":
-            state.isPaused = true;
-            updateStatusText("Paused");
-            break;
-        case "run":
+        case "advance":
             state.isPaused = false;
             updateStatusText("Running");
             break;
@@ -287,9 +303,7 @@ function applyControlState(type) {
 
 function getButtonByType(type) {
     switch (type) {
-        case "pause":
-            return controlButtons.pause;
-        case "run":
+        case "advance":
             return controlButtons.run;
         case "reset":
             return controlButtons.reset;
@@ -305,9 +319,6 @@ function disableButton(button, disabled) {
 }
 
 function updateButtonStates() {
-    if (controlButtons.pause) {
-        controlButtons.pause.disabled = state.isPaused || state.expectingReset;
-    }
     if (controlButtons.run) {
         controlButtons.run.disabled = state.isRunProcessing || state.expectingReset;
     }

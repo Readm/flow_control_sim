@@ -2,7 +2,7 @@
 
 本文档记录 flow_sim 项目的开发进展，按照架构文档 (`doc/arch.md`) 中的模块划分进行整理。
 
-最后更新：2024年（当前实现状态）
+最后更新：2025年11月（当前实现状态）
 
 ## Core/Entity 层
 
@@ -81,6 +81,7 @@
 - ✅ **Packet 定义** (`packet.go`)
   - `Packet` 结构体（SourceID, TargetID, Payload）
   - `Envelope` 结构体（Cycle, Packet）
+  - 扩展字段：TransactionID, MessageID, Sequence（保持向后兼容）
 
 #### DataFlow - Flow (`internal/dataflow/flow/`)
 - ✅ **Flow 接口** (`flow.go`)
@@ -137,28 +138,51 @@
 ## DataFlow 子层
 
 ### ✅ 已完成
-- ✅ Packet 基础实现
+- ✅ Packet 基础实现（已扩展 TransactionID、MessageID、Sequence 字段）
 - ✅ Flow 完整实现（FIFO）
+- ✅ **Message** (`internal/dataflow/message/`)
+  - Message 结构定义（ID, TransactionID, Type, SourceNodeID, TargetNodeID, Payload, Packets）
+  - MessageType 常量（Request, Data, Response）
+  - `ToPackets()` - 将 Message 编码为 Packets（支持单 Packet 和多 Packet）
+  - `FromPackets()` - 从 Packets 解码为 Message（自动排序和类型恢复）
+  - `IsComplete()` - 检查 Message 是否完整
+  - ProcessedInfo 序列追踪（支持多个节点处理同一消息）
+  - `AddProcessedInfo()`, `GetLastProcessedInfo()`, `IsProcessed()` 方法
+- ✅ **Transaction** (`internal/dataflow/transaction/`)
+  - Transaction 结构定义（ID, InitiatorNodeID, State, Messages, Events）
+  - TransactionState 常量（Pending, InProgress, Completed, Failed）
+  - Event 结构体（用于追踪生命周期事件）
+  - 状态管理方法（UpdateState, AddMessage, AddEvent）
+  - Transaction Manager（线程安全的事务管理）
+  - 创建、查询、更新 Transaction
+  - 按节点查询 Transaction
+  - 完整的读请求示例（ReqMessage -> DataMessage with 4 Packets）
 
 ### ❌ 未完成
-- ❌ **Transaction** (`internal/dataflow/transaction/`)
-  - Transaction 结构定义
-  - Transaction 生命周期管理
-  - Transaction 与 Packet 的关联
-- ❌ **Message** (`internal/dataflow/message/`)
-  - Message 结构定义
-  - Packet 到 Message 的解码
-  - Message 的高层语义处理
+- ❌ Message 的高层语义处理（协议特定逻辑）
 
 ## Interface 层
 
+### ✅ 已完成
+- ✅ **Web Interface 前端** (`web/static/`)
+  - 多视图布局（Flow View, Transaction View, Topology View, Policy View）
+  - WebSocket 实时更新
+  - Cytoscape 可视化渲染
+  - REST API 集成
+- ✅ **Web Interface 服务器逻辑** (`tests/e2e/server/`)
+  - HTTP 路由定义（/api/frame, /api/control, /api/configs）
+  - WebSocket 支持（/ws）
+  - 静态文件服务
+  - Frame 流式输出
+  - 控制命令处理（run, reset）
+  - E2E 测试服务器实现
+
+### ⚠️ 部分完成
+- ⚠️ **Web Interface 启动程序** (`cmd/web/`)
+  - ❌ 生产环境启动程序（目前仅在测试中使用）
+  - ✅ 服务器逻辑已实现（在 tests/e2e/server 中）
+
 ### ❌ 未完成
-- ❌ **Web Interface** (`cmd/web/`)
-  - Web 服务器启动
-  - 路由定义
-  - 配置表单处理
-  - 可视化监控界面
-  - Frame 流式输出（WebSocket/SSE）
 - ❌ **CLI Interface** (`cmd/cli/`)
   - 命令解析（cobra/flag）
   - 配置文件加载
@@ -167,12 +191,19 @@
 
 ## Plugin System
 
+### ✅ 已完成
+- ✅ **Incentive Hook 接口** (`pkg/hook/incentive.go`)
+  - `IncentiveHook` 接口定义
+  - `MockIncentiveHook` 实现
+  - 支持按周期、概率、最大数量等策略创建 Transaction
+  - 配置化创建策略（CreateEveryNCycles, CreateProbability, MaxTransactionsPerNode）
+
 ### ❌ 未完成
 - ❌ **Hook 框架** (`pkg/hook/`)
-  - Hook 定义和注册表
-  - 事件分发机制
+  - Hook 注册表和事件分发机制
   - 插件生命周期管理
   - 异常隔离机制
+  - 其他 Hook 类型（Coherence, Directory, Protocol, FlowControl, Routing）
 - ❌ **Coherence 插件** (`plugin/coherence/`)
   - MESI 协议实现
   - MOESI 协议实现
@@ -203,13 +234,19 @@
   - Link 测试：8 个
   - 跨 Cycle 并行测试：5 个
 - ✅ Controller 测试：3 个
-- ✅ E2E 测试：1 个 (`tests/e2e/flowview_test.go`)
+- ✅ **E2E 测试** (`tests/e2e/`)
+  - FlowView E2E 测试：1 个（使用 Rod 进行浏览器端到端测试）
+  - 测试服务器实现（HTTP + WebSocket）
+  - 验证前端视图、WebSocket 通信、控制命令
+- ✅ **DataFlow 单元测试**
+  - Message 测试：9 个（创建、编解码、处理信息追踪、多节点处理）
+  - Transaction 测试：7 个（状态管理、事件追踪、读请求完整流程、并发安全）
+  - Incentive Hook 测试：5 个（各种创建策略）
+  - 总计：21 个测试用例，全部通过
 
 ### ❌ 未完成
 - ❌ Config 单元测试（table-driven 测试）
-- ❌ DataFlow 单元测试（Transaction/Message）
-- ❌ Plugin 单元测试
-- ❌ Hook 框架测试
+- ❌ Hook 框架测试（注册表、事件分发）
 - ❌ Interface 层测试（CLI/Web）
 - ❌ 集成测试 (`test/integration/`)
 - ❌ 配置样例和 Mock (`test/fixtures/`)
@@ -235,57 +272,62 @@
 | 模块 | 完成度 | 说明 |
 |------|--------|------|
 | **Core/Entity** | 🟢 90% | 核心功能基本完成，缺少完整配置解析 |
-| **DataFlow** | 🟡 50% | Packet 和 Flow 完成，Transaction 和 Message 未实现 |
-| **Interface** | 🔴 0% | Web 和 CLI 接口均未实现 |
-| **Plugin System** | 🔴 0% | Hook 框架和所有插件均未实现 |
-| **测试** | 🟡 60% | Core 层测试较完整，其他层测试缺失 |
+| **DataFlow** | 🟢 90% | Packet、Flow、Message、Transaction 全部完成 |
+| **Interface** | 🟡 60% | Web 前端和服务器逻辑完成，缺少生产启动程序；CLI 未实现 |
+| **Plugin System** | 🟡 20% | Incentive Hook 接口完成，Hook 框架和其他插件未实现 |
+| **测试** | 🟢 80% | Core、DataFlow、E2E 测试完整，其他层测试缺失 |
 | **文档** | 🟡 50% | 核心文档完成，Plugin 和 Interface 文档缺失 |
 
 ### 代码统计
 
-- **已实现测试**：26 个单元测试
-- **核心接口**：Node, Link, Flow, Network Manager
+- **已实现测试**：47 个单元测试（Core: 26, DataFlow: 21）
+- **核心接口**：Node, Link, Flow, Network Manager, Transaction Manager, Message, IncentiveHook
 - **关键特性**：
   - ✅ 多 Flow 支持
   - ✅ 反压机制
   - ✅ SFC 机制
   - ✅ 跨 Cycle 并行
   - ✅ 直接发送路径优化
+  - ✅ Transaction 生命周期管理
+  - ✅ Message 编解码（单/多 Packet）
+  - ✅ 处理历史追踪（多节点处理）
+  - ✅ Incentive Hook 接口
 
 ## 下一步计划建议
 
 ### 高优先级
-1. **完善 DataFlow 层**
-   - 实现 Transaction 结构
-   - 实现 Message 结构
-   - 建立 Transaction-Packet-Message 的关联
-
-2. **实现 Hook 框架**
-   - 定义 Hook 接口
-   - 实现注册表和事件分发
+1. **实现 Hook 框架**
+   - 定义 Hook 注册表和事件分发机制
+   - 实现插件生命周期管理
+   - 异常隔离机制
    - 为后续插件开发提供基础
 
-3. **完善配置系统**
+2. **完善配置系统**
    - 实现 YAML/JSON 解析器
    - 支持插件配置
    - 配置文件验证
 
+3. **集成 Transaction/Message 到 Network**
+   - 在 Network Manager 中集成 Transaction Manager
+   - 在 Node 中集成 IncentiveHook 调用
+   - 实现 Message 到 Packet 的自动转换流程
+
 ### 中优先级
-4. **实现基础插件**
+4. **完善 Web Interface**
+   - 创建生产环境启动程序（`cmd/web/`）
+   - 将测试服务器逻辑迁移到生产代码
+   - 添加配置和部署文档
+
+5. **实现基础插件**
    - 选择一个简单的插件（如 Routing）作为示例
    - 验证 Hook 框架的可用性
 
-5. **实现 CLI Interface**
+6. **实现 CLI Interface**
    - 命令行参数解析
    - 配置文件加载
    - 批处理支持
 
 ### 低优先级
-6. **实现 Web Interface**
-   - Web 服务器
-   - 可视化界面
-   - 实时监控
-
 7. **完善测试覆盖**
    - 增加集成测试
    - 增加配置测试
