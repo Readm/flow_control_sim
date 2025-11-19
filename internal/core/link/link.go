@@ -7,12 +7,13 @@ import (
 
 // Link represents a directed edge in the topology。每条链路拥有独立的 cycle 延迟和 slot。
 type Link struct {
-	sourceID  int
-	targetID  int
-	target    flow.Flow
-	latency   uint64
-	slotCount uint64
-	slots     [][]packet.Packet
+	sourceID     int
+	targetID     int
+	target       flow.Flow
+	latency      uint64
+	slotCount    uint64
+	slots        [][]packet.Packet
+	backpressured bool
 }
 
 // NewLink creates a link between source and target. slotCount defaults to
@@ -65,7 +66,11 @@ func (l *Link) SnapshotOccupancy() []int {
 }
 
 // Transmit schedules a packet for delivery after the configured latency.
+// If the link is backpressured, the packet is not accepted.
 func (l *Link) Transmit(cycle uint64, pkt packet.Packet) {
+	if l.backpressured {
+		return
+	}
 	targetCycle := cycle + l.latency
 	index := targetCycle % l.slotCount
 	l.slots[index] = append(l.slots[index], pkt)
@@ -96,4 +101,14 @@ func (l *Link) Advance(cycle uint64) {
 	}
 
 	l.slots[index] = remaining
+}
+
+// SetBackpressure sets the backpressure state of the link.
+func (l *Link) SetBackpressure(bp bool) {
+	l.backpressured = bp
+}
+
+// IsBackpressured returns whether the link is currently backpressured.
+func (l *Link) IsBackpressured() bool {
+	return l.backpressured
 }

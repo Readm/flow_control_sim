@@ -87,9 +87,215 @@ go test ./internal/core/network -run TestNetworkNodesExchangePacketsThroughLink 
 go test ./pkg/controller -timeout 5s
 ```
 
-## 未来扩展
+# 跨cycle并行设计
 
-- 当 DataFlow 准备就绪，可在 Node Tick 内引入 Packet/Message 缓冲，但接口保持不变。
-- `link.Link` 可以扩展出多种 latency/policy（例如带宽、批量发送），Network 只需替换图中的具体实例即可。
-- 当 Hook 系统接入时，可在 `Network.Run` 的 cycle 边界发出事件，无需改变 Node/Link 接口。
+## 跨Cycle并行网络流模拟设计方案总结
 
+### 1. 基本实体定义
+
+**Node (节点)**
+- 处理单元，包含多个独立的Flow
+- 每个Flow独立处理，避免互相阻塞
+
+**Link (连接)**
+- 双向通信通道
+- 每个方向包含独立的in/out queue
+- 固定延迟特性
+
+**Flow (流)**
+- **定义**: in queue → process → out queue 的完整处理流水线
+- **特性**: 每个Flow独立并行推进
+
+### 2. 并行化关键机制
+
+**延迟容忍机制**
+```
+Node A → Link (延迟=L) → Node B
+    ↓                      ↓
+Flow A1 (Cycle N)      Flow B1 (可模拟到 N+L)
+Flow A2 (Cycle M)      Flow B2 (可模拟到 M+L)
+```
+
+**Send Finished Cycle (SFC)**
+- 发送方声明已完成发送的cycle边界
+- 接收方可安全模拟到 `SFC + Link Delay`
+
+**Queue状态预测**
+- 基于带宽和队列容量预测未来状态
+- 允许提前模拟多个cycle
+
+### 3. 双向链接的并行优势
+
+**传统阻塞方案**:
+```
+Node A ⇄ Node B
+   ↓       ↓
+互相等待 → 串行推进
+```
+
+**Flow-Based并行方案**:
+```
+Node A:
+├─ Flow A1 (处理A→B): 推进到Cycle N
+└─ Flow A2 (处理B→A): 推进到Cycle M
+
+Node B:
+├─ Flow B1 (处理A→B): 可推进到 N + Link_AB_Delay  
+└─ Flow B2 (处理B→A): 可推进到 M + Link_BA_Delay
+```
+
+### 4. 并行推进算法 (Go实现)
+
+```go
+package main
+
+import (
+    "sync"
+    "atomic"
+)
+
+// Flow 表示一个完整的处理流水线
+type Flow struct {
+    ID          int
+    InQueue     *MessageQueue
+    Process     ProcessLogic
+    OutQueue    *MessageQueue
+    LinkDelay   int
+    CurrentCycle int64
+    SendFinishedCycle int64
+}
+
+// MessageQueue 消息队列
+type MessageQueue struct {
+    messages   []Message
+    capacity   int
+    bandwidth  int // 每cycle处理的消息数
+    mu         sync.RWMutex
+}
+
+// ProcessLogic 处理逻辑接口
+type ProcessLogic interface {
+    Advance(currentCycle int, maxAdvanceCycle int) []Message
+}
+
+// ParallelSimulator 并行模拟器
+type ParallelSimulator struct {
+    flows []*Flow
+    wg    sync.WaitGroup
+}
+
+// AdvanceFlow 并行推进单个Flow
+func (ps *ParallelSimulator) AdvanceFlow(flow *Flow, targetCycle int) {
+    defer ps.wg.Done()
+    
+    for {
+        current := atomic.LoadInt64(&flow.CurrentCycle)
+        if current >= int64(targetCycle) {
+            return
+        }
+        
+        // 尝试推进一个cycle
+        if flow.tryAdvanceOneCycle() {
+            atomic.AddInt64(&flow.CurrentCycle, 1)
+        } else {
+            // 无法推进，等待依赖满足
+            break
+        }
+    }
+}
+
+// tryAdvanceOneCycle 尝试推进一个cycle
+func (f *Flow) tryAdvanceOneCycle() bool {
+    // 1. 检查输入队列是否可以处理
+    if !f.InQueue.CanAdvanceTo(f.CurrentCycle + 1) {
+        return false
+    }
+    
+    // 2. 从输入队列获取消息
+    messages := f.InQueue.GetMessagesUpTo(f.CurrentCycle + 1)
+    if len(messages) == 0 && !f.InQueue.HasCapacity() {
+        return false
+    }
+    
+    // 3. 处理逻辑
+    processed := f.Process.Advance(int(f.CurrentCycle), int(f.CurrentCycle)+1)
+    
+    // 4. 检查输出队列容量
+    if f.OutQueue.CanAccept(processed, int(f.CurrentCycle)+1) {
+        f.OutQueue.ScheduleSend(processed, int(f.CurrentCycle)+1+f.LinkDelay)
+        atomic.StoreInt64(&f.SendFinishedCycle, f.CurrentCycle+1)
+        return true
+    }
+    
+    return false
+}
+
+// ExecuteParallelAdvance 执行并行推进
+func (ps *ParallelSimulator) ExecuteParallelAdvance(maxGlobalCycle int) {
+    // 为每个Flow计算最大可推进cycle
+    flowTargets := make([]int, len(ps.flows))
+    for i, flow := range ps.flows {
+        flowTargets[i] = flow.calculateMaxAdvanceCycle(maxGlobalCycle)
+    }
+    
+    // 并行推进所有Flow
+    ps.wg.Add(len(ps.flows))
+    for i, flow := range ps.flows {
+        go ps.AdvanceFlow(flow, flowTargets[i])
+    }
+    ps.wg.Wait()
+}
+
+// calculateMaxAdvanceCycle 计算Flow最大可推进cycle
+func (f *Flow) calculateMaxAdvanceCycle(maxGlobalCycle int) int {
+    // 基于Send Finished Cycle和链路延迟计算
+    sfc := atomic.LoadInt64(&f.SendFinishedCycle)
+    maxBySFC := int(sfc) + f.LinkDelay
+    
+    // 基于队列容量计算
+    queueCapacity := f.InQueue.RemainingCapacity()
+    maxByQueue := int(f.CurrentCycle) + queueCapacity/f.InQueue.bandwidth
+    
+    // 取最小值
+    maxAdvance := min(maxBySFC, maxByQueue, maxGlobalCycle)
+    return max(0, maxAdvance)
+}
+
+// 辅助函数
+func min(a, b, c int) int {
+    if a < b && a < c {
+        return a
+    }
+    if b < c {
+        return b
+    }
+    return c
+}
+
+func max(a, b int) int {
+    if a > b {
+        return a
+    }
+    return b
+}
+```
+
+### 5. 并行性收益分析
+
+**最佳情况** (无依赖拓扑):
+```
+Flow1: Node1→Node2 (延迟L1) - 可推进到 C1
+Flow2: Node3→Node4 (延迟L2) - 可推进到 C2  
+Flow3: Node5→Node6 (延迟L3) - 可推进到 C3
+→ 完全并行，速度提升 ≈ 3x
+```
+
+**一般情况** (部分依赖):
+```
+Flow1: Node1→Node2 → Flow3: Node2→Node3
+    独立推进窗口       依赖推进窗口
+    [0, T1]          [L1, T1+L1+L3]
+→ 部分重叠，仍有并行收益
+```
+
+这种Flow-Based并行化方案通过独立的in/out queue解耦双向通信，实现了细粒度的并行控制，特别适合现代多核处理器架构。

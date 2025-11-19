@@ -139,30 +139,39 @@ func (m *Manager) dispatchCycle(ctx context.Context, cycle uint64, linkDelay tim
 
 func (m *Manager) routePackets(cycle uint64) error {
 	for _, n := range m.order {
-		flow := n.Flow()
-		if flow == nil {
-			continue
-		}
-		packets := flow.DrainOutgoing()
-		if len(packets) == 0 {
+		flows := n.Flows()
+		if len(flows) == 0 {
 			continue
 		}
 
-		links := m.outgoing[n.ID()]
-		for _, pkt := range packets {
-			if pkt.SourceID != n.ID() {
-				return fmt.Errorf("packet source mismatch: node %d vs packet %d", n.ID(), pkt.SourceID)
+		for _, flow := range flows {
+			if flow == nil {
+				continue
 			}
-			delivered := false
-			for _, l := range links {
-				if l.TargetID() == pkt.TargetID {
-					l.Transmit(cycle, pkt)
-					delivered = true
-					break
+			packets := flow.DrainOutgoing()
+			if len(packets) == 0 {
+				continue
+			}
+
+			links := m.outgoing[n.ID()]
+			for _, pkt := range packets {
+				if pkt.SourceID != n.ID() {
+					return fmt.Errorf("packet source mismatch: node %d vs packet %d", n.ID(), pkt.SourceID)
 				}
-			}
-			if !delivered {
-				return fmt.Errorf("no link from node %d to target %d", n.ID(), pkt.TargetID)
+				delivered := false
+				for _, l := range links {
+					if l.TargetID() == pkt.TargetID {
+						// Check backpressure before transmitting
+						if !l.IsBackpressured() {
+							l.Transmit(cycle, pkt)
+						}
+						delivered = true
+						break
+					}
+				}
+				if !delivered {
+					return fmt.Errorf("no link from node %d to target %d", n.ID(), pkt.TargetID)
+				}
 			}
 		}
 	}

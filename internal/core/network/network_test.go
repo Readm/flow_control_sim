@@ -31,8 +31,8 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 	nodeA := newFlowNode(0, 1, mailboxSize, tracker, nodeWork, cycles)
 	nodeB := newFlowNode(1, 0, mailboxSize, tracker, nodeWork, cycles)
 
-	linkAB := link.NewLink(nodeA.ID(), nodeB.Flow(), linkCycles, 0)
-	linkBA := link.NewLink(nodeB.ID(), nodeA.Flow(), linkCycles, 0)
+	linkAB := link.NewLink(nodeA.ID(), nodeB.Flows()[0], linkCycles, 0)
+	linkBA := link.NewLink(nodeB.ID(), nodeA.Flows()[0], linkCycles, 0)
 
 	graph := map[int][]*link.Link{
 		nodeA.ID(): {linkAB},
@@ -85,7 +85,7 @@ type flowNode struct {
 }
 
 func newFlowNode(id, peerID int, mailboxSize int, tracker *concurrencyTracker, workload time.Duration, totalCycles uint64) *flowNode {
-	f := flow.NewFIFO(id, mailboxSize)
+	f := flow.NewFIFO(id, mailboxSize, 0, 0)
 	return &flowNode{
 		id:          id,
 		peerID:      peerID,
@@ -100,8 +100,8 @@ func (n *flowNode) ID() int {
 	return n.id
 }
 
-func (n *flowNode) Flow() flow.Flow {
-	return n.flow
+func (n *flowNode) Flows() []flow.Flow {
+	return []flow.Flow{n.flow}
 }
 
 func (n *flowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {

@@ -12,6 +12,6 @@ import (
 // implementation without changing this interface.
 type Node interface {
 	ID() int
-	Flow() flow.Flow
+	Flows() []flow.Flow
 	Tick(ctx context.Context, cycle uint64, linkDelay time.Duration) error
 }

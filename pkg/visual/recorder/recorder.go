@@ -112,12 +112,17 @@ func buildNodes(nodes []node.Node) []frame.Node {
 		if n == nil {
 			continue
 		}
+		flows := n.Flows()
+		totalProcessed := 0
+		for _, f := range flows {
+			totalProcessed += processedCount(f)
+		}
 		result = append(result, frame.Node{
 			ID:    n.ID(),
 			Label: fmt.Sprintf("Node %d", n.ID()),
 			Type:  "generic",
 			Payload: map[string]any{
-				"processed": processedCount(n.Flow()),
+				"processed": totalProcessed,
 			},
 		})
 	}
