@@ -36,7 +36,7 @@ func (r *Recorder) OnCycleEnd(cycle uint64, nodes []node.Node, links []*link.Lin
 		Cycle:         int(cycle),
 		Paused:        r.isPaused(),
 		Nodes:         buildNodes(nodes),
-		Edges:         buildEdges(links),
+		Edges:         buildEdges(links, cycle),
 		InFlightCount: countInFlight(links),
 	}
 
@@ -114,41 +114,98 @@ func buildNodes(nodes []node.Node) []frame.Node {
 		}
 		flows := n.Flows()
 		totalProcessed := 0
+		queues := make([]frame.Queue, 0)
+		inQueueBackpressure := false
+		outQueueBackpressure := false
+		downstreamBackpressure := false
+		
 		for _, f := range flows {
 			totalProcessed += processedCount(f)
+			
+			// Capture queue information
+			inQueueLen := getInQueueLength(f)
+			inQueueCap := getInQueueCapacity(f)
+			outQueueLen := getOutQueueLength(f)
+			outQueueCap := getOutQueueCapacity(f)
+			
+			queues = append(queues, frame.Queue{
+				Name:     fmt.Sprintf("Flow-%d-in", f.ID()),
+				Length:   inQueueLen,
+				Capacity: inQueueCap,
+			})
+			queues = append(queues, frame.Queue{
+				Name:     fmt.Sprintf("Flow-%d-out", f.ID()),
+				Length:   outQueueLen,
+				Capacity: outQueueCap,
+			})
+			
+			// Capture backpressure signals
+			if f.IsInQueueFull() {
+				inQueueBackpressure = true
+			}
+			if f.IsOutQueueFull() {
+				outQueueBackpressure = true
+			}
+			if f.GetDownstreamBackpressure() {
+				downstreamBackpressure = true
+			}
 		}
+		
 		result = append(result, frame.Node{
 			ID:    n.ID(),
 			Label: fmt.Sprintf("Node %d", n.ID()),
 			Type:  "generic",
+			Queues: queues,
 			Payload: map[string]any{
 				"processed": totalProcessed,
 			},
+			InQueueBackpressure:  inQueueBackpressure,
+			OutQueueBackpressure: outQueueBackpressure,
+			DownstreamBackpressure: downstreamBackpressure,
 		})
 	}
 	return result
 }
 
-func buildEdges(links []*link.Link) []frame.Edge {
+func buildEdges(links []*link.Link, currentCycle uint64) []frame.Edge {
 	result := make([]frame.Edge, 0, len(links))
 	for _, l := range links {
 		if l == nil {
 			continue
 		}
-		stages := make([]frame.PipelineStage, 0)
-		for idx, packets := range l.SnapshotOccupancy() {
-			stages = append(stages, frame.PipelineStage{
-				StageIndex:  idx,
-				PacketCount: packets,
-			})
+		occupancy := l.SnapshotOccupancy()
+		latency := l.Latency()
+		slotCount := l.SlotCount()
+		
+		// Build stages in order from target to source
+		// Stage 0 is closest to target (arriving soon), Stage latency-1 is closest to source (just sent)
+		stages := make([]frame.PipelineStage, latency)
+		for stageIdx := uint64(0); stageIdx < latency; stageIdx++ {
+			// Calculate which slot corresponds to this stage
+			// Stage 0 (closest to target): packets arriving in 1 cycle → slot (currentCycle + 1) % slotCount
+			// Stage 1: packets arriving in 2 cycles → slot (currentCycle + 2) % slotCount
+			// ...
+			// Stage latency-1 (closest to source): packets arriving in latency cycles → slot (currentCycle + latency) % slotCount
+			// So: slotIdx = (currentCycle + stageIdx + 1) % slotCount
+			slotIdx := (currentCycle + stageIdx + 1) % slotCount
+			packetCount := 0
+			if slotIdx < uint64(len(occupancy)) {
+				packetCount = occupancy[slotIdx]
+			}
+			stages[stageIdx] = frame.PipelineStage{
+				StageIndex:  int(stageIdx),
+				PacketCount: packetCount,
+			}
 		}
+		
 		result = append(result, frame.Edge{
 			Source:         l.SourceID(),
 			Target:         l.TargetID(),
 			Label:          fmt.Sprintf("%d→%d", l.SourceID(), l.TargetID()),
-			Latency:        int(l.Latency()),
-			BandwidthLimit: int(l.SlotCount()),
+			Latency:        int(latency),
+			BandwidthLimit: int(l.Bandwidth()),
 			PipelineStages: stages,
+			Backpressured:  l.IsBackpressured(),
 		})
 	}
 	return result
@@ -169,4 +226,48 @@ func processedCount(f flow.Flow) int {
 		return 0
 	}
 	return f.ProcessedCount()
+}
+
+// getInQueueLength returns the length of the in_queue (mailbox channel).
+// Note: We can't directly access len() of a send-only channel, so we return 0.
+// The frontend should use IsInQueueFull() to determine if it's full.
+func getInQueueLength(f flow.Flow) int {
+	// For now, we can't get the length without breaking encapsulation
+	// This would require adding a method to Flow interface
+	return 0
+}
+
+// getInQueueCapacity returns the capacity of the in_queue.
+// Note: We can't directly access cap() of a send-only channel, so we return -1.
+// The frontend should use IsInQueueFull() to determine if it's full.
+func getInQueueCapacity(f flow.Flow) int {
+	// For now, we can't get the capacity without breaking encapsulation
+	// This would require adding a method to Flow interface
+	return -1
+}
+
+// getOutQueueLength returns the length of the out_queue.
+// Note: We use a snapshot approach - drain, count, and restore.
+// This is safe because we're called during OnCycleEnd when no other operations are happening.
+func getOutQueueLength(f flow.Flow) int {
+	if f == nil {
+		return 0
+	}
+	// Snapshot the outgoing queue
+	packets := f.DrainOutgoing()
+	count := len(packets)
+	// Restore packets
+	if count > 0 {
+		f.Emit(packets...)
+	}
+	return count
+}
+
+// getOutQueueCapacity returns the capacity of the out_queue.
+// Note: We can't directly access outQueueCapacity, so we return -1.
+// The frontend should use IsOutQueueFull() to determine if it's full.
+func getOutQueueCapacity(f flow.Flow) int {
+	// For now, we can't get the capacity without breaking encapsulation
+	// This would require adding a method to Flow interface
+	return -1
 }

@@ -13,7 +13,7 @@ func TestLinkBasicFunctionality(t *testing.T) {
 	t.Parallel()
 
 	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 2, 0) // latency = 2
+	link := NewLink(0, f, 2, 1, 0) // latency = 2, bandwidth = 1
 
 	pkt := packet.Packet{
 		SourceID: 0,
@@ -41,23 +41,23 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	t.Parallel()
 
 	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 3, 0) // latency = 3, slotCount = 4
+	link := NewLink(0, f, 3, 1, 0) // latency = 3, bandwidth = 1, slotCount = 3
 
 	pkt1 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test1"}
 	pkt2 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test2"}
 
-	// Transmit at cycle 0, should be in slot (0+3) % 4 = 3
+	// Transmit at cycle 0, should be in slot (0+3) % 3 = 0
 	link.Transmit(0, pkt1)
-	// Transmit at cycle 1, should be in slot (1+3) % 4 = 0
+	// Transmit at cycle 1, should be in slot (1+3) % 3 = 1
 	link.Transmit(1, pkt2)
 
 	// Verify occupancy
 	occupancy := link.SnapshotOccupancy()
-	if occupancy[3] != 1 {
-		t.Fatalf("expected 1 packet in slot 3, got %d", occupancy[3])
-	}
 	if occupancy[0] != 1 {
 		t.Fatalf("expected 1 packet in slot 0, got %d", occupancy[0])
+	}
+	if occupancy[1] != 1 {
+		t.Fatalf("expected 1 packet in slot 1, got %d", occupancy[1])
 	}
 }
 
@@ -66,7 +66,7 @@ func TestLinkSFC(t *testing.T) {
 	t.Parallel()
 
 	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 1, 0)
+	link := NewLink(0, f, 1, 1, 0)
 
 	// Set noBackpressureUntil to allow advancement
 	link.SetNoBackpressureUntil(10)
@@ -94,7 +94,7 @@ func TestLinkBackpressurePausesCycle(t *testing.T) {
 	t.Parallel()
 
 	f := flow.NewFIFO(1, 2, 0, 0) // Small mailbox to trigger backpressure
-	link := NewLink(0, f, 1, 0)
+	link := NewLink(0, f, 1, 1, 0)
 
 	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
 
@@ -135,7 +135,7 @@ func TestLinkDirectSendPath(t *testing.T) {
 	t.Parallel()
 
 	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 2, 0) // latency = 2
+	link := NewLink(0, f, 2, 1, 0) // latency = 2, bandwidth = 1
 
 	// Set noBackpressureUntil to 5 (>= 0+2)
 	link.SetNoBackpressureUntil(5)
@@ -163,7 +163,7 @@ func TestLinkRingBufferPath(t *testing.T) {
 	t.Parallel()
 
 	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 3, 0) // latency = 3
+	link := NewLink(0, f, 3, 1, 0) // latency = 3, bandwidth = 1
 
 	// Set noBackpressureUntil to 2 (< 0+3)
 	link.SetNoBackpressureUntil(2)
@@ -200,7 +200,7 @@ func TestLinkReadFromFlow(t *testing.T) {
 	t.Parallel()
 
 	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 1, 0)
+	link := NewLink(0, f, 1, 2, 0) // bandwidth = 2 to allow 2 packets
 
 	// Set Flow currentCycle first
 	ctx := context.Background()
@@ -239,7 +239,7 @@ func TestLinkMultiplePackets(t *testing.T) {
 	t.Parallel()
 
 	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 1, 0)
+	link := NewLink(0, f, 1, 1, 0)
 	link.SetNoBackpressureUntil(10)
 
 	pkt1 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test1"}
@@ -264,6 +264,49 @@ func TestLinkMultiplePackets(t *testing.T) {
 
 	if f.ProcessedCount() != 3 {
 		t.Fatalf("expected 3 processed packets, got %d", f.ProcessedCount())
+	}
+}
+
+// TestLinkBandwidthLimit tests that bandwidth limits are enforced per slot and per cycle.
+func TestLinkBandwidthLimit(t *testing.T) {
+	t.Parallel()
+
+	f := flow.NewFIFO(1, 8, 0, 0)
+	link := NewLink(0, f, 2, 2, 0) // latency = 2, bandwidth = 2, slotCount = 2
+	// Set noBackpressureUntil to 1 (< 0+2) to force ring buffer path
+	link.SetNoBackpressureUntil(1)
+
+	pkt1 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test1"}
+	pkt2 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test2"}
+	pkt3 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test3"}
+
+	// Transmit 3 packets at cycle 0, all targeting cycle 2 (slot (0+2) % 2 = 0)
+	// Only 2 should be accepted due to bandwidth limit per slot
+	link.Transmit(0, pkt1)
+	link.Transmit(0, pkt2)
+	link.Transmit(0, pkt3)
+
+	// Verify only 2 packets in slot 0
+	occupancy := link.SnapshotOccupancy()
+	if occupancy[0] != 2 {
+		t.Fatalf("expected 2 packets in slot 0 (bandwidth limit), got %d", occupancy[0])
+	}
+
+	// Update noBackpressureUntil to allow sending
+	link.SetNoBackpressureUntil(10)
+
+	// Advance to cycle 2, should send at most 2 packets per cycle
+	link.Advance(2)
+
+	// Verify at most 2 packets were sent (bandwidth limit per cycle)
+	ctx := context.Background()
+	f.Tick(ctx, 2)
+	processed := f.ProcessedCount()
+	if processed > 2 {
+		t.Fatalf("expected at most 2 processed packets (bandwidth limit per cycle), got %d", processed)
+	}
+	if processed < 2 {
+		t.Fatalf("expected at least 2 processed packets, got %d", processed)
 	}
 }
 

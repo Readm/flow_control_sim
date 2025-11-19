@@ -31,6 +31,7 @@ const (
 	defaultTotalCycles = 64
 	mailboxSize        = 8
 	linkLatency        = 5
+	linkBandwidth      = 1
 )
 
 func main() {
@@ -138,9 +139,9 @@ func createManagerBuilder() controller.ManagerBuilder {
 
 		nodes := []node.Node{node0, node1}
 
-		// Create bidirectional links with 5 cycle latency
-		linkAB := link.NewLink(0, node1.Flows()[0], linkLatency, 0)
-		linkBA := link.NewLink(1, node0.Flows()[0], linkLatency, 0)
+		// Create bidirectional links with 5 cycle latency and bandwidth 1
+		linkAB := link.NewLink(0, node1.Flows()[0], linkLatency, linkBandwidth, 0)
+		linkBA := link.NewLink(1, node0.Flows()[0], linkLatency, linkBandwidth, 0)
 
 		graph := map[int][]*link.Link{
 			0: {linkAB}, // node 0 -> node 1
@@ -554,6 +555,10 @@ func createInitialFrame() *frame.Frame {
 				Payload: map[string]any{
 					"processed": 0,
 				},
+				// Explicitly set backpressure fields to false
+				InQueueBackpressure:  false,
+				OutQueueBackpressure: false,
+				DownstreamBackpressure: false,
 			},
 			{
 				ID:    1,
@@ -562,6 +567,10 @@ func createInitialFrame() *frame.Frame {
 				Payload: map[string]any{
 					"processed": 0,
 				},
+				// Explicitly set backpressure fields to false
+				InQueueBackpressure:  false,
+				OutQueueBackpressure: false,
+				DownstreamBackpressure: false,
 			},
 		},
 		Edges: []frame.Edge{
@@ -570,16 +579,20 @@ func createInitialFrame() *frame.Frame {
 				Target:         1,
 				Label:          "0→1",
 				Latency:        linkLatency,
-				BandwidthLimit: int(linkLatency + 1),
-				PipelineStages: make([]frame.PipelineStage, linkLatency+1),
+				BandwidthLimit: int(linkBandwidth),
+				PipelineStages: make([]frame.PipelineStage, linkLatency),
+				// Explicitly set backpressure to false
+				Backpressured: false,
 			},
 			{
 				Source:         1,
 				Target:         0,
 				Label:          "1→0",
 				Latency:        linkLatency,
-				BandwidthLimit: int(linkLatency + 1),
-				PipelineStages: make([]frame.PipelineStage, linkLatency+1),
+				BandwidthLimit: int(linkBandwidth),
+				PipelineStages: make([]frame.PipelineStage, linkLatency),
+				// Explicitly set backpressure to false
+				Backpressured: false,
 			},
 		},
 	}

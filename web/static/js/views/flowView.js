@@ -182,6 +182,12 @@ export function createFlowView({
         (frame.nodes || []).forEach((node) => {
             const { height } = calculateNodeDimensions(node.queues || []);
             const progressBg = createProgressBarDataUri(node.queues || [], height);
+            
+            // Use strict boolean check for backpressure
+            const inQueueBP = Boolean(node.inQueueBackpressure);
+            const outQueueBP = Boolean(node.outQueueBackpressure);
+            const downstreamBP = Boolean(node.downstreamBackpressure);
+            
             elements.push({
                 group: "nodes",
                 data: {
@@ -193,11 +199,17 @@ export function createFlowView({
                     capabilities: node.capabilities || [],
                     height,
                     progressBg,
+                    inQueueBackpressure: inQueueBP,
+                    outQueueBackpressure: outQueueBP,
+                    downstreamBackpressure: downstreamBP,
                 },
             });
         });
 
         (frame.edges || []).forEach((edge) => {
+            // Use strict boolean check for backpressure
+            const backpressured = Boolean(edge.backpressured);
+            
             elements.push({
                 group: "edges",
                 data: {
@@ -208,11 +220,63 @@ export function createFlowView({
                     latency: edge.latency,
                     pipelineStages: edge.pipelineStages || [],
                     bandwidthLimit: edge.bandwidthLimit,
+                    backpressured: backpressured,
                 },
             });
         });
 
         cy.add(elements);
+        
+        // Apply backpressure styles after adding all elements
+        (frame.nodes || []).forEach((node) => {
+            const cyNode = cy.getElementById(String(node.id));
+            if (!cyNode || cyNode.length === 0) {
+                return;
+            }
+            // Use strict boolean check for backpressure
+            const inQueueBP = Boolean(node.inQueueBackpressure);
+            const outQueueBP = Boolean(node.outQueueBackpressure);
+            const downstreamBP = Boolean(node.downstreamBackpressure);
+            const hasBackpressure = inQueueBP || outQueueBP || downstreamBP;
+            if (hasBackpressure) {
+                cyNode.style("border-color", "#ff4d4f");
+                cyNode.style("border-width", 3);
+            } else {
+                cyNode.style("border-color", "#888");
+                cyNode.style("border-width", 2);
+            }
+        });
+        
+        // Apply edge backpressure styles
+        (frame.edges || []).forEach((edge) => {
+            const cyEdge = cy.getElementById(`e${edge.source}-${edge.target}`);
+            if (!cyEdge || cyEdge.length === 0) {
+                return;
+            }
+            const backpressured = Boolean(edge.backpressured);
+            const hasTraffic = (edge.pipelineStages || []).some((stage) => stage.packetCount > 0);
+            
+            if (backpressured) {
+                cyEdge.style("line-color", "#ff4d4f");
+                cyEdge.style("target-arrow-color", "#ff4d4f");
+                cyEdge.style("width", 4);
+                cyEdge.style("line-style", "dashed");
+            } else if (hasTraffic) {
+                cyEdge.style("line-color", "#faad14");
+                cyEdge.style("target-arrow-color", "#faad14");
+                cyEdge.style("width", 3);
+                cyEdge.style("line-style", "solid");
+            } else {
+                cyEdge.style("line-color", "#91d5ff");
+                cyEdge.style("target-arrow-color", "#91d5ff");
+                cyEdge.style("width", 2);
+                cyEdge.style("line-style", "solid");
+            }
+            
+            // Clear lastActiveCycle on initialization
+            cyEdge.data("lastActiveCycle", null);
+        });
+        
         requestAnimationFrame(() => applyCustomLayout());
     }
 
@@ -227,6 +291,27 @@ export function createFlowView({
             }
             const { height } = calculateNodeDimensions(node.queues || []);
             const progressBg = createProgressBarDataUri(node.queues || [], height);
+            
+            // Capture backpressure signals - use strict boolean check
+            const inQueueBP = Boolean(node.inQueueBackpressure);
+            const outQueueBP = Boolean(node.outQueueBackpressure);
+            const downstreamBP = Boolean(node.downstreamBackpressure);
+            const hasBackpressure = inQueueBP || outQueueBP || downstreamBP;
+            
+            // Debug: log backpressure values for first few cycles
+            if (currentFrame && currentFrame.cycle <= 5) {
+                console.log(`[Cycle ${currentFrame.cycle}] Node ${node.id}:`, {
+                    inQueueBackpressure: node.inQueueBackpressure,
+                    outQueueBackpressure: node.outQueueBackpressure,
+                    downstreamBackpressure: node.downstreamBackpressure,
+                    inQueueBP: inQueueBP,
+                    outQueueBP: outQueueBP,
+                    downstreamBP: downstreamBP,
+                    hasBackpressure: hasBackpressure,
+                    queues: node.queues
+                });
+            }
+            
             cyNode.data({
                 label: buildNodeLabel(node),
                 queues: node.queues || [],
@@ -234,7 +319,19 @@ export function createFlowView({
                 capabilities: node.capabilities || [],
                 height,
                 progressBg,
+                inQueueBackpressure: inQueueBP,
+                outQueueBackpressure: outQueueBP,
+                downstreamBackpressure: downstreamBP,
             });
+            
+            // Update node style based on backpressure
+            if (hasBackpressure) {
+                cyNode.style("border-color", "#ff4d4f");
+                cyNode.style("border-width", 3);
+            } else {
+                cyNode.style("border-color", "#888");
+                cyNode.style("border-width", 2);
+            }
         });
     }
 
@@ -243,29 +340,67 @@ export function createFlowView({
             return;
         }
         edges.forEach((edge) => {
+            // Debug: log backpressure values for first few cycles
+            if (frameCycle <= 5) {
+                console.log(`[Cycle ${frameCycle}] Edge ${edge.source}->${edge.target}:`, {
+                    backpressured: edge.backpressured,
+                    pipelineStages: edge.pipelineStages
+                });
+            }
             const cyEdge = cy.getElementById(`e${edge.source}-${edge.target}`);
             if (!cyEdge || cyEdge.length === 0) {
                 return;
             }
             const pipelineStages = edge.pipelineStages || [];
+            const backpressured = Boolean(edge.backpressured);
+            
             cyEdge.data({
                 label: `${edge.label} (${edge.latency}cy)`,
                 pipelineStages,
                 bandwidthLimit: edge.bandwidthLimit,
                 latency: edge.latency,
+                backpressured: backpressured,
             });
+            
             const hasTraffic = pipelineStages.some((stage) => stage.packetCount > 0);
             if (hasTraffic) {
                 cyEdge.data("lastActiveCycle", frameCycle);
+            } else {
+                // Clear lastActiveCycle if no traffic
+                cyEdge.data("lastActiveCycle", null);
             }
             const lastActiveCycle = cyEdge.data("lastActiveCycle");
             const recentlyActive = typeof lastActiveCycle === "number" && frameCycle - lastActiveCycle <= 5;
-            if (hasTraffic || recentlyActive) {
+            
+            // Debug: log edge state for first few cycles
+            if (frameCycle <= 5) {
+                console.log(`[Cycle ${frameCycle}] Edge ${edge.source}->${edge.target} style:`, {
+                    backpressured: backpressured,
+                    hasTraffic: hasTraffic,
+                    recentlyActive: recentlyActive,
+                    lastActiveCycle: lastActiveCycle
+                });
+            }
+            
+            // Update edge style based on backpressure and traffic
+            if (backpressured) {
+                // Backpressured: red, thicker, dashed
                 cyEdge.style("line-color", "#ff4d4f");
+                cyEdge.style("target-arrow-color", "#ff4d4f");
+                cyEdge.style("width", 4);
+                cyEdge.style("line-style", "dashed");
+            } else if (hasTraffic || recentlyActive) {
+                // Active traffic (no backpressure): yellow, solid
+                cyEdge.style("line-color", "#faad14");
+                cyEdge.style("target-arrow-color", "#faad14");
                 cyEdge.style("width", 3);
+                cyEdge.style("line-style", "solid");
             } else {
+                // Idle: blue, normal
                 cyEdge.style("line-color", "#91d5ff");
+                cyEdge.style("target-arrow-color", "#91d5ff");
                 cyEdge.style("width", 2);
+                cyEdge.style("line-style", "solid");
             }
         });
     }
@@ -541,8 +676,20 @@ export function createFlowView({
     function buildNodeLabel(node) {
         const base = node.label || `Node ${node.id}`;
         const queues = node.queues || [];
+        const backpressureMarkers = [];
+        if (node.inQueueBackpressure) {
+            backpressureMarkers.push("IN-BP");
+        }
+        if (node.outQueueBackpressure) {
+            backpressureMarkers.push("OUT-BP");
+        }
+        if (node.downstreamBackpressure) {
+            backpressureMarkers.push("DS-BP");
+        }
+        const bpSuffix = backpressureMarkers.length > 0 ? ` [${backpressureMarkers.join(",")}]` : "";
+        
         if (queues.length === 0) {
-            return base;
+            return `${base}${bpSuffix}`;
         }
         const suffix = queues
             .map((queue) => {
@@ -550,7 +697,7 @@ export function createFlowView({
                 return `${queue.name}:${queue.length}/${capacity}`;
             })
             .join(" ");
-        return `${base}\n${suffix}`;
+        return `${base}\n${suffix}${bpSuffix}`;
     }
 
     function buildNodeTooltip(data) {
@@ -583,6 +730,24 @@ export function createFlowView({
                 parts.push(`<div style=\"font-size: 11px; color: #666;\">${queue.name}: <strong>${queue.length}/${capacity}</strong></div>`);
             });
         }
+        
+        // Add backpressure information
+        const backpressureInfo = [];
+        if (data.inQueueBackpressure) {
+            backpressureInfo.push('<span style="color: #ff4d4f;">In-Queue Full</span>');
+        }
+        if (data.outQueueBackpressure) {
+            backpressureInfo.push('<span style="color: #ff4d4f;">Out-Queue Full</span>');
+        }
+        if (data.downstreamBackpressure) {
+            backpressureInfo.push('<span style="color: #ff4d4f;">Downstream Backpressure</span>');
+        }
+        if (backpressureInfo.length > 0) {
+            parts.push('<div style="margin-top: 8px; font-weight: 600; color: #ff4d4f;">Backpressure Signals</div>');
+            backpressureInfo.forEach((info) => {
+                parts.push(`<div style=\"font-size: 11px;\">${info}</div>`);
+            });
+        }
 
         parts.push("</div>");
         return parts.join("");
@@ -594,6 +759,7 @@ export function createFlowView({
             `<div style=\"font-weight: bold; margin-bottom: 4px;\">${data.label}</div>`,
             `<div style=\"color: #666;\">Latency: <strong>${data.latency || 0}</strong> cycles</div>`,
             `<div style=\"color: #666;\">Bandwidth: <strong>${data.bandwidthLimit || 0}</strong> packets/cycle</div>`,
+            data.backpressured ? '<div style="color: #ff4d4f; font-weight: 600; margin-top: 4px;">⚠ Backpressured</div>' : '',
         ];
 
         const stages = data.pipelineStages || [];

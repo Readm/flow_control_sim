@@ -6,11 +6,13 @@ import (
 )
 
 // Link represents a directed edge in the topology。每条链路拥有独立的 cycle 延迟和 slot。
+// Bandwidth limits how many packets each slot can hold and how many packets can be received per cycle.
 type Link struct {
 	sourceID            int
 	targetID            int
 	target              flow.Flow
 	latency             uint64
+	bandwidth           uint64
 	slotCount           uint64
 	slots               [][]packet.Packet
 	backpressured       bool
@@ -19,14 +21,20 @@ type Link struct {
 	noBackpressureUntil uint64
 }
 
-// NewLink creates a link between source and target. slotCount defaults to
-// latency+1, ensuring packets are not overwritten before they are delivered.
-func NewLink(sourceID int, target flow.Flow, latency uint64, slotCount uint64) *Link {
+// NewLink creates a link between source and target.
+// - latency: number of cycles for packet delivery (also determines slot count)
+// - bandwidth: maximum packets per slot and per cycle (defaults to 1 if 0)
+// - slotCount: number of slots (defaults to latency if 0)
+// Design: slotCount = latency, each slot can hold up to bandwidth packets.
+func NewLink(sourceID int, target flow.Flow, latency uint64, bandwidth uint64, slotCount uint64) *Link {
 	if latency == 0 {
 		latency = 1
 	}
+	if bandwidth == 0 {
+		bandwidth = 1
+	}
 	if slotCount == 0 {
-		slotCount = latency + 1
+		slotCount = latency
 	}
 	slots := make([][]packet.Packet, slotCount)
 	return &Link{
@@ -34,6 +42,7 @@ func NewLink(sourceID int, target flow.Flow, latency uint64, slotCount uint64) *
 		targetID:  target.ID(),
 		target:    target,
 		latency:   latency,
+		bandwidth: bandwidth,
 		slotCount: slotCount,
 		slots:     slots,
 	}
@@ -57,6 +66,11 @@ func (l *Link) Latency() uint64 {
 // SlotCount returns the number of stages used to buffer packets.
 func (l *Link) SlotCount() uint64 {
 	return l.slotCount
+}
+
+// Bandwidth returns the maximum packets per slot and per cycle.
+func (l *Link) Bandwidth() uint64 {
+	return l.bandwidth
 }
 
 // SnapshotOccupancy reports the pending packet count per slot.
@@ -91,20 +105,30 @@ func (l *Link) Transmit(cycle uint64, pkt packet.Packet) {
 			}
 		default:
 			// Channel full, fallback to ring buffer
-			l.transmitViaRingBuffer(cycle, pkt)
+			// If slot is full (bandwidth limit), packet is rejected
+			_ = l.transmitViaRingBuffer(cycle, pkt)
 		}
 		return
 	}
 
 	// Ring buffer path: backpressure risk, need buffering
-	l.transmitViaRingBuffer(cycle, pkt)
+	// If slot is full (bandwidth limit), packet is rejected
+	_ = l.transmitViaRingBuffer(cycle, pkt)
 }
 
 // transmitViaRingBuffer puts packet into ring buffer for delayed delivery.
-func (l *Link) transmitViaRingBuffer(cycle uint64, pkt packet.Packet) {
+// Returns true if packet was accepted, false if slot is full (bandwidth limit).
+func (l *Link) transmitViaRingBuffer(cycle uint64, pkt packet.Packet) bool {
 	targetCycle := cycle + l.latency
 	index := targetCycle % l.slotCount
+
+	// Check bandwidth limit: each slot can hold at most bandwidth packets
+	if uint64(len(l.slots[index])) >= l.bandwidth {
+		return false // Slot is full, packet rejected
+	}
+
 	l.slots[index] = append(l.slots[index], pkt)
+	return true
 }
 
 // Advance releases the packets whose delivery cycle matches the provided cycle.
@@ -132,9 +156,17 @@ func (l *Link) Advance(cycle uint64) {
 	}
 
 	// Send packets to channel (cycle, Packet)
+	// Bandwidth limit: each cycle can send at most bandwidth packets
 	mailbox := l.target.Mailbox()
 	remaining := slot[:0]
+	sentCount := uint64(0)
 	for _, pkt := range slot {
+		// Check bandwidth limit: each cycle can send at most bandwidth packets
+		if sentCount >= l.bandwidth {
+			remaining = append(remaining, pkt)
+			continue
+		}
+
 		env := packet.Envelope{
 			Cycle:  cycle,
 			Packet: pkt,
@@ -142,6 +174,7 @@ func (l *Link) Advance(cycle uint64) {
 		select {
 		case mailbox <- env:
 			// Successfully sent
+			sentCount++
 		default:
 			// Channel full, keep in slot
 			remaining = append(remaining, pkt)

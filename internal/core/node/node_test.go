@@ -92,7 +92,7 @@ func TestNodeWithSingleFlow(t *testing.T) {
 	}
 
 	// Create a link and send a packet
-	link := link.NewLink(0, node.Flows()[0], 1, 0)
+	link := link.NewLink(0, node.Flows()[0], 1, 1, 0)
 	pkt := packet.Packet{
 		SourceID: 0,
 		TargetID: 1,
@@ -126,7 +126,7 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 	// Create links for each flow
 	links := make([]*link.Link, 3)
 	for i := 0; i < 3; i++ {
-		links[i] = link.NewLink(0, node.Flows()[i], 1, 0)
+		links[i] = link.NewLink(0, node.Flows()[i], 1, 1, 0)
 		pkt := packet.Packet{
 			SourceID: 0,
 			TargetID: 1,
@@ -158,7 +158,7 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 	// Create links for each flow
 	links := make([]*link.Link, 3)
 	for i := 0; i < 3; i++ {
-		links[i] = link.NewLink(0, node.Flows()[i], 1, 0)
+		links[i] = link.NewLink(0, node.Flows()[i], 1, 1, 0)
 		pkt := packet.Packet{
 			SourceID: 0,
 			TargetID: 1,
@@ -193,7 +193,7 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 	t.Parallel()
 
 	node := newMultiFlowNode(1, 2, false, 8, 0, 0)
-	link := link.NewLink(0, node.Flows()[0], 1, 0)
+	link := link.NewLink(0, node.Flows()[0], 1, 1, 0)
 
 	// Send packets for multiple cycles
 	for cycle := uint64(0); cycle < 5; cycle++ {
@@ -253,7 +253,7 @@ func TestBackpressureInQueueFull(t *testing.T) {
 
 	node := newMultiFlowNode(1, 1, false, 2, 2, 0)
 	f := node.Flows()[0]
-	link := link.NewLink(0, f, 1, 0)
+	link := link.NewLink(0, f, 1, 1, 0)
 
 	// Set up backpressure callback
 	backpressureTriggered := false
@@ -340,7 +340,7 @@ func TestBackpressureOutQueueFullBlocksProcess(t *testing.T) {
 	}
 
 	// Send packet to mailbox
-	link := link.NewLink(0, f, 1, 0)
+	link := link.NewLink(0, f, 1, 1, 0)
 	pkt3 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test3"}
 	link.Transmit(0, pkt3)
 	link.Advance(1)
@@ -373,7 +373,7 @@ func TestBackpressureLinkBlocksTransmit(t *testing.T) {
 
 	node := newMultiFlowNode(1, 1, false, 8, 0, 0)
 	f := node.Flows()[0]
-	link := link.NewLink(0, f, 1, 0)
+	link := link.NewLink(0, f, 1, 1, 0)
 
 	// Set link backpressure
 	link.SetBackpressure(true)

@@ -20,6 +20,10 @@ type Node struct {
 	Payload      map[string]any    `json:"payload,omitempty"`
 	Capabilities []string          `json:"capabilities,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
+	// Backpressure signals
+	InQueueBackpressure  bool `json:"inQueueBackpressure"`  // IsInQueueFull()
+	OutQueueBackpressure bool `json:"outQueueBackpressure"` // IsOutQueueFull()
+	DownstreamBackpressure bool `json:"downstreamBackpressure"` // GetDownstreamBackpressure()
 }
 
 // Queue communicates per-node queue depth for Flow View overlays.
@@ -48,6 +52,8 @@ type Edge struct {
 	Latency        int             `json:"latency"`
 	BandwidthLimit int             `json:"bandwidthLimit"`
 	PipelineStages []PipelineStage `json:"pipelineStages,omitempty"`
+	// Backpressure signal
+	Backpressured bool `json:"backpressured"` // IsBackpressured()
 }
 
 // PipelineStage expresses the occupancy for a latency stage.

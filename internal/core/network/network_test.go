@@ -31,8 +31,12 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 	nodeA := newFlowNode(0, 1, mailboxSize, tracker, nodeWork, cycles)
 	nodeB := newFlowNode(1, 0, mailboxSize, tracker, nodeWork, cycles)
 
-	linkAB := link.NewLink(nodeA.ID(), nodeB.Flows()[0], linkCycles, 0)
-	linkBA := link.NewLink(nodeB.ID(), nodeA.Flows()[0], linkCycles, 0)
+	linkAB := link.NewLink(nodeA.ID(), nodeB.Flows()[0], linkCycles, 1, 0)
+	linkBA := link.NewLink(nodeB.ID(), nodeA.Flows()[0], linkCycles, 1, 0)
+	
+	// Set noBackpressureUntil to allow packet transmission
+	linkAB.SetNoBackpressureUntil(cycles + 10)
+	linkBA.SetNoBackpressureUntil(cycles + 10)
 
 	graph := map[int][]*link.Link{
 		nodeA.ID(): {linkAB},

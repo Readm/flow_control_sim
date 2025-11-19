@@ -94,7 +94,7 @@ func newTestBuilder(t *testing.T, tickDelay time.Duration) controller.ManagerBui
 			}
 			nodes = append(nodes, n)
 			edges[n.ID()] = []*link.Link{
-				link.NewLink(n.ID(), n.Flows()[0], 1, 0),
+				link.NewLink(n.ID(), n.Flows()[0], 1, 1, 0),
 			}
 		}
 

@@ -19,9 +19,9 @@ func TestIndependentFlowParallelAdvance(t *testing.T) {
 	f2 := flow.NewFIFO(2, 8, 0, 0)
 	f3 := flow.NewFIFO(3, 8, 0, 0)
 
-	link1 := link.NewLink(0, f1, 1, 0)
-	link2 := link.NewLink(0, f2, 2, 0)
-	link3 := link.NewLink(0, f3, 3, 0)
+	link1 := link.NewLink(0, f1, 1, 1, 0)
+	link2 := link.NewLink(0, f2, 2, 1, 0)
+	link3 := link.NewLink(0, f3, 3, 1, 0)
 
 	// Set noBackpressureUntil for all links
 	link1.SetNoBackpressureUntil(20)
@@ -82,8 +82,8 @@ func TestBidirectionalLinkParallel(t *testing.T) {
 	fA := flow.NewFIFO(1, 8, 0, 0)
 	fB := flow.NewFIFO(2, 8, 0, 0)
 
-	linkAB := link.NewLink(1, fB, 2, 0) // A->B, latency 2
-	linkBA := link.NewLink(2, fA, 3, 0) // B->A, latency 3
+	linkAB := link.NewLink(1, fB, 2, 1, 0) // A->B, latency 2, bandwidth 1
+	linkBA := link.NewLink(2, fA, 3, 1, 0) // B->A, latency 3, bandwidth 1
 
 	linkAB.SetNoBackpressureUntil(20)
 	linkBA.SetNoBackpressureUntil(20)
@@ -133,7 +133,7 @@ func TestSFCBasedAdvance(t *testing.T) {
 	t.Parallel()
 
 	f := flow.NewFIFO(1, 8, 0, 0)
-	l := link.NewLink(0, f, 2, 0) // latency = 2
+	l := link.NewLink(0, f, 2, 1, 0) // latency = 2, bandwidth = 1
 	l.SetNoBackpressureUntil(20)
 
 	// Send packet at cycle 0, SFC should be 2 (0 + latency)
@@ -160,7 +160,7 @@ func TestBackpressureSignalMechanism(t *testing.T) {
 	t.Parallel()
 
 	f := flow.NewFIFO(1, 5, 0, 0) // Small mailbox capacity
-	l := link.NewLink(0, f, 1, 0)
+	l := link.NewLink(0, f, 1, 1, 0)
 
 	// Set upstream link
 	f.SetUpstreamLink(l)
@@ -189,8 +189,8 @@ func TestBackpressureParallel(t *testing.T) {
 	f1 := flow.NewFIFO(1, 2, 0, 0) // Small capacity, will backpressure
 	f2 := flow.NewFIFO(2, 8, 0, 0) // Normal capacity
 
-	l1 := link.NewLink(0, f1, 1, 0)
-	l2 := link.NewLink(0, f2, 1, 0)
+	l1 := link.NewLink(0, f1, 1, 1, 0)
+	l2 := link.NewLink(0, f2, 1, 1, 0)
 
 	// Set noBackpressureUntil for f1 to a small value (will backpressure soon)
 	f1.SetNoBackpressureUntil(2)
