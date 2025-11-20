@@ -28,6 +28,7 @@
   - 使用 goroutine 和 sync.WaitGroup 实现节点并行
   - Mock 延迟支持（`EnableMockDelay`）
   - 错误收集和传播
+- [ ] **跨cycle并行机制**
 - ✅ **单元测试** (`network_test.go`)
   - `TestNetworkNodesExchangePacketsThroughLink` - 并行性测试
   - 测试覆盖：拓扑构建、并行执行、Packet 交换
