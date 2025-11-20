@@ -236,18 +236,29 @@ func (l *Link) NoBackpressureUntil() uint64 {
 	return l.noBackpressureUntil
 }
 
-// ReadFromFlow reads packets from Flow's dispatch queue.
+// ReadFromFlow reads packets from Flow's dispatch queue via channel.
 // Uses the sourceFlow and dispatchQueueIndex stored in the Link.
-// Always attempts to read; if dispatch queue is empty, DrainDispatchQueue returns nil.
+// Receives packets from the dispatch queue's mailbox channel.
 func (l *Link) ReadFromFlow() {
 	if l.sourceFlow == nil {
 		return
 	}
 
-	// Read all available packets from dispatch queue
-	packets := l.sourceFlow.DrainDispatchQueue(l.dispatchQueueIndex)
-	for _, pkt := range packets {
-		l.Transmit(l.currentCycle, pkt)
+	// Get the dispatch queue's mailbox channel
+	dqMailbox := l.sourceFlow.DispatchQueueMailbox(l.dispatchQueueIndex)
+	if dqMailbox == nil {
+		return
+	}
+
+	// Receive all available packets from the channel
+	for {
+		select {
+		case env := <-dqMailbox:
+			l.Transmit(l.currentCycle, env.Packet)
+		default:
+			// No more packets available
+			return
+		}
 	}
 }
 
