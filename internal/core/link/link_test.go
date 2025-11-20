@@ -319,4 +319,3 @@ func TestLinkBandwidthLimit(t *testing.T) {
 		t.Fatalf("expected at least 2 processed packets, got %d", processed)
 	}
 }
-

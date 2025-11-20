@@ -118,20 +118,20 @@ func buildNodes(nodes []node.Node) []frame.Node {
 		inQueueBackpressure := false
 		outQueueBackpressure := false
 		downstreamBackpressure := false
-		
+
 		for _, f := range flows {
 			totalProcessed += processedCount(f)
-			
+
 			// Capture in_queue information
 			inQueueLen := getInQueueLength(f)
 			inQueueCap := getInQueueCapacity(f)
-			
+
 			queues = append(queues, frame.Queue{
 				Name:     fmt.Sprintf("Flow-%d-in", f.ID()),
 				Length:   inQueueLen,
 				Capacity: inQueueCap,
 			})
-			
+
 			// Capture dispatch_queue information (each dispatch_queue gets its own Queue entry)
 			dispatchQueueCount := f.DispatchQueueCount()
 			for i := 0; i < dispatchQueueCount; i++ {
@@ -145,19 +145,19 @@ func buildNodes(nodes []node.Node) []frame.Node {
 					// Note: This is a workaround and may not be perfect
 					// In production, consider adding a method to peek queue length without draining
 				}
-				
+
 				queues = append(queues, frame.Queue{
 					Name:     fmt.Sprintf("Flow-%d-dispatch-%d", f.ID(), i),
 					Length:   dispatchQueueLen,
 					Capacity: -1, // Capacity not directly accessible
 				})
-				
+
 				// Check if dispatch_queue is full
 				if f.IsDispatchQueueFull(i) {
 					outQueueBackpressure = true
 				}
 			}
-			
+
 			// Capture backpressure signals
 			if f.IsInQueueFull() {
 				inQueueBackpressure = true
@@ -169,17 +169,17 @@ func buildNodes(nodes []node.Node) []frame.Node {
 				downstreamBackpressure = true
 			}
 		}
-		
+
 		result = append(result, frame.Node{
-			ID:    n.ID(),
-			Label: fmt.Sprintf("Node %d", n.ID()),
-			Type:  "generic",
+			ID:     n.ID(),
+			Label:  fmt.Sprintf("Node %d", n.ID()),
+			Type:   "generic",
 			Queues: queues,
 			Payload: map[string]any{
 				"processed": totalProcessed,
 			},
-			InQueueBackpressure:  inQueueBackpressure,
-			OutQueueBackpressure: outQueueBackpressure,
+			InQueueBackpressure:    inQueueBackpressure,
+			OutQueueBackpressure:   outQueueBackpressure,
 			DownstreamBackpressure: downstreamBackpressure,
 		})
 	}
@@ -195,7 +195,7 @@ func buildEdges(links []*link.Link, currentCycle uint64) []frame.Edge {
 		occupancy := l.SnapshotOccupancy()
 		latency := l.Latency()
 		slotCount := l.SlotCount()
-		
+
 		// Build stages in order from target to source
 		// Stage 0 is closest to target (arriving soon), Stage latency-1 is closest to source (just sent)
 		stages := make([]frame.PipelineStage, latency)
@@ -216,7 +216,7 @@ func buildEdges(links []*link.Link, currentCycle uint64) []frame.Edge {
 				PacketCount: packetCount,
 			}
 		}
-		
+
 		result = append(result, frame.Edge{
 			Source:         l.SourceID(),
 			Target:         l.TargetID(),

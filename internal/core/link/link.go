@@ -11,8 +11,8 @@ type Link struct {
 	sourceID            int
 	targetID            int
 	target              flow.Flow
-	sourceFlow          flow.Flow          // Source flow (for reading from dispatch queue)
-	dispatchQueueIndex  int                // Index of the dispatch queue in source flow
+	sourceFlow          flow.Flow // Source flow (for reading from dispatch queue)
+	dispatchQueueIndex  int       // Index of the dispatch queue in source flow
 	latency             uint64
 	bandwidth           uint64
 	slotCount           uint64
