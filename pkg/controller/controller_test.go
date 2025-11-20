@@ -58,7 +58,7 @@ func TestControllerRunRespectsContext(t *testing.T) {
 
 func TestControllerRunRequiresCycles(t *testing.T) {
 	ctrl := controller.New(func(cfg config.EntityConfig) (*network.Manager, uint64, error) {
-		f := flow.NewFIFO(1, 2, 0, 0)
+		f := flow.NewFIFO(1, 2, 0, 0, nil, 0)
 		n := &mockNode{id: 1, delay: time.Millisecond, flow: f}
 		mgr, err := network.NewManager([]node.Node{n}, map[int][]*link.Link{
 			n.ID(): nil,
@@ -85,7 +85,7 @@ func newTestBuilder(t *testing.T, tickDelay time.Duration) controller.ManagerBui
 		edges := make(map[int][]*link.Link)
 
 		for _, nodeCfg := range cfg.Nodes {
-			f := flow.NewFIFO(nodeCfg.ID, 8, 0, 0)
+			f := flow.NewFIFO(nodeCfg.ID, 8, 0, 0, nil, 0)
 			n := &mockNode{
 				id:        nodeCfg.ID,
 				delay:     tickDelay,
@@ -94,7 +94,7 @@ func newTestBuilder(t *testing.T, tickDelay time.Duration) controller.ManagerBui
 			}
 			nodes = append(nodes, n)
 			edges[n.ID()] = []*link.Link{
-				link.NewLink(n.ID(), n.Flows()[0], 1, 1, 0),
+				link.NewLink(n.ID(), n.Flows()[0], nil, 0, 1, 1, 0),
 			}
 		}
 

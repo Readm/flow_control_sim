@@ -20,9 +20,9 @@
 - ✅ **Manager 实现** (`network.go`)
   - `NewManager()` - 拓扑构建和验证
   - `Run()` - 并行执行多个 cycle
-  - `advanceLinks()` - Link 推进
+  - `advanceLinks()` - Link 推进（Link 自动从 dispatch_queue 读取）
   - `dispatchCycle()` - 节点并行执行
-  - `routePackets()` - Packet 路由（支持多个 Flow）
+  - 移除 `routePackets()` - 路由现在由 Flow 内部的 Router Hook 处理
   - Cycle Hook 支持
 - ✅ **并行执行机制**
   - 使用 goroutine 和 sync.WaitGroup 实现节点并行
@@ -64,9 +64,10 @@
 - ✅ **优化路径**
   - 直接发送路径：当 `noBackpressureUntil >= targetCycle` 时直接发送
   - Ring buffer 路径：有反压风险时使用缓冲
-- ✅ **跨 Cycle 并行支持**
-  - `ReadFromFlow()` - 基于 Flow SFC 读取数据
-  - 支持独立推进到不同 cycle
+- ✅ **Dispatch Queue 支持**
+  - `ReadFromFlow()` - 从 Flow 的指定 dispatch_queue 读取数据
+  - `dispatchQueueIndex` - 记录对应的 dispatch_queue 索引
+  - `Advance()` 自动调用 `ReadFromFlow()` 从 dispatch_queue 读取
 - ✅ **单元测试** (`link_test.go`)
   - 基础功能测试
   - Ring Buffer 机制测试
@@ -86,15 +87,23 @@
 
 #### DataFlow - Flow (`internal/dataflow/flow/`)
 - ✅ **Flow 接口** (`flow.go`)
-  - 基础方法：`ID()`, `Mailbox()`, `Tick()`, `Emit()`, `DrainOutgoing()`, `ProcessedCount()`
+  - 基础方法：`ID()`, `Mailbox()`, `Tick()`, `Emit()`, `ProcessedCount()`
   - 反压方法：`IsInQueueFull()`, `IsOutQueueFull()`, `SetDownstreamBackpressure()`, 等
-  - 跨 cycle 并行方法：`CurrentCycle()`, `OutQueueSendFinishedCycle()`, `AdvanceTo()`, 等
+  - 跨 cycle 并行方法：`CurrentCycle()`, `AdvanceTo()`, 等
+  - Dispatch queue 方法：`DrainDispatchQueue()`, `DispatchQueueSendFinishedCycle()`, `IsDispatchQueueFull()`, 等
+  - 路由方法：`SetRouterHook()`, `AddDispatchQueue()`, `DispatchQueueCount()`
 - ✅ **FIFO 实现**
   - Mailbox channel 实现
-  - in_queue 和 out_queue 管理
+  - in_queue, out_queue 和 dispatch_queues 管理
   - 反压逻辑实现
   - SFC 机制实现
   - `noBackpressureUntil` 计算和通知
+  - Router Hook 支持（默认路由到第一个 dispatch_queue）
+- ✅ **路由架构** (`dispatch_queue.go`)
+  - DispatchQueue 结构：独立容量和 SFC 追踪
+  - RouterHook 函数类型：可配置的路由策略
+  - DefaultRouterHook：默认路由到第一个 dispatch_queue
+  - 数据流：`inqueue -> process -> outqueue -> router -> dispatch_queues[]`
 - ✅ **跨 Cycle 并行支持**
   - `AdvanceTo()` 方法实现
   - 基于 Link SFC 的执行条件检查

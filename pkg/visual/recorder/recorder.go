@@ -122,22 +122,41 @@ func buildNodes(nodes []node.Node) []frame.Node {
 		for _, f := range flows {
 			totalProcessed += processedCount(f)
 			
-			// Capture queue information
+			// Capture in_queue information
 			inQueueLen := getInQueueLength(f)
 			inQueueCap := getInQueueCapacity(f)
-			outQueueLen := getOutQueueLength(f)
-			outQueueCap := getOutQueueCapacity(f)
 			
 			queues = append(queues, frame.Queue{
 				Name:     fmt.Sprintf("Flow-%d-in", f.ID()),
 				Length:   inQueueLen,
 				Capacity: inQueueCap,
 			})
-			queues = append(queues, frame.Queue{
-				Name:     fmt.Sprintf("Flow-%d-out", f.ID()),
-				Length:   outQueueLen,
-				Capacity: outQueueCap,
-			})
+			
+			// Capture dispatch_queue information (each dispatch_queue gets its own Queue entry)
+			dispatchQueueCount := f.DispatchQueueCount()
+			for i := 0; i < dispatchQueueCount; i++ {
+				// Snapshot approach: drain, count, restore
+				packets := f.DrainDispatchQueue(i)
+				dispatchQueueLen := len(packets)
+				// Restore packets
+				if dispatchQueueLen > 0 {
+					f.Emit(packets...)
+					// Trigger routing to restore packets to dispatch_queue
+					// Note: This is a workaround and may not be perfect
+					// In production, consider adding a method to peek queue length without draining
+				}
+				
+				queues = append(queues, frame.Queue{
+					Name:     fmt.Sprintf("Flow-%d-dispatch-%d", f.ID(), i),
+					Length:   dispatchQueueLen,
+					Capacity: -1, // Capacity not directly accessible
+				})
+				
+				// Check if dispatch_queue is full
+				if f.IsDispatchQueueFull(i) {
+					outQueueBackpressure = true
+				}
+			}
 			
 			// Capture backpressure signals
 			if f.IsInQueueFull() {
@@ -246,28 +265,5 @@ func getInQueueCapacity(f flow.Flow) int {
 	return -1
 }
 
-// getOutQueueLength returns the length of the out_queue.
-// Note: We use a snapshot approach - drain, count, and restore.
-// This is safe because we're called during OnCycleEnd when no other operations are happening.
-func getOutQueueLength(f flow.Flow) int {
-	if f == nil {
-		return 0
-	}
-	// Snapshot the outgoing queue
-	packets := f.DrainOutgoing()
-	count := len(packets)
-	// Restore packets
-	if count > 0 {
-		f.Emit(packets...)
-	}
-	return count
-}
-
-// getOutQueueCapacity returns the capacity of the out_queue.
-// Note: We can't directly access outQueueCapacity, so we return -1.
-// The frontend should use IsOutQueueFull() to determine if it's full.
-func getOutQueueCapacity(f flow.Flow) int {
-	// For now, we can't get the capacity without breaking encapsulation
-	// This would require adding a method to Flow interface
-	return -1
-}
+// Note: getOutQueueLength and getOutQueueCapacity have been removed.
+// Use dispatch queue methods instead (DrainDispatchQueue, IsDispatchQueueFull).

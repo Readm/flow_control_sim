@@ -21,7 +21,7 @@ type multiFlowNode struct {
 func newMultiFlowNode(id int, flowCount int, parallel bool, mailboxSize int, inQueueCapacity int, outQueueCapacity int) *multiFlowNode {
 	flows := make([]flow.Flow, flowCount)
 	for i := 0; i < flowCount; i++ {
-		flows[i] = flow.NewFIFO(id, mailboxSize, inQueueCapacity, outQueueCapacity)
+		flows[i] = flow.NewFIFO(id, mailboxSize, inQueueCapacity, outQueueCapacity, nil, 0)
 	}
 	return &multiFlowNode{
 		id:       id,
@@ -92,7 +92,7 @@ func TestNodeWithSingleFlow(t *testing.T) {
 	}
 
 	// Create a link and send a packet
-	link := link.NewLink(0, node.Flows()[0], 1, 1, 0)
+	link := link.NewLink(0, node.Flows()[0], nil, 0, 1, 1, 0)
 	pkt := packet.Packet{
 		SourceID: 0,
 		TargetID: 1,
@@ -126,7 +126,7 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 	// Create links for each flow
 	links := make([]*link.Link, 3)
 	for i := 0; i < 3; i++ {
-		links[i] = link.NewLink(0, node.Flows()[i], 1, 1, 0)
+		links[i] = link.NewLink(0, node.Flows()[i], nil, 0, 1, 1, 0)
 		pkt := packet.Packet{
 			SourceID: 0,
 			TargetID: 1,
@@ -158,7 +158,7 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 	// Create links for each flow
 	links := make([]*link.Link, 3)
 	for i := 0; i < 3; i++ {
-		links[i] = link.NewLink(0, node.Flows()[i], 1, 1, 0)
+		links[i] = link.NewLink(0, node.Flows()[i], nil, 0, 1, 1, 0)
 		pkt := packet.Packet{
 			SourceID: 0,
 			TargetID: 1,
@@ -193,7 +193,7 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 	t.Parallel()
 
 	node := newMultiFlowNode(1, 2, false, 8, 0, 0)
-	link := link.NewLink(0, node.Flows()[0], 1, 1, 0)
+	link := link.NewLink(0, node.Flows()[0], nil, 0, 1, 1, 0)
 
 	// Send packets for multiple cycles
 	for cycle := uint64(0); cycle < 5; cycle++ {
@@ -217,20 +217,28 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 	}
 }
 
-// TestFlowEmitAndDrainOutgoing tests that packets can be emitted and drained from out_queue.
-func TestFlowEmitAndDrainOutgoing(t *testing.T) {
+// TestFlowEmitAndDrainDispatchQueue tests that packets can be emitted and routed to dispatch queues.
+func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
 	t.Parallel()
 
-	node := newMultiFlowNode(1, 1, false, 8, 0, 0)
-	f := node.Flows()[0]
+	// Create a flow with one dispatch queue
+	targetFlow := flow.NewFIFO(2, 8, 0, 0, nil, 0)
+	f := flow.NewFIFO(1, 8, 0, 0, []interface{}{targetFlow}, 16)
+
+	// Run Tick to trigger routing (needed for packets to go through the router)
+	ctx := context.Background()
+	f.Tick(ctx, 0)
 
 	// Emit packets
 	pkt1 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test1"}
 	pkt2 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test2"}
 	f.Emit(pkt1, pkt2)
 
-	// Drain outgoing
-	drained := f.DrainOutgoing()
+	// Run Tick again to trigger routing
+	f.Tick(ctx, 1)
+
+	// Drain dispatch queue
+	drained := f.DrainDispatchQueue(0)
 	if len(drained) != 2 {
 		t.Fatalf("expected 2 packets, got %d", len(drained))
 	}
@@ -240,8 +248,8 @@ func TestFlowEmitAndDrainOutgoing(t *testing.T) {
 		t.Fatalf("unexpected packet content")
 	}
 
-	// Verify out_queue is empty after drain
-	drained2 := f.DrainOutgoing()
+	// Verify dispatch queue is empty after drain
+	drained2 := f.DrainDispatchQueue(0)
 	if len(drained2) != 0 {
 		t.Fatalf("expected empty queue after drain, got %d packets", len(drained2))
 	}
@@ -253,7 +261,7 @@ func TestBackpressureInQueueFull(t *testing.T) {
 
 	node := newMultiFlowNode(1, 1, false, 2, 2, 0)
 	f := node.Flows()[0]
-	link := link.NewLink(0, f, 1, 1, 0)
+	link := link.NewLink(0, f, nil, 0, 1, 1, 0)
 
 	// Set up backpressure callback
 	backpressureTriggered := false
@@ -293,8 +301,10 @@ func TestBackpressureInQueueFull(t *testing.T) {
 func TestBackpressureDownstreamBlocksEmit(t *testing.T) {
 	t.Parallel()
 
-	node := newMultiFlowNode(1, 1, false, 8, 0, 0)
-	f := node.Flows()[0]
+	// Create a flow with one dispatch queue
+	targetFlow := flow.NewFIFO(2, 8, 0, 0, nil, 0)
+	f := flow.NewFIFO(1, 8, 0, 0, []interface{}{targetFlow}, 16)
+	ctx := context.Background()
 
 	// Set downstream backpressure
 	f.SetDownstreamBackpressure(true)
@@ -303,10 +313,13 @@ func TestBackpressureDownstreamBlocksEmit(t *testing.T) {
 	pkt := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"}
 	f.Emit(pkt)
 
-	// Verify packet was not added to out_queue
-	drained := f.DrainOutgoing()
+	// Trigger routing
+	f.Tick(ctx, 0)
+
+	// Verify packet was not routed to dispatch_queue (because Emit blocked it)
+	drained := f.DrainDispatchQueue(0)
 	if len(drained) != 0 {
-		t.Fatalf("expected no packets in out_queue when backpressured, got %d", len(drained))
+		t.Fatalf("expected no packets in dispatch_queue when backpressured, got %d", len(drained))
 	}
 
 	// Clear backpressure
@@ -315,55 +328,60 @@ func TestBackpressureDownstreamBlocksEmit(t *testing.T) {
 	// Emit again
 	f.Emit(pkt)
 
-	// Verify packet is now in out_queue
-	drained = f.DrainOutgoing()
+	// Trigger routing
+	f.Tick(ctx, 1)
+
+	// Verify packet is now in dispatch_queue
+	drained = f.DrainDispatchQueue(0)
 	if len(drained) != 1 {
 		t.Fatalf("expected 1 packet after clearing backpressure, got %d", len(drained))
 	}
 }
 
-// TestBackpressureOutQueueFullBlocksProcess tests that out_queue full blocks processing.
+// TestBackpressureOutQueueFullBlocksProcess tests that out_queue or dispatch queues full blocks processing.
 func TestBackpressureOutQueueFullBlocksProcess(t *testing.T) {
 	t.Parallel()
 
-	node := newMultiFlowNode(1, 1, false, 8, 0, 2)
-	f := node.Flows()[0]
+	// Create a flow with one dispatch queue (capacity 2)
+	targetFlow := flow.NewFIFO(2, 8, 0, 0, nil, 0)
+	f := flow.NewFIFO(1, 8, 0, 2, []interface{}{targetFlow}, 2)
+	ctx := context.Background()
 
-	// Fill out_queue to capacity
+	// Fill dispatch_queue to capacity
 	pkt1 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test1"}
 	pkt2 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test2"}
 	f.Emit(pkt1, pkt2)
+	f.Tick(ctx, 0) // Route packets to dispatch_queue
 
-	// Verify out_queue is full
-	if !f.IsOutQueueFull() {
-		t.Fatalf("expected out_queue to be full")
+	// Verify dispatch_queue is full
+	if !f.IsDispatchQueueFull(0) {
+		t.Fatalf("expected dispatch_queue to be full")
 	}
 
 	// Send packet to mailbox
-	link := link.NewLink(0, f, 1, 1, 0)
+	link := link.NewLink(0, f, nil, 0, 1, 1, 0)
 	pkt3 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test3"}
 	link.Transmit(0, pkt3)
 	link.Advance(1)
 
-	// Run Tick - processing should be blocked
-	ctx := context.Background()
+	// Run Tick - processing should be blocked because dispatch_queue is full
 	f.Tick(ctx, 1)
 
 	// Verify packet is still in incoming (not processed)
 	// We can't directly check incoming, but we can verify it wasn't processed
 	if f.ProcessedCount() != 0 {
-		t.Fatalf("expected no processed packets when out_queue is full, got %d", f.ProcessedCount())
+		t.Fatalf("expected no processed packets when dispatch_queue is full, got %d", f.ProcessedCount())
 	}
 
-	// Drain out_queue
-	f.DrainOutgoing()
+	// Drain dispatch_queue
+	f.DrainDispatchQueue(0)
 
 	// Run Tick again - now processing should work
 	f.Tick(ctx, 2)
 
 	// Verify packet was processed
 	if f.ProcessedCount() != 1 {
-		t.Fatalf("expected 1 processed packet after draining out_queue, got %d", f.ProcessedCount())
+		t.Fatalf("expected 1 processed packet after draining dispatch_queue, got %d", f.ProcessedCount())
 	}
 }
 
@@ -373,7 +391,7 @@ func TestBackpressureLinkBlocksTransmit(t *testing.T) {
 
 	node := newMultiFlowNode(1, 1, false, 8, 0, 0)
 	f := node.Flows()[0]
-	link := link.NewLink(0, f, 1, 1, 0)
+	link := link.NewLink(0, f, nil, 0, 1, 1, 0)
 
 	// Set link backpressure
 	link.SetBackpressure(true)

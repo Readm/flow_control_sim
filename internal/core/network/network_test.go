@@ -17,8 +17,8 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 	t.Parallel()
 
 	const (
-		cycles      = 4
-		linkCycles  = 1
+		cycles      = 6  // Increased to account for dispatch queue and routing delay
+		linkCycles  = 2  // Account for both link latency and routing delay
 		nodeWork    = 35 * time.Millisecond
 		testTimeout = time.Second
 		mailboxSize = 4
@@ -31,8 +31,12 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 	nodeA := newFlowNode(0, 1, mailboxSize, tracker, nodeWork, cycles)
 	nodeB := newFlowNode(1, 0, mailboxSize, tracker, nodeWork, cycles)
 
-	linkAB := link.NewLink(nodeA.ID(), nodeB.Flows()[0], linkCycles, 1, 0)
-	linkBA := link.NewLink(nodeB.ID(), nodeA.Flows()[0], linkCycles, 1, 0)
+	// Add dispatch queues to flows for sending to peer
+	nodeA.Flows()[0].AddDispatchQueue(nodeB.Flows()[0], 16)
+	nodeB.Flows()[0].AddDispatchQueue(nodeA.Flows()[0], 16)
+
+	linkAB := link.NewLink(nodeA.ID(), nodeB.Flows()[0], nodeA.Flows()[0], 0, linkCycles, 1, 0)
+	linkBA := link.NewLink(nodeB.ID(), nodeA.Flows()[0], nodeB.Flows()[0], 0, linkCycles, 1, 0)
 	
 	// Set noBackpressureUntil to allow packet transmission
 	linkAB.SetNoBackpressureUntil(cycles + 10)
@@ -89,7 +93,9 @@ type flowNode struct {
 }
 
 func newFlowNode(id, peerID int, mailboxSize int, tracker *concurrencyTracker, workload time.Duration, totalCycles uint64) *flowNode {
-	f := flow.NewFIFO(id, mailboxSize, 0, 0)
+	// Create flow without dispatch queues initially
+	// Dispatch queue will be added after creating the peer flow
+	f := flow.NewFIFO(id, mailboxSize, 0, 0, nil, 0)
 	return &flowNode{
 		id:          id,
 		peerID:      peerID,

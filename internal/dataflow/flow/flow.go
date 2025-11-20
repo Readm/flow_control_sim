@@ -13,7 +13,6 @@ type Flow interface {
 	Mailbox() chan<- packet.Envelope
 	Tick(ctx context.Context, cycle uint64) error
 	Emit(pkts ...packet.Packet)
-	DrainOutgoing() []packet.Packet
 	ProcessedCount() int
 	// Backpressure methods
 	IsInQueueFull() bool
@@ -23,11 +22,17 @@ type Flow interface {
 	SetUpstreamBackpressureCallback(func())
 	// Cross-cycle parallel methods
 	CurrentCycle() uint64
-	OutQueueSendFinishedCycle() uint64
 	SetNoBackpressureUntil(uint64)
 	NoBackpressureUntil() uint64
 	AdvanceTo(cycle uint64, linkSFC uint64) error
 	SetUpstreamLink(link interface{}) // Use interface{} to avoid circular dependency
+	// Dispatch queue methods
+	SetRouterHook(hook RouterHook)
+	AddDispatchQueue(link interface{}, capacity int)
+	DispatchQueueCount() int
+	DrainDispatchQueue(index int) []packet.Packet
+	DispatchQueueSendFinishedCycle(index int) uint64
+	IsDispatchQueueFull(index int) bool
 }
 
 // FIFO implements Flow by draining packets in the order they arrive. It uses a
@@ -43,15 +48,20 @@ type FIFO struct {
 	downstreamBackpressure       bool
 	upstreamBackpressureCallback func()
 	currentCycle                 uint64
-	outQueueSendFinishedCycle    uint64
 	noBackpressureUntil          uint64
 	upstreamLink                 interface{} // Use interface{} to avoid circular dependency
+	// Dispatch queue fields
+	dispatchQueues []*DispatchQueue
+	routerHook     RouterHook
+	topology       interface{} // Network topology information for Router Hook
 }
 
 // NewFIFO constructs a FIFO flow with the provided identifier. mailboxSize
 // controls how many envelopes can queue up before backpressure is applied.
 // inQueueCapacity and outQueueCapacity control the capacity limits for backpressure.
-func NewFIFO(id int, mailboxSize int, inQueueCapacity int, outQueueCapacity int) *FIFO {
+// links: list of links for which to create dispatch queues (optional)
+// dispatchQueueCapacity: capacity of each dispatch queue (defaults to outQueueCapacity)
+func NewFIFO(id int, mailboxSize int, inQueueCapacity int, outQueueCapacity int, links []interface{}, dispatchQueueCapacity int) *FIFO {
 	if mailboxSize <= 0 {
 		mailboxSize = 8
 	}
@@ -61,11 +71,23 @@ func NewFIFO(id int, mailboxSize int, inQueueCapacity int, outQueueCapacity int)
 	if outQueueCapacity <= 0 {
 		outQueueCapacity = 16
 	}
+	if dispatchQueueCapacity <= 0 {
+		dispatchQueueCapacity = outQueueCapacity
+	}
+
+	// Create dispatch queues for each link
+	dispatchQueues := make([]*DispatchQueue, len(links))
+	for i, link := range links {
+		dispatchQueues[i] = NewDispatchQueue(link, dispatchQueueCapacity)
+	}
+
 	return &FIFO{
 		id:               id,
 		mailbox:          make(chan packet.Envelope, mailboxSize),
 		inQueueCapacity:  inQueueCapacity,
 		outQueueCapacity: outQueueCapacity,
+		dispatchQueues:   dispatchQueues,
+		routerHook:       DefaultRouterHook, // Use default router hook
 	}
 }
 
@@ -113,7 +135,44 @@ PROCESS:
 		}
 	}
 
+	// Route packets from out_queue to dispatch_queues
+	f.Route()
+
 	return nil
+}
+
+// Route takes packets from the out_queue and distributes them to dispatch_queues
+// based on the router hook function.
+func (f *FIFO) Route() {
+	if len(f.outgoing) == 0 || len(f.dispatchQueues) == 0 {
+		return
+	}
+
+	remaining := make([]packet.Packet, 0)
+	for _, pkt := range f.outgoing {
+		// Call router hook to determine which dispatch queue to use
+		index := f.routerHook(pkt, f.dispatchQueues, f.topology)
+
+		// Discard packet if index is -1
+		if index < 0 || index >= len(f.dispatchQueues) {
+			continue
+		}
+
+		// Try to enqueue to the selected dispatch queue
+		dq := f.dispatchQueues[index]
+		if !dq.Enqueue(pkt) {
+			// Dispatch queue is full, keep packet in out_queue
+			remaining = append(remaining, pkt)
+		} else {
+			// Update dispatch queue SFC
+			if f.currentCycle >= dq.SendFinishedCycle() {
+				dq.SetSendFinishedCycle(f.currentCycle)
+			}
+		}
+	}
+
+	// Update out_queue with packets that couldn't be routed
+	f.outgoing = remaining
 }
 
 // Emit stages packets for delivery to downstream links.
@@ -127,19 +186,6 @@ func (f *FIFO) Emit(pkts ...packet.Packet) {
 		return
 	}
 	f.outgoing = append(f.outgoing, pkts...)
-	// Update out_queue SFC
-	f.outQueueSendFinishedCycle = f.currentCycle
-}
-
-// DrainOutgoing returns all packets that were emitted since the last drain call.
-func (f *FIFO) DrainOutgoing() []packet.Packet {
-	if len(f.outgoing) == 0 {
-		return nil
-	}
-
-	drained := append([]packet.Packet(nil), f.outgoing...)
-	f.outgoing = nil
-	return drained
 }
 
 // ProcessedCount exposes how many packets have been processed lifecycle-wide.
@@ -152,9 +198,24 @@ func (f *FIFO) IsInQueueFull() bool {
 	return len(f.mailbox) == cap(f.mailbox)
 }
 
-// IsOutQueueFull checks if the out_queue is full.
+// IsOutQueueFull checks if the out_queue is full or if all dispatch queues are full.
 func (f *FIFO) IsOutQueueFull() bool {
-	return len(f.outgoing) >= f.outQueueCapacity
+	// Check if out_queue itself is full
+	if len(f.outgoing) >= f.outQueueCapacity {
+		return true
+	}
+	// If there are dispatch queues, check if all of them are full
+	if len(f.dispatchQueues) > 0 {
+		allFull := true
+		for _, dq := range f.dispatchQueues {
+			if !dq.IsFull() {
+				allFull = false
+				break
+			}
+		}
+		return allFull
+	}
+	return false
 }
 
 // SetDownstreamBackpressure sets the downstream backpressure state.
@@ -176,11 +237,6 @@ func (f *FIFO) SetUpstreamBackpressureCallback(callback func()) {
 // CurrentCycle returns the current cycle the flow has advanced to.
 func (f *FIFO) CurrentCycle() uint64 {
 	return f.currentCycle
-}
-
-// OutQueueSendFinishedCycle returns the SFC of the out_queue.
-func (f *FIFO) OutQueueSendFinishedCycle() uint64 {
-	return f.outQueueSendFinishedCycle
 }
 
 // SetNoBackpressureUntil sets the cycle until which receiver guarantees no backpressure.
@@ -257,4 +313,48 @@ func (f *FIFO) calculateNoBackpressureUntil() uint64 {
 	remainingCapacity := cap(f.mailbox) - len(f.mailbox)
 	// Assume receiving 1 packet per cycle
 	return f.currentCycle + uint64(remainingCapacity)
+}
+
+// SetRouterHook sets the routing hook function.
+func (f *FIFO) SetRouterHook(hook RouterHook) {
+	if hook == nil {
+		f.routerHook = DefaultRouterHook
+	} else {
+		f.routerHook = hook
+	}
+}
+
+// AddDispatchQueue adds a new dispatch queue for the specified link.
+func (f *FIFO) AddDispatchQueue(link interface{}, capacity int) {
+	dq := NewDispatchQueue(link, capacity)
+	f.dispatchQueues = append(f.dispatchQueues, dq)
+}
+
+// DispatchQueueCount returns the number of dispatch queues.
+func (f *FIFO) DispatchQueueCount() int {
+	return len(f.dispatchQueues)
+}
+
+// DrainDispatchQueue drains all packets from the specified dispatch queue.
+func (f *FIFO) DrainDispatchQueue(index int) []packet.Packet {
+	if index < 0 || index >= len(f.dispatchQueues) {
+		return nil
+	}
+	return f.dispatchQueues[index].Drain()
+}
+
+// DispatchQueueSendFinishedCycle returns the SFC of the specified dispatch queue.
+func (f *FIFO) DispatchQueueSendFinishedCycle(index int) uint64 {
+	if index < 0 || index >= len(f.dispatchQueues) {
+		return 0
+	}
+	return f.dispatchQueues[index].SendFinishedCycle()
+}
+
+// IsDispatchQueueFull checks if the specified dispatch queue is full.
+func (f *FIFO) IsDispatchQueueFull(index int) bool {
+	if index < 0 || index >= len(f.dispatchQueues) {
+		return false
+	}
+	return f.dispatchQueues[index].IsFull()
 }

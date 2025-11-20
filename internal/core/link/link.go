@@ -11,6 +11,8 @@ type Link struct {
 	sourceID            int
 	targetID            int
 	target              flow.Flow
+	sourceFlow          flow.Flow          // Source flow (for reading from dispatch queue)
+	dispatchQueueIndex  int                // Index of the dispatch queue in source flow
 	latency             uint64
 	bandwidth           uint64
 	slotCount           uint64
@@ -22,11 +24,15 @@ type Link struct {
 }
 
 // NewLink creates a link between source and target.
+// - sourceID: ID of the source node
+// - target: target flow (receiver)
+// - sourceFlow: source flow (sender, for reading from dispatch queue)
+// - dispatchQueueIndex: index of the dispatch queue in source flow
 // - latency: number of cycles for packet delivery (also determines slot count)
 // - bandwidth: maximum packets per slot and per cycle (defaults to 1 if 0)
 // - slotCount: number of slots (defaults to latency if 0)
 // Design: slotCount = latency, each slot can hold up to bandwidth packets.
-func NewLink(sourceID int, target flow.Flow, latency uint64, bandwidth uint64, slotCount uint64) *Link {
+func NewLink(sourceID int, target flow.Flow, sourceFlow flow.Flow, dispatchQueueIndex int, latency uint64, bandwidth uint64, slotCount uint64) *Link {
 	if latency == 0 {
 		latency = 1
 	}
@@ -38,13 +44,16 @@ func NewLink(sourceID int, target flow.Flow, latency uint64, bandwidth uint64, s
 	}
 	slots := make([][]packet.Packet, slotCount)
 	return &Link{
-		sourceID:  sourceID,
-		targetID:  target.ID(),
-		target:    target,
-		latency:   latency,
-		bandwidth: bandwidth,
-		slotCount: slotCount,
-		slots:     slots,
+		sourceID:            sourceID,
+		targetID:            target.ID(),
+		target:              target,
+		sourceFlow:          sourceFlow,
+		dispatchQueueIndex:  dispatchQueueIndex,
+		latency:             latency,
+		bandwidth:           bandwidth,
+		slotCount:           slotCount,
+		slots:               slots,
+		noBackpressureUntil: 1000000, // Default: no backpressure for a long time
 	}
 }
 
@@ -135,6 +144,7 @@ func (l *Link) transmitViaRingBuffer(cycle uint64, pkt packet.Packet) bool {
 // Only processes ring buffer path packets.
 // Packets that cannot be delivered immediately due to backpressure remain in
 // the slot and are retried in the next rotation.
+// Also reads packets from source flow's dispatch queue if configured.
 func (l *Link) Advance(cycle uint64) {
 	// Check if receiver is backpressured
 	if cycle > l.noBackpressureUntil {
@@ -143,8 +153,11 @@ func (l *Link) Advance(cycle uint64) {
 		return
 	}
 
-	// Normal advance: update currentCycle and process corresponding slot
+	// Update currentCycle first
 	l.currentCycle = cycle
+
+	// Read from source flow's dispatch queue (uses updated currentCycle)
+	l.ReadFromFlow()
 	index := l.currentCycle % l.slotCount
 	slot := l.slots[index]
 	if len(slot) == 0 {
@@ -223,14 +236,22 @@ func (l *Link) NoBackpressureUntil() uint64 {
 	return l.noBackpressureUntil
 }
 
-// ReadFromFlow reads packets from Flow's out_queue based on Flow's SFC.
-func (l *Link) ReadFromFlow(f flow.Flow) {
-	flowSFC := f.OutQueueSendFinishedCycle()
-	// If currentCycle <= flowSFC, can read all data up to flowSFC
-	if l.currentCycle <= flowSFC {
-		packets := f.DrainOutgoing()
-		for _, pkt := range packets {
-			l.Transmit(l.currentCycle, pkt)
-		}
+// ReadFromFlow reads packets from Flow's dispatch queue.
+// Uses the sourceFlow and dispatchQueueIndex stored in the Link.
+// Always attempts to read; if dispatch queue is empty, DrainDispatchQueue returns nil.
+func (l *Link) ReadFromFlow() {
+	if l.sourceFlow == nil {
+		return
 	}
+
+	// Read all available packets from dispatch queue
+	packets := l.sourceFlow.DrainDispatchQueue(l.dispatchQueueIndex)
+	for _, pkt := range packets {
+		l.Transmit(l.currentCycle, pkt)
+	}
+}
+
+// DispatchQueueIndex returns the dispatch queue index this link reads from.
+func (l *Link) DispatchQueueIndex() int {
+	return l.dispatchQueueIndex
 }

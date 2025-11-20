@@ -88,7 +88,7 @@ type flowNode struct {
 }
 
 func newFlowNode(id, peerID int, totalCycles uint64) *flowNode {
-	f := flow.NewFIFO(id, mailboxSize, 0, 0)
+	f := flow.NewFIFO(id, mailboxSize, 0, 0, nil, 0)
 	return &flowNode{
 		id:          id,
 		peerID:      peerID,
@@ -139,9 +139,13 @@ func createManagerBuilder() controller.ManagerBuilder {
 
 		nodes := []node.Node{node0, node1}
 
+		// Add dispatch queues to flows for sending to peer
+		node0.Flows()[0].AddDispatchQueue(node1.Flows()[0], 16)
+		node1.Flows()[0].AddDispatchQueue(node0.Flows()[0], 16)
+
 		// Create bidirectional links with 5 cycle latency and bandwidth 1
-		linkAB := link.NewLink(0, node1.Flows()[0], linkLatency, linkBandwidth, 0)
-		linkBA := link.NewLink(1, node0.Flows()[0], linkLatency, linkBandwidth, 0)
+		linkAB := link.NewLink(0, node1.Flows()[0], node0.Flows()[0], 0, linkLatency, linkBandwidth, 0)
+		linkBA := link.NewLink(1, node0.Flows()[0], node1.Flows()[0], 0, linkLatency, linkBandwidth, 0)
 
 		graph := map[int][]*link.Link{
 			0: {linkAB}, // node 0 -> node 1

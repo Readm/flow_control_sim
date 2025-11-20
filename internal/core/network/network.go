@@ -89,6 +89,11 @@ func (m *Manager) Run(ctx context.Context, cycles uint64) error {
 		if err := m.dispatchCycle(ctx, cycle, delay); err != nil {
 			return err
 		}
+		
+		// Advance links again to allow same-cycle routing
+		// This ensures packets routed during dispatchCycle can be transmitted immediately
+		m.advanceLinks(cycle)
+		
 		if m.cycleHook != nil {
 			m.cycleHook.OnCycleEnd(cycle, m.order, m.links)
 		}
@@ -134,47 +139,6 @@ func (m *Manager) dispatchCycle(ctx context.Context, cycle uint64, linkDelay tim
 		}
 	}
 
-	return m.routePackets(cycle)
-}
-
-func (m *Manager) routePackets(cycle uint64) error {
-	for _, n := range m.order {
-		flows := n.Flows()
-		if len(flows) == 0 {
-			continue
-		}
-
-		for _, flow := range flows {
-			if flow == nil {
-				continue
-			}
-			packets := flow.DrainOutgoing()
-			if len(packets) == 0 {
-				continue
-			}
-
-			links := m.outgoing[n.ID()]
-			for _, pkt := range packets {
-				if pkt.SourceID != n.ID() {
-					return fmt.Errorf("packet source mismatch: node %d vs packet %d", n.ID(), pkt.SourceID)
-				}
-				delivered := false
-				for _, l := range links {
-					if l.TargetID() == pkt.TargetID {
-						// Check backpressure before transmitting
-						if !l.IsBackpressured() {
-							l.Transmit(cycle, pkt)
-						}
-						delivered = true
-						break
-					}
-				}
-				if !delivered {
-					return fmt.Errorf("no link from node %d to target %d", n.ID(), pkt.TargetID)
-				}
-			}
-		}
-	}
 	return nil
 }
 

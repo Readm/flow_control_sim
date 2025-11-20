@@ -12,8 +12,8 @@ import (
 func TestLinkBasicFunctionality(t *testing.T) {
 	t.Parallel()
 
-	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 2, 1, 0) // latency = 2, bandwidth = 1
+	f := flow.NewFIFO(1, 8, 0, 0, nil, 0)
+	link := NewLink(0, f, nil, 0, 2, 1, 0) // latency = 2, bandwidth = 1
 
 	pkt := packet.Packet{
 		SourceID: 0,
@@ -40,8 +40,11 @@ func TestLinkBasicFunctionality(t *testing.T) {
 func TestLinkRingBufferMechanism(t *testing.T) {
 	t.Parallel()
 
-	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 3, 1, 0) // latency = 3, bandwidth = 1, slotCount = 3
+	f := flow.NewFIFO(1, 8, 0, 0, nil, 0)
+	link := NewLink(0, f, nil, 0, 3, 1, 0) // latency = 3, bandwidth = 1, slotCount = 3
+
+	// Force ring buffer path by setting noBackpressureUntil to a small value
+	link.SetNoBackpressureUntil(0)
 
 	pkt1 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test1"}
 	pkt2 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test2"}
@@ -65,8 +68,8 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 func TestLinkSFC(t *testing.T) {
 	t.Parallel()
 
-	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 1, 1, 0)
+	f := flow.NewFIFO(1, 8, 0, 0, nil, 0)
+	link := NewLink(0, f, nil, 0, 1, 1, 0)
 
 	// Set noBackpressureUntil to allow advancement
 	link.SetNoBackpressureUntil(10)
@@ -93,8 +96,8 @@ func TestLinkSFC(t *testing.T) {
 func TestLinkBackpressurePausesCycle(t *testing.T) {
 	t.Parallel()
 
-	f := flow.NewFIFO(1, 2, 0, 0) // Small mailbox to trigger backpressure
-	link := NewLink(0, f, 1, 1, 0)
+	f := flow.NewFIFO(1, 2, 0, 0, nil, 0) // Small mailbox to trigger backpressure
+	link := NewLink(0, f, nil, 0, 1, 1, 0)
 
 	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
 
@@ -134,8 +137,8 @@ func TestLinkBackpressurePausesCycle(t *testing.T) {
 func TestLinkDirectSendPath(t *testing.T) {
 	t.Parallel()
 
-	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 2, 1, 0) // latency = 2, bandwidth = 1
+	f := flow.NewFIFO(1, 8, 0, 0, nil, 0)
+	link := NewLink(0, f, nil, 0, 2, 1, 0) // latency = 2, bandwidth = 1
 
 	// Set noBackpressureUntil to 5 (>= 0+2)
 	link.SetNoBackpressureUntil(5)
@@ -162,8 +165,8 @@ func TestLinkDirectSendPath(t *testing.T) {
 func TestLinkRingBufferPath(t *testing.T) {
 	t.Parallel()
 
-	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 3, 1, 0) // latency = 3, bandwidth = 1
+	f := flow.NewFIFO(1, 8, 0, 0, nil, 0)
+	link := NewLink(0, f, nil, 0, 3, 1, 0) // latency = 3, bandwidth = 1
 
 	// Set noBackpressureUntil to 2 (< 0+3)
 	link.SetNoBackpressureUntil(2)
@@ -195,42 +198,49 @@ func TestLinkRingBufferPath(t *testing.T) {
 	}
 }
 
-// TestLinkReadFromFlow tests reading packets from Flow's out_queue based on Flow SFC.
+// TestLinkReadFromFlow tests reading packets from Flow's dispatch_queue based on dispatch queue SFC.
 func TestLinkReadFromFlow(t *testing.T) {
 	t.Parallel()
 
-	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 1, 2, 0) // bandwidth = 2 to allow 2 packets
+	// Create target flow and source flow with one dispatch queue
+	targetFlow := flow.NewFIFO(2, 8, 0, 0, nil, 0)
+	sourceFlow := flow.NewFIFO(1, 8, 0, 0, []interface{}{targetFlow}, 16)
+
+	// Create link with reference to source flow and dispatch queue index
+	link := NewLink(1, targetFlow, sourceFlow, 0, 1, 2, 0) // bandwidth = 2 to allow 2 packets
 
 	// Set Flow currentCycle first
 	ctx := context.Background()
-	f.Tick(ctx, 1) // Advance to cycle 1
+	sourceFlow.Tick(ctx, 1) // Advance to cycle 1
 
 	// Emit packets
 	pkt1 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test1"}
 	pkt2 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test2"}
-	f.Emit(pkt1, pkt2)
+	sourceFlow.Emit(pkt1, pkt2)
 
-	// Flow SFC should be updated to currentCycle
-	flowSFC := f.OutQueueSendFinishedCycle()
-	if flowSFC != 1 {
-		t.Fatalf("expected Flow SFC 1, got %d", flowSFC)
+	// Trigger routing
+	sourceFlow.Tick(ctx, 2)
+
+	// Dispatch queue SFC should be updated
+	flowSFC := sourceFlow.DispatchQueueSendFinishedCycle(0)
+	if flowSFC != 2 {
+		t.Fatalf("expected dispatch queue SFC 2, got %d", flowSFC)
 	}
 
-	// Set link currentCycle to match Flow SFC
-	link.SetSendFinishedCycle(flowSFC)
+	// Advance link to cycle 0 (this will trigger ReadFromFlow internally)
+	// Packets will be read from dispatch queue and transmitted
+	link.Advance(0)
 
-	// Read from Flow
-	link.ReadFromFlow(f)
+	// Advance to cycle 1 to deliver packets (latency=1)
+	link.Advance(1)
 
-	// Verify packets were transmitted
-	occupancy := link.SnapshotOccupancy()
-	totalPackets := 0
-	for _, count := range occupancy {
-		totalPackets += count
-	}
-	if totalPackets != 2 {
-		t.Fatalf("expected 2 packets in link, got %d", totalPackets)
+	// Process targetFlow to receive packets
+	targetFlow.Tick(ctx, 1)
+
+	// Verify packets were received by targetFlow
+	processedCount := targetFlow.ProcessedCount()
+	if processedCount != 2 {
+		t.Fatalf("expected 2 packets processed by target flow, got %d", processedCount)
 	}
 }
 
@@ -238,8 +248,8 @@ func TestLinkReadFromFlow(t *testing.T) {
 func TestLinkMultiplePackets(t *testing.T) {
 	t.Parallel()
 
-	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 1, 1, 0)
+	f := flow.NewFIFO(1, 8, 0, 0, nil, 0)
+	link := NewLink(0, f, nil, 0, 1, 1, 0)
 	link.SetNoBackpressureUntil(10)
 
 	pkt1 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test1"}
@@ -271,8 +281,8 @@ func TestLinkMultiplePackets(t *testing.T) {
 func TestLinkBandwidthLimit(t *testing.T) {
 	t.Parallel()
 
-	f := flow.NewFIFO(1, 8, 0, 0)
-	link := NewLink(0, f, 2, 2, 0) // latency = 2, bandwidth = 2, slotCount = 2
+	f := flow.NewFIFO(1, 8, 0, 0, nil, 0)
+	link := NewLink(0, f, nil, 0, 2, 2, 0) // latency = 2, bandwidth = 2, slotCount = 2
 	// Set noBackpressureUntil to 1 (< 0+2) to force ring buffer path
 	link.SetNoBackpressureUntil(1)
 
