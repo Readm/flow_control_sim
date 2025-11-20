@@ -8,7 +8,6 @@ import "github.com/Readm/flow_sim/internal/dataflow/packet"
 // - dispatch_queue: for routing packets to specific links (link should be set)
 type Queue struct {
 	mailbox           chan packet.Envelope
-	capacity          int
 	sendFinishedCycle uint64      // Only used by dispatch_queue
 	link              interface{} // Associated Link (only used by dispatch_queue, use interface{} to avoid circular dependency)
 }
@@ -20,9 +19,8 @@ func NewQueue(capacity int, link interface{}) *Queue {
 		capacity = 16 // Default capacity
 	}
 	return &Queue{
-		mailbox:  make(chan packet.Envelope, capacity),
-		capacity: capacity,
-		link:     link,
+		mailbox: make(chan packet.Envelope, capacity),
+		link:    link,
 	}
 }
 
@@ -38,7 +36,7 @@ func (q *Queue) Length() int {
 
 // Capacity returns the maximum capacity of the queue.
 func (q *Queue) Capacity() int {
-	return q.capacity
+	return cap(q.mailbox)
 }
 
 // SendFinishedCycle returns the SFC of this queue.

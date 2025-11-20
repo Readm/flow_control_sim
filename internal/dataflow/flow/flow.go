@@ -78,7 +78,7 @@ func NewFIFO(id int, mailboxSize int, inQueueCapacity int, outQueueCapacity int,
 	// Create dispatch queues for each link
 	dispatchQueues := make([]*Queue, len(links))
 	for i, link := range links {
-		dispatchQueues[i] = NewDispatchQueue(link, dispatchQueueCapacity)
+		dispatchQueues[i] = NewQueue(dispatchQueueCapacity, link)
 	}
 
 	return &FIFO{
@@ -146,14 +146,8 @@ PROCESS:
 func (f *FIFO) Route() {
 	if len(f.dispatchQueues) == 0 {
 		// No dispatch queues, drain outQueue to prevent blocking
-		for {
-			select {
-			case <-f.outQueue.ReceiveMailbox():
-				// Discard packets
-			default:
-				return
-			}
-		}
+		f.outQueue.Drain()
+		return
 	}
 
 	// Receive packets from outQueue channel and route to dispatch queues
@@ -226,22 +220,16 @@ func (f *FIFO) IsInQueueFull() bool {
 
 // IsOutQueueFull checks if the out_queue channel is full or if all dispatch queues are full.
 func (f *FIFO) IsOutQueueFull() bool {
-	// Check if out_queue channel is full
 	if f.outQueue.IsFull() {
 		return true
 	}
-	// If there are dispatch queues, check if all of them are full
-	if len(f.dispatchQueues) > 0 {
-		allFull := true
-		for _, dq := range f.dispatchQueues {
-			if !dq.IsFull() {
-				allFull = false
-				break
-			}
+	// Check if all dispatch queues are full
+	for _, dq := range f.dispatchQueues {
+		if !dq.IsFull() {
+			return false
 		}
-		return allFull
 	}
-	return false
+	return len(f.dispatchQueues) > 0
 }
 
 // SetDownstreamBackpressure sets the downstream backpressure state.
@@ -344,16 +332,14 @@ func (f *FIFO) calculateNoBackpressureUntil() uint64 {
 // SetRouterHook sets the routing hook function.
 func (f *FIFO) SetRouterHook(hook RouterHook) {
 	if hook == nil {
-		f.routerHook = DefaultRouterHook
-	} else {
-		f.routerHook = hook
+		hook = DefaultRouterHook
 	}
+	f.routerHook = hook
 }
 
 // AddDispatchQueue adds a new dispatch queue for the specified link.
 func (f *FIFO) AddDispatchQueue(link interface{}, capacity int) {
-	dq := NewDispatchQueue(link, capacity)
-	f.dispatchQueues = append(f.dispatchQueues, dq)
+	f.dispatchQueues = append(f.dispatchQueues, NewQueue(capacity, link))
 }
 
 // DispatchQueueCount returns the number of dispatch queues.
@@ -361,35 +347,43 @@ func (f *FIFO) DispatchQueueCount() int {
 	return len(f.dispatchQueues)
 }
 
-// DrainDispatchQueue drains all packets from the specified dispatch queue.
-func (f *FIFO) DrainDispatchQueue(index int) []packet.Packet {
+// getDispatchQueue returns the dispatch queue at the specified index, or nil if invalid.
+func (f *FIFO) getDispatchQueue(index int) *Queue {
 	if index < 0 || index >= len(f.dispatchQueues) {
 		return nil
 	}
-	return f.dispatchQueues[index].Drain()
+	return f.dispatchQueues[index]
+}
+
+// DrainDispatchQueue drains all packets from the specified dispatch queue.
+func (f *FIFO) DrainDispatchQueue(index int) []packet.Packet {
+	if dq := f.getDispatchQueue(index); dq != nil {
+		return dq.Drain()
+	}
+	return nil
 }
 
 // DispatchQueueSendFinishedCycle returns the SFC of the specified dispatch queue.
 func (f *FIFO) DispatchQueueSendFinishedCycle(index int) uint64 {
-	if index < 0 || index >= len(f.dispatchQueues) {
-		return 0
+	if dq := f.getDispatchQueue(index); dq != nil {
+		return dq.SendFinishedCycle()
 	}
-	return f.dispatchQueues[index].SendFinishedCycle()
+	return 0
 }
 
 // IsDispatchQueueFull checks if the specified dispatch queue is full.
 func (f *FIFO) IsDispatchQueueFull(index int) bool {
-	if index < 0 || index >= len(f.dispatchQueues) {
-		return false
+	if dq := f.getDispatchQueue(index); dq != nil {
+		return dq.IsFull()
 	}
-	return f.dispatchQueues[index].IsFull()
+	return false
 }
 
 // DispatchQueueMailbox returns the receive-only channel for the specified dispatch queue.
 // This allows Link to receive packets from the dispatch queue via channel.
 func (f *FIFO) DispatchQueueMailbox(index int) <-chan packet.Envelope {
-	if index < 0 || index >= len(f.dispatchQueues) {
-		return nil
+	if dq := f.getDispatchQueue(index); dq != nil {
+		return dq.ReceiveMailbox()
 	}
-	return f.dispatchQueues[index].ReceiveMailbox()
+	return nil
 }
