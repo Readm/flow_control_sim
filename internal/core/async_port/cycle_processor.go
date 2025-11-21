@@ -70,39 +70,67 @@ func (cp *CycleProcessor) ProcessCycle(cycle int) error {
 	cp.upstreamPort.WaitForDoneUntil(cycle)
 
 	// H: Get data: Chan() -> in_queue
-	select {
-	case pkt := <-cp.upstreamPort.ReceiveChan():
-		// OnDataReceived hook
-		if cp.hooks != nil {
-			cp.hooks.OnDataReceived(pkt, cycle)
+	// Receive all available packets from channel (similar to Flow.Tick behavior)
+	receivedPackets := make([]PacketWithCycle, 0)
+	for {
+		select {
+		case pkt := <-cp.upstreamPort.ReceiveChan():
+			receivedPackets = append(receivedPackets, pkt)
+		default:
+			// No more packets available, process what we have
+			goto processPackets
+		}
+	}
+
+processPackets:
+	// Process all received packets
+	if len(receivedPackets) > 0 {
+		maxActualCycle := cycle // Track maximum actualCycle across all packets
+
+		// Process each packet
+		for _, pkt := range receivedPackets {
+			// Use the packet's cycle (pkt.Cycle) as the base cycle for processing
+			// This allows processing packets from different cycles in the same ProcessCycle call
+			pktCycle := int(pkt.Cycle)
+
+			// OnDataReceived hook
+			if cp.hooks != nil {
+				cp.hooks.OnDataReceived(pkt, pktCycle)
+			}
+
+			// I: Downstream backpressure-independent logic simulation
+			var processedPkt PacketWithCycle
+			if cp.hooks != nil {
+				processedPkt = cp.hooks.OnDownstreamBackpressureIndependentLogic(pkt, pktCycle)
+			} else {
+				processedPkt = pkt
+			}
+
+			// B: Check downstream.CheckReady(pktCycle)
+			// If not ready, increment cycle until ready (this is the core logic)
+			actualCycle := cp.incrementCycleUntilReady(pktCycle, processedPkt)
+
+			// Track maximum actualCycle
+			if actualCycle > maxActualCycle {
+				maxActualCycle = actualCycle
+			}
+
+			// C: Downstream ready logic (now we know downstream is ready for actualCycle)
+			processedPkt.Cycle = uint64(actualCycle)
+			if cp.hooks != nil {
+				cp.hooks.OnDownstreamReady(processedPkt, actualCycle)
+			}
+
+			// E: Send data (with potentially incremented cycle)
+			cp.sendPacket(processedPkt, actualCycle)
 		}
 
-		// I: Downstream backpressure-independent logic simulation
-		var processedPkt PacketWithCycle
-		if cp.hooks != nil {
-			processedPkt = cp.hooks.OnDownstreamBackpressureIndependentLogic(pkt, cycle)
-		} else {
-			processedPkt = pkt
-		}
-
-		// B: Check downstream.CheckReady(cycle)
-		// If not ready, increment cycle until ready (this is the core logic)
-		actualCycle := cp.incrementCycleUntilReady(cycle, processedPkt)
-
-		// C: Downstream ready logic (now we know downstream is ready for actualCycle)
-		processedPkt.Cycle = uint64(actualCycle)
-		if cp.hooks != nil {
-			cp.hooks.OnDownstreamReady(processedPkt, actualCycle)
-		}
-
-		// E: Send data (with potentially incremented cycle)
-		cp.sendPacket(processedPkt, actualCycle)
-
-		// F: SetDoneUntil(N+1)
+		// F: SetDoneUntil after processing all packets
+		// Upstream DoneUntil: cycle + 1 (current cycle completed)
 		cp.upstreamPort.SetDoneUntil(cycle + 1)
-		cp.downstreamPort.SetDoneUntil(actualCycle + 1)
-
-	default:
+		// Downstream DoneUntil: maxActualCycle + 1 (all packets sent with their actual cycles)
+		cp.downstreamPort.SetDoneUntil(maxActualCycle + 1)
+	} else {
 		// No packet received, but still need to update DoneUntil
 		cp.upstreamPort.SetDoneUntil(cycle + 1)
 	}

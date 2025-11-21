@@ -1,6 +1,7 @@
 package async_port
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -85,6 +86,19 @@ type countIncrementHooks struct {
 func (c *countIncrementHooks) OnDownstreamNotReady(pkt PacketWithCycle, cycle int) int {
 	*c.incrementCount++
 	return cycle + 1
+}
+
+// allPacketsTestHooks tracks all received packets for testing
+type allPacketsTestHooks struct {
+	*DefaultHooks
+	receivedPackets *[]PacketWithCycle
+	mu             *sync.Mutex
+}
+
+func (a *allPacketsTestHooks) OnDataReceived(pkt PacketWithCycle, cycle int) {
+	a.mu.Lock()
+	*a.receivedPackets = append(*a.receivedPackets, pkt)
+	a.mu.Unlock()
 }
 
 // TestCycleProcessorBasicFlow tests the basic cycle processing workflow.
@@ -422,4 +436,181 @@ func TestCycleProcessorWaitsForUpstreamDoneUntil(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("ProcessCycle did not complete after setting DoneUntil")
 	}
+}
+
+// TestCycleProcessorReceivesAllPackets tests that ProcessCycle receives and processes all available packets.
+func TestCycleProcessorReceivesAllPackets(t *testing.T) {
+	t.Parallel()
+
+	upstreamPort := NewPort(10)
+	downstreamPort := NewPort(10)
+
+	// Track received packets
+	var receivedPackets []PacketWithCycle
+	var mu sync.Mutex
+
+	// Create custom hooks to track received packets
+	hooks := &allPacketsTestHooks{
+		DefaultHooks:     &DefaultHooks{},
+		receivedPackets:  &receivedPackets,
+		mu:               &mu,
+	}
+
+	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
+
+	// Set initial state
+	upstreamPort.SetDoneUntil(5)
+	downstreamPort.SetReadyUntil(5)
+	downstreamPort.UpdateReady(5, true)
+
+	// Send multiple packets to upstream channel
+	const numPackets = 5
+	for i := 0; i < numPackets; i++ {
+		pkt := PacketWithCycle{
+			Cycle:  uint64(5),
+			Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: packet.Packet{}.Payload + string(rune('0'+i))},
+		}
+		// Create unique payload
+		pkt.Packet.Payload = fmt.Sprintf("packet-%d", i)
+		upstreamPort.Chan() <- pkt
+	}
+	upstreamPort.SetDoneUntil(6)
+
+	// Process cycle 5 - should receive and process all packets
+	err := processor.ProcessCycle(5)
+	if err != nil {
+		t.Fatalf("ProcessCycle failed: %v", err)
+	}
+
+	// Wait a bit for all packets to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify all packets were received
+	mu.Lock()
+	receivedCount := len(receivedPackets)
+	mu.Unlock()
+
+	if receivedCount != numPackets {
+		t.Errorf("expected %d packets to be received, got %d", numPackets, receivedCount)
+	}
+
+	// Verify all packets have different payloads (to ensure they are different packets)
+	mu.Lock()
+	payloads := make(map[string]bool)
+	for _, pkt := range receivedPackets {
+		if payloads[pkt.Packet.Payload] {
+			t.Errorf("duplicate packet payload: %s", pkt.Packet.Payload)
+		}
+		payloads[pkt.Packet.Payload] = true
+	}
+	mu.Unlock()
+
+	if len(payloads) != numPackets {
+		t.Errorf("expected %d unique packets, got %d", numPackets, len(payloads))
+	}
+
+	// Verify all packets were sent to downstream
+	receivedFromDownstream := 0
+	for i := 0; i < numPackets; i++ {
+		select {
+		case pkt := <-downstreamPort.ReceiveChan():
+			receivedFromDownstream++
+			// Verify packet has valid payload
+			if pkt.Packet.Payload == "" {
+				t.Errorf("packet %d has empty payload", i)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Errorf("timeout waiting for packet %d", i)
+		}
+	}
+
+	if receivedFromDownstream != numPackets {
+		t.Errorf("expected %d packets from downstream, got %d", numPackets, receivedFromDownstream)
+	}
+
+	t.Logf("Successfully received and processed %d packets in a single ProcessCycle call", numPackets)
+}
+
+// TestCycleProcessorHandlesMultipleCyclesInChannel tests that ProcessCycle correctly handles
+// packets with different cycles in the channel.
+func TestCycleProcessorHandlesMultipleCyclesInChannel(t *testing.T) {
+	t.Parallel()
+
+	upstreamPort := NewPort(10)
+	downstreamPort := NewPort(10)
+
+	var receivedPackets []PacketWithCycle
+	var mu sync.Mutex
+
+	hooks := &allPacketsTestHooks{
+		DefaultHooks:    &DefaultHooks{},
+		receivedPackets: &receivedPackets,
+		mu:              &mu,
+	}
+
+	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
+
+	// Set initial state - allow processing cycles 5, 6, 7
+	upstreamPort.SetDoneUntil(7)
+	downstreamPort.SetReadyUntil(7)
+	for cycle := 5; cycle <= 7; cycle++ {
+		downstreamPort.UpdateReady(cycle, true)
+	}
+
+	// Send packets with different cycles
+	packets := []PacketWithCycle{
+		{Cycle: 5, Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "cycle-5"}},
+		{Cycle: 6, Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "cycle-6"}},
+		{Cycle: 7, Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "cycle-7"}},
+	}
+
+	for _, pkt := range packets {
+		upstreamPort.Chan() <- pkt
+	}
+
+	// Process cycle 5 - should receive all packets (even though they have different cycles)
+	err := processor.ProcessCycle(5)
+	if err != nil {
+		t.Fatalf("ProcessCycle failed: %v", err)
+	}
+
+	// Wait a bit
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify all packets were received
+	mu.Lock()
+	receivedCount := len(receivedPackets)
+	mu.Unlock()
+
+	if receivedCount != 3 {
+		t.Errorf("expected 3 packets to be received, got %d", receivedCount)
+	}
+
+	// Verify all packets were sent to downstream
+	receivedFromDownstream := 0
+	expectedPayloads := []string{"cycle-5", "cycle-6", "cycle-7"}
+	receivedPayloads := make(map[string]bool)
+
+	for i := 0; i < 3; i++ {
+		select {
+		case pkt := <-downstreamPort.ReceiveChan():
+			receivedFromDownstream++
+			receivedPayloads[pkt.Packet.Payload] = true
+		case <-time.After(100 * time.Millisecond):
+			t.Errorf("timeout waiting for packet %d", i)
+		}
+	}
+
+	if receivedFromDownstream != 3 {
+		t.Errorf("expected 3 packets from downstream, got %d", receivedFromDownstream)
+	}
+
+	// Verify all expected payloads were received
+	for _, expectedPayload := range expectedPayloads {
+		if !receivedPayloads[expectedPayload] {
+			t.Errorf("expected payload %s not received", expectedPayload)
+		}
+	}
+
+	t.Logf("Successfully handled packets with different cycles in a single ProcessCycle call")
 }
