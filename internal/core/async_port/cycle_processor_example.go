@@ -10,7 +10,7 @@ import (
 // FIFOFlowHooks implements CycleProcessorHooks for a FIFO flow.
 type FIFOFlowHooks struct {
 	*DefaultHooks // Embed default implementations
-	flowID         int
+	flowID        int
 }
 
 func NewFIFOFlowHooks(flowID int) *FIFOFlowHooks {
@@ -31,24 +31,23 @@ func (f *FIFOFlowHooks) OnDataReceived(pkt PacketWithCycle, cycle int) {
 		f.flowID, cycle, pkt.Cycle)
 }
 
-// Override OnDownstreamBackpressureIndependentLogic to add processing
-func (f *FIFOFlowHooks) OnDownstreamBackpressureIndependentLogic(pkt PacketWithCycle, cycle int) PacketWithCycle {
+// Override OnPacketReceived to add processing
+func (f *FIFOFlowHooks) OnPacketReceived(pkt PacketWithCycle, cycle int) PacketWithCycle {
 	// Example: Add flow ID to packet payload
 	modifiedPkt := pkt
 	modifiedPkt.Packet.Payload = fmt.Sprintf("Flow%d: %s", f.flowID, pkt.Packet.Payload)
 	return modifiedPkt
 }
 
-// Override OnDownstreamReady for custom ready logic
-func (f *FIFOFlowHooks) OnDownstreamReady(pkt PacketWithCycle, cycle int) {
-	log.Printf("Flow %d: Downstream ready for cycle %d", f.flowID, cycle)
-}
-
-// Override OnDownstreamNotReady for custom not-ready logic
-func (f *FIFOFlowHooks) OnDownstreamNotReady(pkt PacketWithCycle, cycle int) int {
-	log.Printf("Flow %d: Downstream not ready for cycle %d, will increment", f.flowID, cycle)
-	// Return incremented cycle (actual increment logic is in CycleProcessor.sendPacket)
-	return cycle + 1
+// Override OnDownstreamReady for custom ready/not-ready logic
+func (f *FIFOFlowHooks) OnDownstreamReady(pkt PacketWithCycle, cycle int, ready bool) int {
+	if ready {
+		log.Printf("Flow %d: Downstream ready for cycle %d", f.flowID, cycle)
+		return cycle
+	} else {
+		log.Printf("Flow %d: Downstream not ready for cycle %d, will increment", f.flowID, cycle)
+		return cycle + 1
+	}
 }
 
 // Example: Another implementation for a Priority Flow
@@ -70,16 +69,19 @@ func NewPriorityFlowHooks(flowID, priority int) *PriorityFlowHooks {
 	}
 }
 
-// Override OnDownstreamBackpressureIndependentLogic to implement priority logic
-func (p *PriorityFlowHooks) OnDownstreamBackpressureIndependentLogic(pkt PacketWithCycle, cycle int) PacketWithCycle {
+// Override OnPacketReceived to implement priority logic
+func (p *PriorityFlowHooks) OnPacketReceived(pkt PacketWithCycle, cycle int) PacketWithCycle {
 	// Priority flow: might reorder packets or add priority metadata
 	// For simplicity, just store for later processing
 	p.processed = append(p.processed, pkt)
 	return pkt
 }
 
-// Override OnDownstreamNotReady to implement priority-aware cycle increment
-func (p *PriorityFlowHooks) OnDownstreamNotReady(pkt PacketWithCycle, cycle int) int {
+// Override OnDownstreamReady to implement priority-aware cycle increment
+func (p *PriorityFlowHooks) OnDownstreamReady(pkt PacketWithCycle, cycle int, ready bool) int {
+	if ready {
+		return cycle
+	}
 	// High priority flows might have different increment strategy
 	if p.priority > 5 {
 		// High priority: only increment by 1, wait more
@@ -107,4 +109,3 @@ func (p *PriorityFlowHooks) OnDownstreamNotReady(pkt PacketWithCycle, cycle int)
 //         processor.ProcessCycle(cycle)
 //     }
 // }
-

@@ -853,9 +853,10 @@ func TestUpstreamDelaysWhenDownstreamNotReady(t *testing.T) {
 	port.UpdateReady(5, false)
 	port.UpdateReady(6, false)
 	port.UpdateReady(7, false)
-
-	// Don't set cycle 8 as true yet - we want to test the increment logic
-	// We'll set it later or let the test set it when needed
+	// Set cycle 8 as ready so upstream can eventually send
+	port.UpdateReady(8, true)
+	// Reset readyUntil to 0 so cycles 5-7 will check readyMap (not fast path)
+	port.SetReadyUntil(0)
 
 	// Track received packets
 	receivedPackets := make([]PacketWithCycle, 0)
@@ -963,6 +964,8 @@ func TestUpstreamHandlesMultipleNonReadyCycles(t *testing.T) {
 		port.UpdateReady(cycle, false)
 	}
 	port.UpdateReady(7, true)
+	// Reset readyUntil to 0 so cycles 3-6 will check readyMap (not fast path)
+	port.SetReadyUntil(0)
 
 	// Track received packets
 	receivedPackets := make([]PacketWithCycle, 0)
@@ -1066,6 +1069,8 @@ func TestUpstreamCycleIncrementMatchesNonReadyCount(t *testing.T) {
 		port.UpdateReady(cycle, false)
 	}
 	port.UpdateReady(13, true)
+	// Reset readyUntil to 0 so cycles 10-12 will check readyMap (not fast path)
+	port.SetReadyUntil(0)
 
 	// Track received packets
 	receivedPackets := make([]PacketWithCycle, 0)

@@ -29,30 +29,67 @@ func (t *testHooks) OnCycleStart(cycle int) {
 	t.hookCalls.mu.Unlock()
 }
 
-func (t *testHooks) OnDataReceived(pkt PacketWithCycle, cycle int) {
-	t.hookCalls.mu.Lock()
-	t.hookCalls.dataReceived = append(t.hookCalls.dataReceived, pkt)
-	t.hookCalls.mu.Unlock()
-}
+func (t *testHooks) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int)) {
+	// pendingPackets is a static variable (struct field from embedded DefaultHooks) - access directly
+	pendingPackets := t.pendingPackets
 
-func (t *testHooks) OnDownstreamBackpressureIndependentLogic(pkt PacketWithCycle, cycle int) PacketWithCycle {
-	t.hookCalls.mu.Lock()
-	t.hookCalls.backpressureIndependent = append(t.hookCalls.backpressureIndependent, pkt)
-	t.hookCalls.mu.Unlock()
-	return pkt
-}
+	// Receive all available packets from channel
+	cycleReceivedPackets := make([]PacketWithCycle, 0)
+	for {
+		select {
+		case pkt := <-receiveChan:
+			cycleReceivedPackets = append(cycleReceivedPackets, pkt)
+		default:
+			goto processPackets
+		}
+	}
 
-func (t *testHooks) OnDownstreamReady(pkt PacketWithCycle, cycle int) {
+processPackets:
+	// Track data received
 	t.hookCalls.mu.Lock()
-	t.hookCalls.downstreamReady = append(t.hookCalls.downstreamReady, pkt)
+	t.hookCalls.dataReceived = append(t.hookCalls.dataReceived, cycleReceivedPackets...)
 	t.hookCalls.mu.Unlock()
-}
 
-func (t *testHooks) OnDownstreamNotReady(pkt PacketWithCycle, cycle int) int {
+	// Combine all packets
+	allPackets := make([]PacketWithCycle, 0, len(pendingPackets)+len(cycleReceivedPackets))
+	allPackets = append(allPackets, pendingPackets...)
+	allPackets = append(allPackets, cycleReceivedPackets...)
+
+	// Track backpressure-independent processing (all packets are processed)
 	t.hookCalls.mu.Lock()
-	t.hookCalls.downstreamNotReady = append(t.hookCalls.downstreamNotReady, cycle)
+	t.hookCalls.backpressureIndependent = append(t.hookCalls.backpressureIndependent, allPackets...)
 	t.hookCalls.mu.Unlock()
-	return cycle + 1
+
+	newPendingPackets := make([]PacketWithCycle, 0)
+
+	// For each packet, check if ready
+	for _, pkt := range allPackets {
+		pktCycle := int(pkt.Cycle)
+		isReady := checkReady(pktCycle)
+
+		t.hookCalls.mu.Lock()
+		if isReady {
+			t.hookCalls.downstreamReady = append(t.hookCalls.downstreamReady, pkt)
+		} else {
+			t.hookCalls.downstreamNotReady = append(t.hookCalls.downstreamNotReady, pktCycle)
+		}
+		t.hookCalls.mu.Unlock()
+
+		if isReady {
+			// Ready: send the packet immediately
+			pkt.Cycle = uint64(pktCycle)
+			sendPacket(pkt)
+		} else {
+			// Not ready: keep in pending
+			newPendingPackets = append(newPendingPackets, pkt)
+		}
+	}
+
+	// F: SetDoneUntil after processing all packets
+	setDoneUntil(cycle + 1)
+
+	// Update pending packets (static variable - struct field)
+	t.pendingPackets = newPendingPackets
 }
 
 func (t *testHooks) OnCycleEnd(cycle int) {
@@ -68,13 +105,50 @@ type incrementTestHooks struct {
 	finalCycle     *int
 }
 
-func (i *incrementTestHooks) OnDownstreamNotReady(pkt PacketWithCycle, cycle int) int {
-	*i.notReadyCycles = append(*i.notReadyCycles, cycle)
-	return cycle + 1
-}
+func (i *incrementTestHooks) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int)) {
+	// pendingPackets is a static variable (struct field from embedded DefaultHooks) - access directly
+	pendingPackets := i.pendingPackets
 
-func (i *incrementTestHooks) OnDownstreamReady(pkt PacketWithCycle, cycle int) {
-	*i.finalCycle = int(pkt.Cycle)
+	// Receive all available packets from channel
+	cycleReceivedPackets := make([]PacketWithCycle, 0)
+	for {
+		select {
+		case pkt := <-receiveChan:
+			cycleReceivedPackets = append(cycleReceivedPackets, pkt)
+		default:
+			goto processPackets
+		}
+	}
+
+processPackets:
+	// Combine all packets
+	allPackets := make([]PacketWithCycle, 0, len(pendingPackets)+len(cycleReceivedPackets))
+	allPackets = append(allPackets, pendingPackets...)
+	allPackets = append(allPackets, cycleReceivedPackets...)
+
+	newPendingPackets := make([]PacketWithCycle, 0)
+
+	// For each packet, check if ready
+	for _, pkt := range allPackets {
+		pktCycle := int(pkt.Cycle)
+		isReady := checkReady(pktCycle)
+
+		if isReady {
+			*i.finalCycle = pktCycle
+			// Ready: send the packet immediately
+			pkt.Cycle = uint64(pktCycle)
+			sendPacket(pkt)
+		} else {
+			*i.notReadyCycles = append(*i.notReadyCycles, pktCycle)
+			newPendingPackets = append(newPendingPackets, pkt)
+		}
+	}
+
+	// F: SetDoneUntil after processing all packets
+	setDoneUntil(cycle + 1)
+
+	// Update pending packets (static variable - struct field)
+	i.pendingPackets = newPendingPackets
 }
 
 // countIncrementHooks is a test hooks implementation for counting increments
@@ -83,22 +157,111 @@ type countIncrementHooks struct {
 	incrementCount *int
 }
 
-func (c *countIncrementHooks) OnDownstreamNotReady(pkt PacketWithCycle, cycle int) int {
-	*c.incrementCount++
-	return cycle + 1
+func (c *countIncrementHooks) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int)) {
+	// pendingPackets is a static variable (struct field from embedded DefaultHooks) - access directly
+	pendingPackets := c.pendingPackets
+
+	// Receive all available packets from channel
+	cycleReceivedPackets := make([]PacketWithCycle, 0)
+	for {
+		select {
+		case pkt := <-receiveChan:
+			cycleReceivedPackets = append(cycleReceivedPackets, pkt)
+		default:
+			goto processPackets
+		}
+	}
+
+processPackets:
+	// Combine all packets
+	allPackets := make([]PacketWithCycle, 0, len(pendingPackets)+len(cycleReceivedPackets))
+	allPackets = append(allPackets, pendingPackets...)
+	allPackets = append(allPackets, cycleReceivedPackets...)
+
+	newPendingPackets := make([]PacketWithCycle, 0)
+
+	// For each packet, check if ready
+	for _, pkt := range allPackets {
+		pktCycle := int(pkt.Cycle)
+		isReady := checkReady(pktCycle)
+
+		if isReady {
+			// Ready: send the packet immediately
+			pkt.Cycle = uint64(pktCycle)
+			sendPacket(pkt)
+		} else {
+			*c.incrementCount++
+			newPendingPackets = append(newPendingPackets, pkt)
+		}
+	}
+
+	// F: SetDoneUntil after processing all packets
+	setDoneUntil(cycle + 1)
+
+	// Update pending packets (static variable - struct field)
+	c.pendingPackets = newPendingPackets
 }
 
 // allPacketsTestHooks tracks all received packets for testing
 type allPacketsTestHooks struct {
 	*DefaultHooks
 	receivedPackets *[]PacketWithCycle
-	mu             *sync.Mutex
+	mu              *sync.Mutex
 }
 
-func (a *allPacketsTestHooks) OnDataReceived(pkt PacketWithCycle, cycle int) {
+func (a *allPacketsTestHooks) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int)) {
+	// pendingPackets is a static variable (struct field from embedded DefaultHooks) - access directly
+	pendingPackets := a.pendingPackets
+
+	// Receive all available packets from channel
+	cycleReceivedPackets := make([]PacketWithCycle, 0)
+	for {
+		select {
+		case pkt := <-receiveChan:
+			cycleReceivedPackets = append(cycleReceivedPackets, pkt)
+		default:
+			goto processPackets
+		}
+	}
+
+processPackets:
+	// Track all received packets
 	a.mu.Lock()
-	*a.receivedPackets = append(*a.receivedPackets, pkt)
+	*a.receivedPackets = append(*a.receivedPackets, cycleReceivedPackets...)
 	a.mu.Unlock()
+
+	// Process packets using the same logic as DefaultHooks
+	newPendingPackets := make([]PacketWithCycle, 0)
+
+	// Helper function to process a single packet
+	processPacket := func(pkt PacketWithCycle) {
+		pktCycle := int(pkt.Cycle)
+		isReady := checkReady(pktCycle)
+		if isReady {
+			// Ready: send the packet immediately
+			pkt.Cycle = uint64(pktCycle)
+			sendPacket(pkt)
+		} else {
+			// Not ready: keep in pending
+			newPendingPackets = append(newPendingPackets, pkt)
+		}
+	}
+
+	// Process pending packets first
+	for _, pkt := range pendingPackets {
+		processPacket(pkt)
+	}
+
+	// Process newly received packets
+	for _, pkt := range cycleReceivedPackets {
+		processPacket(pkt)
+	}
+
+	// Set DoneUntil after processing all packets
+	setDoneUntil(cycle + 1)
+
+	// Update pending packets (static variable - struct field)
+	a.pendingPackets = newPendingPackets
 }
 
 // TestCycleProcessorBasicFlow tests the basic cycle processing workflow.
@@ -121,7 +284,8 @@ func TestCycleProcessorBasicFlow(t *testing.T) {
 
 	// Create a custom hooks implementation for testing
 	hooks := &testHooks{
-		hookCalls: &hookCalls,
+		DefaultHooks: &DefaultHooks{},
+		hookCalls:    &hookCalls,
 	}
 
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
@@ -186,7 +350,6 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 	// If readyUntil >= cycle, Ready(cycle) returns true via fast path (correct behavior).
 	// To test cycle increment logic, we need readyUntil < 5, so Ready(5) checks readyMap.
 	// Note: UpdateReady(8, true) will update readyUntil to 9, but that's OK because
-	// incrementCycleUntilReady will check Ready(5), Ready(6), Ready(7) before checking Ready(8).
 	downstreamPort.SetReadyUntil(4)      // Cycles < 4: fast path true, cycles >= 4: check readyMap
 	downstreamPort.UpdateReady(5, false) // readyMap[5] = false
 	downstreamPort.UpdateReady(6, false) // readyMap[6] = false
@@ -264,32 +427,69 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 	upstreamPort.Chan() <- pkt
 	upstreamPort.SetDoneUntil(6)
 
-	// Process cycle 5 - this should increment cycle from 5 to 8
-	// (because cycles 5, 6, 7 are not ready, but 8 will be set as ready)
+	// Process cycle 5 - cycle 5 is not ready, so packet should be saved to pendingPackets
 	err := processor.ProcessCycle(5)
 	if err != nil {
 		t.Fatalf("ProcessCycle failed: %v", err)
 	}
 
-	// Now set cycle 8 as ready (after processing, to verify the packet was sent with cycle 8)
-	// This will update readyUntil to 9, but that's OK since we've already processed
-	downstreamPort.UpdateReady(8, true) // readyMap[8] = true, readyUntil becomes 9
-
-	// Verify cycle was incremented
-	if finalCycle != 8 {
-		t.Errorf("expected final cycle 8, got %d", finalCycle)
+	// Verify OnDownstreamReady(ready=false) was called for cycle 5
+	if len(notReadyCycles) != 1 {
+		t.Errorf("expected 1 not ready cycle, got %d: %v", len(notReadyCycles), notReadyCycles)
+	}
+	if len(notReadyCycles) > 0 && notReadyCycles[0] != 5 {
+		t.Errorf("expected not ready cycle 5, got %d", notReadyCycles[0])
 	}
 
-	// Verify OnDownstreamNotReady was called for cycles 5, 6, 7
-	if len(notReadyCycles) != 3 {
-		t.Errorf("expected 3 not ready cycles, got %d: %v", len(notReadyCycles), notReadyCycles)
+	// Packet should not be sent yet (saved to pendingPackets)
+	select {
+	case <-downstreamPort.ReceiveChan():
+		t.Fatal("packet should not be sent yet")
+	case <-time.After(10 * time.Millisecond):
+		// Expected: no packet sent
 	}
 
-	// Verify packet was sent with incremented cycle
+	// Process cycle 6 - cycle 5 is still not ready, packet remains in pendingPackets
+	err = processor.ProcessCycle(6)
+	if err != nil {
+		t.Fatalf("ProcessCycle failed: %v", err)
+	}
+
+	// Verify OnDownstreamReady(ready=false) was called again for cycle 5
+	if len(notReadyCycles) != 2 {
+		t.Errorf("expected 2 not ready cycles, got %d: %v", len(notReadyCycles), notReadyCycles)
+	}
+
+	// Packet should still not be sent
+	select {
+	case <-downstreamPort.ReceiveChan():
+		t.Fatal("packet should not be sent yet")
+	case <-time.After(10 * time.Millisecond):
+		// Expected: no packet sent
+	}
+
+	// Now set cycle 5 as ready
+	downstreamPort.UpdateReady(5, true)
+
+	// Set upstream DoneUntil for cycle 7
+	upstreamPort.SetDoneUntil(7)
+
+	// Process cycle 7 - cycle 5 is now ready, packet should be sent
+	err = processor.ProcessCycle(7)
+	if err != nil {
+		t.Fatalf("ProcessCycle failed: %v", err)
+	}
+
+	// Verify OnDownstreamReady(ready=true) was called for cycle 5
+	if finalCycle != 5 {
+		t.Errorf("expected final cycle 5, got %d", finalCycle)
+	}
+
+	// Verify packet was sent with original cycle 5
 	select {
 	case receivedPkt := <-downstreamPort.ReceiveChan():
-		if receivedPkt.Cycle != 8 {
-			t.Errorf("expected cycle 8, got %d", receivedPkt.Cycle)
+		if receivedPkt.Cycle != 5 {
+			t.Errorf("expected cycle 5, got %d", receivedPkt.Cycle)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("packet not received")
@@ -331,22 +531,70 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 	upstreamPort.Chan() <- pkt
 	upstreamPort.SetDoneUntil(11)
 
-	// Process cycle 10
+	// Process cycle 10 - cycle 10 is not ready, packet should be saved to pendingPackets
 	err := processor.ProcessCycle(10)
 	if err != nil {
 		t.Fatalf("ProcessCycle failed: %v", err)
 	}
 
-	// Verify increment count (should be 5: cycles 10, 11, 12, 13, 14)
-	if incrementCount != 5 {
-		t.Errorf("expected 5 increments, got %d", incrementCount)
+	// Verify increment count (should be 1: cycle 10 checked once)
+	if incrementCount != 1 {
+		t.Errorf("expected 1 increment check, got %d", incrementCount)
 	}
 
-	// Verify packet sent with cycle 15
+	// Packet should not be sent yet
+	select {
+	case <-downstreamPort.ReceiveChan():
+		t.Fatal("packet should not be sent yet")
+	case <-time.After(10 * time.Millisecond):
+		// Expected: no packet sent
+	}
+
+	// Process cycles 11-14, each time checking cycle 10 (still not ready)
+	for cycle := 11; cycle <= 14; cycle++ {
+		// Set upstream DoneUntil for this cycle
+		upstreamPort.SetDoneUntil(cycle)
+		err = processor.ProcessCycle(cycle)
+		if err != nil {
+			t.Fatalf("ProcessCycle failed: %v", err)
+		}
+		// Verify increment count increases (each cycle checks once)
+		expectedCount := cycle - 10 + 1
+		if incrementCount != expectedCount {
+			t.Errorf("at cycle %d, expected %d increment checks, got %d", cycle, expectedCount, incrementCount)
+		}
+	}
+
+	// Verify increment count (should be 5: cycles 10, 11, 12, 13, 14 each checked once)
+	if incrementCount != 5 {
+		t.Errorf("expected 5 increment checks, got %d", incrementCount)
+	}
+
+	// Packet should still not be sent
+	select {
+	case <-downstreamPort.ReceiveChan():
+		t.Fatal("packet should not be sent yet")
+	case <-time.After(10 * time.Millisecond):
+		// Expected: no packet sent
+	}
+
+	// Now set cycle 10 as ready
+	downstreamPort.UpdateReady(10, true)
+
+	// Set upstream DoneUntil for cycle 15
+	upstreamPort.SetDoneUntil(15)
+
+	// Process cycle 15 - cycle 10 is now ready, packet should be sent
+	err = processor.ProcessCycle(15)
+	if err != nil {
+		t.Fatalf("ProcessCycle failed: %v", err)
+	}
+
+	// Verify packet was sent with original cycle 10
 	select {
 	case receivedPkt := <-downstreamPort.ReceiveChan():
-		if receivedPkt.Cycle != 15 {
-			t.Errorf("expected cycle 15, got %d", receivedPkt.Cycle)
+		if receivedPkt.Cycle != 10 {
+			t.Errorf("expected cycle 10, got %d", receivedPkt.Cycle)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("packet not received")
@@ -451,9 +699,9 @@ func TestCycleProcessorReceivesAllPackets(t *testing.T) {
 
 	// Create custom hooks to track received packets
 	hooks := &allPacketsTestHooks{
-		DefaultHooks:     &DefaultHooks{},
-		receivedPackets:  &receivedPackets,
-		mu:               &mu,
+		DefaultHooks:    &DefaultHooks{},
+		receivedPackets: &receivedPackets,
+		mu:              &mu,
 	}
 
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)

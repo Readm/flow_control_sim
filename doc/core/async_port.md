@@ -29,9 +29,10 @@ flowchart TB
   end
  subgraph s3["模拟逻辑"]
         A(["Start Cycle N"])
-        H["获取数据：<br>Chan() -&gt; in_queue"]
-        I["下游反压无关逻辑模拟"]
-        D["下游非Ready时模拟逻辑"]
+        H["获取数据：<br>合并pendingPackets + Chan() -&gt; in_queue"]
+        I_Packet["下游反压无关逻辑模拟<br/>有数据包时"]
+        I_NoPacket["下游反压无关逻辑模拟<br/>无数据包时也执行"]
+        PENDING["保存到pendingPackets<br/>在下一个cycle再次检查"]
         E["发送数据 <br>下游.Chan() &lt;- (Packet, Cycle)"]
         C["下游Ready时模拟逻辑"]
         P["N++"]
@@ -45,7 +46,8 @@ flowchart TB
         n3(["SetDoneUntil(M)"])
   end
  subgraph s2["下游同步"]
-        B(["下游.CheckReady(N)"])
+        B_Packet(["下游.CheckReady(pktCycle)<br/>有数据包时，只检查一次，不循环递增"])
+        B_NoPacket(["下游.CheckReady(cycle)<br/>无数据包时也检查"])
         n1["DoneUntil"]
   end
     RU -- Cycle &lt; ReadyUntil --> TRUE
@@ -56,19 +58,22 @@ flowchart TB
     Q -- Wakeup --> STALL
     S4IN --> RU
     K -- 可能阻塞 --> s4
-    H -. ":=N+IdleSlot/Bandwidth" .-> RU
-    H == 仿真逻辑 ==> I
-    I == 可能阻塞 ==> B
-    B == True ==> C
-    B == False ==> D
+    H --> CheckData{有数据包?}
+    CheckData -->|Yes| I_Packet
+    CheckData -->|No| I_NoPacket
+    I_Packet == 可能阻塞 ==> B_Packet
+    I_NoPacket == 可能阻塞 ==> B_NoPacket
+    B_Packet == True ==> C
+    B_Packet == False ==> PENDING
+    B_NoPacket ==> F
     C ==> E
     F ==> P
     F --> Q
     F -.-> n1
     E ==> F
+    PENDING ==> F
     Q -. update .-> RM
     Q -. "if True<br>Ready:=max(ReadyUntil, N+1)" .-> RU
-    D ==> F
     P ==> A
     A == "<span style=background-color:>wait until M &gt; N</span>" ==> n2
     n2 ==> H
@@ -79,13 +84,17 @@ flowchart TB
     RU@{ shape: card}
     RM@{ shape: card}
     H@{ shape: subproc}
-    I@{ shape: subproc}
-    D@{ shape: subproc}
+    I_Packet@{ shape: subproc}
+    I_NoPacket@{ shape: subproc}
+    PENDING@{ shape: subproc}
     E@{ shape: subproc}
     C@{ shape: subproc}
     n2@{ shape: card}
     n1@{ shape: card}
-    style I stroke-width:2px,stroke-dasharray: 0
+    style I_Packet stroke-width:2px,stroke-dasharray: 0
+    style I_NoPacket stroke-width:2px,stroke-dasharray: 0
+    style I_NoPacket fill:#E6F3FF
+    style PENDING fill:#FFF4E6
     style s4 fill:#BBDEFB
 ```
 

@@ -8,20 +8,55 @@ import (
 // It is an alias for packet.Envelope.
 type PacketWithCycle = packet.Envelope
 
-// ASyncPort is the interface exposed by downstream to upstream.
-// Upstream uses this interface to push packets and check readiness.
+// ASyncPort is a bidirectional interface for synchronous communication between Flow and Link components.
+// A single ASyncPort instance provides both upstream and downstream operations:
+// - Upstream component (e.g., Flow0) uses upstream operations to send packets and check downstream readiness.
+// - Downstream component (e.g., Flow1) uses downstream operations to receive packets and wait for upstream completion.
+// This bidirectional design allows the same port to be used from both perspectives, enabling flexible
+// composition of Flow and Link components in a dataflow graph.
 type ASyncPort interface {
-	// SetDoneUntil is called by upstream to update DoneUntil using atomic store.
-	// DoneUntil N means upstream has completed cycle N-1 and all packets for cycle N-1 have been sent.
+	// ===== Upstream Operations =====
+	// These methods are called by the upstream component (the sender).
+
+	// SetDoneUntil is called by upstream to notify downstream that it has completed processing up to cycle N-1.
+	// DoneUntil N means:
+	//   - Upstream has completed cycle N-1
+	//   - All packets for cycle N-1 have been sent
+	// This uses atomic store for thread-safe updates.
+	// Downstream can use WaitForDoneUntil to block until this value reaches a target cycle.
 	SetDoneUntil(cycle int)
 
-	// Chan returns a write-only channel for upstream to push packets.
-	// Upstream pushes (Packet, Cycle) pairs through this channel.
+	// Chan returns a write-only channel for upstream to push packets to downstream.
+	// Upstream sends (Packet, Cycle) pairs through this channel.
+	// The same channel is accessible to downstream via ReceiveChan().
 	Chan() chan<- PacketWithCycle
 
 	// Ready checks if downstream is ready to process the given cycle.
-	// Returns true if ready, false otherwise. May block waiting for downstream to become ready.
-	// If cycle < ReadyUntil, returns true immediately.
-	// Otherwise, queries readyMap or blocks until ready.
+	// Called by upstream before sending a packet for a specific cycle.
+	// Returns true if downstream is ready, false otherwise.
+	// This method may block waiting for downstream to become ready.
+	// Fast path: if cycle < ReadyUntil, returns true immediately.
+	// Otherwise, queries readyMap or blocks until downstream signals readiness.
 	Ready(cycle int) bool
+
+	// GetDoneUntil returns the current DoneUntil value set by upstream.
+	// Can be called by both upstream and downstream to check progress.
+	// This is useful for upstream to verify its own progress, or for downstream
+	// to check upstream completion status without blocking.
+	GetDoneUntil() int
+
+	// ===== Downstream Operations =====
+	// These methods are called by the downstream component (the receiver).
+
+	// ReceiveChan returns a read-only channel for downstream to receive packets from upstream.
+	// This is the same underlying channel as Chan(), but from downstream's perspective.
+	// Downstream reads (Packet, Cycle) pairs from this channel.
+	ReceiveChan() <-chan PacketWithCycle
+
+	// WaitForDoneUntil blocks the calling goroutine until upstream's DoneUntil >= targetCycle.
+	// Called by downstream at the start of cycle N to ensure upstream has completed cycle N-1.
+	// This uses condition variable to avoid busy waiting - the goroutine will block until
+	// upstream calls SetDoneUntil with a value >= targetCycle.
+	// Returns immediately if DoneUntil >= targetCycle (no blocking needed).
+	WaitForDoneUntil(targetCycle int)
 }

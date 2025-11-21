@@ -1,5 +1,19 @@
 package async_port
 
+// PacketSource indicates where a packet comes from
+type PacketSource int
+
+const (
+	PacketSourceReceived PacketSource = iota // Packet received in current cycle
+	PacketSourcePending                      // Packet from previous cycle (pending)
+)
+
+// PacketWithSource represents a packet with its source information
+type PacketWithSource struct {
+	Packet PacketWithCycle
+	Source PacketSource
+}
+
 // CycleProcessorHooks defines the customizable steps in the cycle processing workflow.
 // Implementations can provide custom logic for each hook.
 type CycleProcessorHooks interface {
@@ -7,30 +21,15 @@ type CycleProcessorHooks interface {
 	// cycle: the current cycle number
 	OnCycleStart(cycle int)
 
-	// OnDataReceived is called after receiving data from upstream.
-	// pkt: the received packet
-	// cycle: the cycle at which the packet was received
-	OnDataReceived(pkt PacketWithCycle, cycle int)
-
-	// OnDownstreamBackpressureIndependentLogic is called for logic that doesn't depend on downstream backpressure.
-	// This corresponds to step "I" in the documentation.
-	// pkt: the packet to process
-	// cycle: the current cycle
-	// Returns: processed data (can be the same packet or modified)
-	OnDownstreamBackpressureIndependentLogic(pkt PacketWithCycle, cycle int) PacketWithCycle
-
-	// OnDownstreamReady is called when downstream is ready for the current cycle.
-	// This corresponds to step "C" in the documentation.
-	// pkt: the packet to send
-	// cycle: the current cycle
-	OnDownstreamReady(pkt PacketWithCycle, cycle int)
-
-	// OnDownstreamNotReady is called when downstream is not ready for the current cycle.
-	// This corresponds to step "D" in the documentation.
-	// pkt: the packet to send
-	// cycle: the current cycle
-	// Returns: the actual cycle to use (may be incremented)
-	OnDownstreamNotReady(pkt PacketWithCycle, cycle int) int
+	// ProcessPackets processes all packets (both received from channel and pending).
+	// This method should handle receiving packets from channel and the loop processing logic.
+	// pendingPackets is a static variable internal to the hook implementation (stored as a struct field).
+	// receiveChan: channel to receive packets from upstream (non-blocking, drain all available)
+	// cycle: the current cycle number
+	// checkReady: function to check if downstream is ready for a given cycle
+	// sendPacket: function to send a packet to downstream (called when packet is ready)
+	// setDoneUntil: function to set downstream DoneUntil
+	ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int))
 
 	// OnCycleEnd is called at the end of each cycle.
 	// cycle: the completed cycle number
@@ -41,14 +40,18 @@ type CycleProcessorHooks interface {
 // It implements the template method pattern, where the overall flow is fixed,
 // but specific steps can be customized through hooks.
 type CycleProcessor struct {
-	upstreamPort   *Port // Use concrete type to access GetDoneUntil and ReceiveChan
-	downstreamPort ASyncPort
+	upstreamPort   ASyncPort // Port for receiving packets from upstream
+	downstreamPort ASyncPort // Port for sending packets to downstream
 	hooks          CycleProcessorHooks
 }
 
 // NewCycleProcessor creates a new cycle processor with the given ports and hooks.
-// upstreamPort must be a *Port to access GetDoneUntil and ReceiveChan methods.
-func NewCycleProcessor(upstreamPort *Port, downstreamPort ASyncPort, hooks CycleProcessorHooks) *CycleProcessor {
+// Both ports must implement ASyncPort interface.
+// If hooks is nil, DefaultHooks will be used.
+func NewCycleProcessor(upstreamPort ASyncPort, downstreamPort ASyncPort, hooks CycleProcessorHooks) *CycleProcessor {
+	if hooks == nil {
+		hooks = &DefaultHooks{}
+	}
 	return &CycleProcessor{
 		upstreamPort:   upstreamPort,
 		downstreamPort: downstreamPort,
@@ -59,138 +62,103 @@ func NewCycleProcessor(upstreamPort *Port, downstreamPort ASyncPort, hooks Cycle
 // ProcessCycle implements the complete cycle processing workflow as defined in the documentation.
 // This is the "template method" that defines the overall flow.
 func (cp *CycleProcessor) ProcessCycle(cycle int) error {
-	// A: Start Cycle N
-	if cp.hooks != nil {
-		cp.hooks.OnCycleStart(cycle)
+	// Ensure hooks is not nil (should never happen if NewCycleProcessor is used correctly)
+	if cp.hooks == nil {
+		panic("CycleProcessor.hooks is nil, this should never happen. Use NewCycleProcessor to create CycleProcessor.")
 	}
+
+	// A: Start Cycle N
+	cp.hooks.OnCycleStart(cycle)
 
 	// Wait for upstream DoneUntil >= cycle
 	// Uses condition variable to avoid busy waiting - goroutine will block until
 	// SetDoneUntil is called and condition is satisfied
 	cp.upstreamPort.WaitForDoneUntil(cycle)
 
-	// H: Get data: Chan() -> in_queue
-	// Receive all available packets from channel (similar to Flow.Tick behavior)
-	receivedPackets := make([]PacketWithCycle, 0)
-	for {
-		select {
-		case pkt := <-cp.upstreamPort.ReceiveChan():
-			receivedPackets = append(receivedPackets, pkt)
-		default:
-			// No more packets available, process what we have
-			goto processPackets
-		}
-	}
+	// H: Process all packets using hook
+	// The hook is responsible for receiving packets from channel, processing them, and sending ready packets
+	// pendingPackets is a static variable internal to the hook implementation
+	cp.hooks.ProcessPackets(
+		cp.upstreamPort.ReceiveChan(),
+		cycle,
+		cp.downstreamPort.Ready,
+		cp.sendPacket,
+		cp.downstreamPort.SetDoneUntil,
+	)
 
-processPackets:
-	// Process all received packets
-	if len(receivedPackets) > 0 {
-		maxActualCycle := cycle // Track maximum actualCycle across all packets
-
-		// Process each packet
-		for _, pkt := range receivedPackets {
-			// Use the packet's cycle (pkt.Cycle) as the base cycle for processing
-			// This allows processing packets from different cycles in the same ProcessCycle call
-			pktCycle := int(pkt.Cycle)
-
-			// OnDataReceived hook
-			if cp.hooks != nil {
-				cp.hooks.OnDataReceived(pkt, pktCycle)
-			}
-
-			// I: Downstream backpressure-independent logic simulation
-			var processedPkt PacketWithCycle
-			if cp.hooks != nil {
-				processedPkt = cp.hooks.OnDownstreamBackpressureIndependentLogic(pkt, pktCycle)
-			} else {
-				processedPkt = pkt
-			}
-
-			// B: Check downstream.CheckReady(pktCycle)
-			// If not ready, increment cycle until ready (this is the core logic)
-			actualCycle := cp.incrementCycleUntilReady(pktCycle, processedPkt)
-
-			// Track maximum actualCycle
-			if actualCycle > maxActualCycle {
-				maxActualCycle = actualCycle
-			}
-
-			// C: Downstream ready logic (now we know downstream is ready for actualCycle)
-			processedPkt.Cycle = uint64(actualCycle)
-			if cp.hooks != nil {
-				cp.hooks.OnDownstreamReady(processedPkt, actualCycle)
-			}
-
-			// E: Send data (with potentially incremented cycle)
-			cp.sendPacket(processedPkt, actualCycle)
-		}
-
-		// F: SetDoneUntil after processing all packets
-		// Upstream DoneUntil: cycle + 1 (current cycle completed)
-		cp.upstreamPort.SetDoneUntil(cycle + 1)
-		// Downstream DoneUntil: maxActualCycle + 1 (all packets sent with their actual cycles)
-		cp.downstreamPort.SetDoneUntil(maxActualCycle + 1)
-	} else {
-		// No packet received, but still need to update DoneUntil
-		cp.upstreamPort.SetDoneUntil(cycle + 1)
+	// F: SetDoneUntil after processing all packets
+	// Only set downstream DoneUntil to cycle + 1 (current cycle completed) if it's not already larger
+	// This ensures DoneUntil is monotonically increasing and doesn't decrease if Hook already set a larger value
+	// Upstream DoneUntil should be set by upstream itself, not by this processor
+	currentDoneUntil := cp.downstreamPort.GetDoneUntil()
+	if currentDoneUntil < cycle+1 {
+		cp.downstreamPort.SetDoneUntil(cycle + 1)
 	}
 
 	// P: N++ (handled by caller)
 	// OnCycleEnd hook
-	if cp.hooks != nil {
-		cp.hooks.OnCycleEnd(cycle)
-	}
+	cp.hooks.OnCycleEnd(cycle)
 
 	return nil
 }
 
-// incrementCycleUntilReady increments the cycle until downstream is ready.
-// This implements the core logic: if downstream is not ready for cycle N,
-// increment to N+1, N+2, etc. until ready.
-// Returns the actual cycle to use for sending.
-func (cp *CycleProcessor) incrementCycleUntilReady(originalCycle int, pkt PacketWithCycle) int {
-	currentCycle := originalCycle
-	cycleIncrement := 0
-
-	// Keep checking and incrementing until downstream is ready
-	for !cp.downstreamPort.Ready(currentCycle) {
-		// Call hook to notify about cycle increment (optional, for logging/monitoring)
-		if cp.hooks != nil {
-			cp.hooks.OnDownstreamNotReady(pkt, currentCycle)
-		}
-
-		cycleIncrement++
-		currentCycle++
-
-		// Safety: prevent infinite loop
-		if cycleIncrement > 1000 {
-			// Error: downstream not ready for too many cycles
-			// Return the last checked cycle (could be improved with error handling)
-			return currentCycle
-		}
-	}
-
-	// Return the actual cycle (may be same as original if ready, or incremented)
-	return currentCycle
-}
-
 // sendPacket sends a packet to downstream.
 // The packet's cycle should already be set correctly before calling this method.
-func (cp *CycleProcessor) sendPacket(pkt PacketWithCycle, cycle int) {
+func (cp *CycleProcessor) sendPacket(pkt PacketWithCycle) {
 	cp.downstreamPort.Chan() <- pkt
 }
 
 // DefaultHooks provides default implementations for all hooks.
 // Implementations can embed this and override only the hooks they need.
-type DefaultHooks struct{}
+type DefaultHooks struct {
+	// pendingPackets is a static variable internal to ProcessPackets
+	// It stores packets that were not sent due to downstream not ready
+	pendingPackets []PacketWithCycle
+}
 
-func (d *DefaultHooks) OnCycleStart(cycle int)                        {}
-func (d *DefaultHooks) OnDataReceived(pkt PacketWithCycle, cycle int) {}
-func (d *DefaultHooks) OnDownstreamBackpressureIndependentLogic(pkt PacketWithCycle, cycle int) PacketWithCycle {
-	return pkt // Default: no modification
-}
-func (d *DefaultHooks) OnDownstreamReady(pkt PacketWithCycle, cycle int) {}
-func (d *DefaultHooks) OnDownstreamNotReady(pkt PacketWithCycle, cycle int) int {
-	return cycle + 1 // Default: increment by 1
-}
+func (d *DefaultHooks) OnCycleStart(cycle int) {}
+
 func (d *DefaultHooks) OnCycleEnd(cycle int) {}
+func (d *DefaultHooks) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int)) {
+	// pendingPackets is a static variable (struct field) - access directly
+	newPendingPackets := make([]PacketWithCycle, 0)
+
+	// Helper function to process a single packet
+	processPacket := func(pkt PacketWithCycle) {
+		pktCycle := int(pkt.Cycle)
+		isReady := checkReady(pktCycle)
+		if isReady {
+			// Ready: send the packet immediately
+			pkt.Cycle = uint64(pktCycle)
+			sendPacket(pkt)
+		} else {
+			// Not ready: keep in pending
+			newPendingPackets = append(newPendingPackets, pkt)
+		}
+	}
+
+	// Process pending packets first (from static variable)
+	for _, pkt := range d.pendingPackets {
+		processPacket(pkt)
+	}
+
+	// H: Receive and process all available packets from channel (non-blocking, drain all available)
+	// Similar to Flow.Tick behavior - receive and process all packets available in this cycle
+	for {
+		select {
+		case pkt := <-receiveChan:
+			processPacket(pkt)
+		default:
+			// No more packets available
+			goto done
+		}
+	}
+
+done:
+	// F: SetDoneUntil after processing all packets
+	// Only set downstream DoneUntil to cycle + 1 (current cycle completed)
+	setDoneUntil(cycle + 1)
+
+	// Update pending packets (static variable - struct field)
+	d.pendingPackets = newPendingPackets
+}
