@@ -3,7 +3,7 @@
 
 Flow 和 Link 之间的交互都使用同一个接口
 ```go
-type SyncPort interface {
+type ASyncPort interface {
 	SetDoneUntil(int)                 // 上游调用，更新 DoneUntil（实现约束，使用Atomic Store）
 	Chan() <-chan PacketWithCycle     // 上游调用，获取可 push 的 channel
 	Ready(cycle int) bool             // 上游调用，阻塞等待下游计算结果
