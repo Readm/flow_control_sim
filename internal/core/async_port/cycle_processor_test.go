@@ -9,28 +9,20 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// testHooks is a test implementation of CycleProcessorHooks
-type testHooks struct {
-	*DefaultHooks
+// testProcessor is a test implementation of PacketProcessor
+type testProcessor struct {
+	*DefaultProcessor
 	hookCalls *struct {
 		mu                      sync.Mutex
-		cycleStarts             []int
 		dataReceived            []PacketWithCycle
 		backpressureIndependent []PacketWithCycle
 		downstreamReady         []PacketWithCycle
 		downstreamNotReady      []int
-		cycleEnds               []int
 	}
 }
 
-func (t *testHooks) OnCycleStart(cycle int) {
-	t.hookCalls.mu.Lock()
-	t.hookCalls.cycleStarts = append(t.hookCalls.cycleStarts, cycle)
-	t.hookCalls.mu.Unlock()
-}
-
-func (t *testHooks) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int)) {
-	// pendingPackets is a static variable (struct field from embedded DefaultHooks) - access directly
+func (t *testProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+	// pendingPackets is a static variable (struct field from embedded DefaultProcessor) - access directly
 	pendingPackets := t.pendingPackets
 
 	// Receive all available packets from channel
@@ -88,25 +80,22 @@ processPackets:
 	// F: SetDoneUntil after processing all packets
 	setDoneUntil(cycle + 1)
 
+	// Q: Notify upstream about readiness for next cycle
+	updateUpstreamReady(cycle+1, true)
+
 	// Update pending packets (static variable - struct field)
 	t.pendingPackets = newPendingPackets
 }
 
-func (t *testHooks) OnCycleEnd(cycle int) {
-	t.hookCalls.mu.Lock()
-	t.hookCalls.cycleEnds = append(t.hookCalls.cycleEnds, cycle)
-	t.hookCalls.mu.Unlock()
-}
-
-// incrementTestHooks is a test hooks implementation for cycle increment testing
-type incrementTestHooks struct {
-	*DefaultHooks
+// incrementTestProcessor is a test processor implementation for cycle increment testing
+type incrementTestProcessor struct {
+	*DefaultProcessor
 	notReadyCycles *[]int
 	finalCycle     *int
 }
 
-func (i *incrementTestHooks) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int)) {
-	// pendingPackets is a static variable (struct field from embedded DefaultHooks) - access directly
+func (i *incrementTestProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+	// pendingPackets is a static variable (struct field from embedded DefaultProcessor) - access directly
 	pendingPackets := i.pendingPackets
 
 	// Receive all available packets from channel
@@ -147,18 +136,21 @@ processPackets:
 	// F: SetDoneUntil after processing all packets
 	setDoneUntil(cycle + 1)
 
+	// Q: Notify upstream about readiness for next cycle
+	updateUpstreamReady(cycle+1, true)
+
 	// Update pending packets (static variable - struct field)
 	i.pendingPackets = newPendingPackets
 }
 
 // countIncrementHooks is a test hooks implementation for counting increments
-type countIncrementHooks struct {
-	*DefaultHooks
+type countIncrementProcessor struct {
+	*DefaultProcessor
 	incrementCount *int
 }
 
-func (c *countIncrementHooks) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int)) {
-	// pendingPackets is a static variable (struct field from embedded DefaultHooks) - access directly
+func (c *countIncrementProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+	// pendingPackets is a static variable (struct field from embedded DefaultProcessor) - access directly
 	pendingPackets := c.pendingPackets
 
 	// Receive all available packets from channel
@@ -198,18 +190,21 @@ processPackets:
 	// F: SetDoneUntil after processing all packets
 	setDoneUntil(cycle + 1)
 
+	// Q: Notify upstream about readiness for next cycle
+	updateUpstreamReady(cycle+1, true)
+
 	// Update pending packets (static variable - struct field)
 	c.pendingPackets = newPendingPackets
 }
 
-// allPacketsTestHooks tracks all received packets for testing
-type allPacketsTestHooks struct {
-	*DefaultHooks
+// allPacketsTestProcessor tracks all received packets for testing
+type allPacketsTestProcessor struct {
+	*DefaultProcessor
 	receivedPackets *[]PacketWithCycle
 	mu              *sync.Mutex
 }
 
-func (a *allPacketsTestHooks) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int)) {
+func (a *allPacketsTestProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
 	// pendingPackets is a static variable (struct field from embedded DefaultHooks) - access directly
 	pendingPackets := a.pendingPackets
 
@@ -230,7 +225,7 @@ processPackets:
 	*a.receivedPackets = append(*a.receivedPackets, cycleReceivedPackets...)
 	a.mu.Unlock()
 
-	// Process packets using the same logic as DefaultHooks
+	// Process packets using the same logic as DefaultProcessor
 	newPendingPackets := make([]PacketWithCycle, 0)
 
 	// Helper function to process a single packet
@@ -260,6 +255,9 @@ processPackets:
 	// Set DoneUntil after processing all packets
 	setDoneUntil(cycle + 1)
 
+	// Q: Notify upstream about readiness for next cycle
+	updateUpstreamReady(cycle+1, true)
+
 	// Update pending packets (static variable - struct field)
 	a.pendingPackets = newPendingPackets
 }
@@ -274,21 +272,19 @@ func TestCycleProcessorBasicFlow(t *testing.T) {
 	// Track hook calls
 	var hookCalls struct {
 		mu                      sync.Mutex
-		cycleStarts             []int
 		dataReceived            []PacketWithCycle
 		backpressureIndependent []PacketWithCycle
 		downstreamReady         []PacketWithCycle
 		downstreamNotReady      []int
-		cycleEnds               []int
 	}
 
-	// Create a custom hooks implementation for testing
-	hooks := &testHooks{
-		DefaultHooks: &DefaultHooks{},
-		hookCalls:    &hookCalls,
+	// Create a custom processor implementation for testing
+	testProc := &testProcessor{
+		DefaultProcessor: &DefaultProcessor{},
+		hookCalls:        &hookCalls,
 	}
 
-	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
+	processor := NewCycleProcessor(upstreamPort, downstreamPort, testProc)
 
 	// Set initial state
 	upstreamPort.SetDoneUntil(0)
@@ -310,9 +306,6 @@ func TestCycleProcessorBasicFlow(t *testing.T) {
 
 	// Verify hook calls
 	hookCalls.mu.Lock()
-	if len(hookCalls.cycleStarts) != 1 || hookCalls.cycleStarts[0] != 0 {
-		t.Errorf("expected OnCycleStart(0), got %v", hookCalls.cycleStarts)
-	}
 	if len(hookCalls.dataReceived) != 1 {
 		t.Errorf("expected 1 data received, got %d", len(hookCalls.dataReceived))
 	}
@@ -321,9 +314,6 @@ func TestCycleProcessorBasicFlow(t *testing.T) {
 	}
 	if len(hookCalls.downstreamNotReady) != 0 {
 		t.Errorf("expected 0 downstream not ready, got %d", len(hookCalls.downstreamNotReady))
-	}
-	if len(hookCalls.cycleEnds) != 1 || hookCalls.cycleEnds[0] != 0 {
-		t.Errorf("expected OnCycleEnd(0), got %v", hookCalls.cycleEnds)
 	}
 	hookCalls.mu.Unlock()
 
@@ -408,13 +398,13 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 	var notReadyCycles []int
 	var finalCycle int
 
-	hooks := &incrementTestHooks{
-		DefaultHooks:   &DefaultHooks{},
-		notReadyCycles: &notReadyCycles,
-		finalCycle:     &finalCycle,
+	proc := &incrementTestProcessor{
+		DefaultProcessor: &DefaultProcessor{},
+		notReadyCycles:   &notReadyCycles,
+		finalCycle:       &finalCycle,
 	}
 
-	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
+	processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 
 	// Set initial state
 	upstreamPort.SetDoneUntil(5)
@@ -514,12 +504,12 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 	downstreamPort.SetReadyUntil(9)
 
 	var incrementCount int
-	hooks := &countIncrementHooks{
-		DefaultHooks:   &DefaultHooks{},
-		incrementCount: &incrementCount,
+	proc := &countIncrementProcessor{
+		DefaultProcessor: &DefaultProcessor{},
+		incrementCount:   &incrementCount,
 	}
 
-	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
+	processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 
 	upstreamPort.SetDoneUntil(10)
 
@@ -608,9 +598,9 @@ func TestCycleProcessorWithCustomHooks(t *testing.T) {
 	upstreamPort := NewPort(8)
 	downstreamPort := NewPort(8)
 
-	// Use FIFOFlowHooks as example
-	hooks := NewFIFOFlowHooks(1)
-	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
+	// Use DefaultProcessor
+	proc := &DefaultProcessor{}
+	processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 
 	upstreamPort.SetDoneUntil(0)
 	downstreamPort.UpdateReady(0, true)
@@ -648,8 +638,7 @@ func TestCycleProcessorWaitsForUpstreamDoneUntil(t *testing.T) {
 	upstreamPort := NewPort(8)
 	downstreamPort := NewPort(8)
 
-	hooks := &DefaultHooks{}
-	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
+	processor := NewCycleProcessor(upstreamPort, downstreamPort, nil)
 
 	// Initially DoneUntil is -1, so cycle 0 should wait
 	done := make(chan bool, 1)
@@ -697,14 +686,14 @@ func TestCycleProcessorReceivesAllPackets(t *testing.T) {
 	var receivedPackets []PacketWithCycle
 	var mu sync.Mutex
 
-	// Create custom hooks to track received packets
-	hooks := &allPacketsTestHooks{
-		DefaultHooks:    &DefaultHooks{},
-		receivedPackets: &receivedPackets,
-		mu:              &mu,
+	// Create custom processor to track received packets
+	proc := &allPacketsTestProcessor{
+		DefaultProcessor: &DefaultProcessor{},
+		receivedPackets:  &receivedPackets,
+		mu:               &mu,
 	}
 
-	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
+	processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 
 	// Set initial state
 	upstreamPort.SetDoneUntil(5)
@@ -790,13 +779,13 @@ func TestCycleProcessorHandlesMultipleCyclesInChannel(t *testing.T) {
 	var receivedPackets []PacketWithCycle
 	var mu sync.Mutex
 
-	hooks := &allPacketsTestHooks{
-		DefaultHooks:    &DefaultHooks{},
-		receivedPackets: &receivedPackets,
-		mu:              &mu,
+	proc := &allPacketsTestProcessor{
+		DefaultProcessor: &DefaultProcessor{},
+		receivedPackets:  &receivedPackets,
+		mu:               &mu,
 	}
 
-	processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
+	processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 
 	// Set initial state - allow processing cycles 5, 6, 7
 	upstreamPort.SetDoneUntil(7)
@@ -861,4 +850,135 @@ func TestCycleProcessorHandlesMultipleCyclesInChannel(t *testing.T) {
 	}
 
 	t.Logf("Successfully handled packets with different cycles in a single ProcessCycle call")
+}
+
+// TestCycleProcessorUpdateReadyAfterProcessCycle tests that ProcessCycle automatically calls UpdateReady
+// to notify upstream that the next cycle is ready. Without this, upstream would block when calling Ready(cycle+1).
+func TestCycleProcessorUpdateReadyAfterProcessCycle(t *testing.T) {
+	t.Parallel()
+
+	upstreamPort := NewPort(8)
+	downstreamPort := NewPort(8)
+
+	processor := NewCycleProcessor(upstreamPort, downstreamPort, nil)
+
+	// Set initial state
+	upstreamPort.SetDoneUntil(0)
+	// DO NOT manually call UpdateReady(1, true) - ProcessCycle should do it automatically
+
+	// Process cycle 0
+	err := processor.ProcessCycle(0)
+	if err != nil {
+		t.Fatalf("ProcessCycle failed: %v", err)
+	}
+
+	// Now verify that upstream can check Ready(1) without blocking
+	// If ProcessCycle didn't call UpdateReady(1, true), this would block forever
+	readyChan := make(chan bool, 1)
+	go func() {
+		// This should return immediately if UpdateReady(1, true) was called
+		ready := upstreamPort.Ready(1)
+		readyChan <- ready
+	}()
+
+	// Wait for result with timeout
+	select {
+	case ready := <-readyChan:
+		if !ready {
+			t.Fatal("expected Ready(1) to return true after ProcessCycle(0) calls UpdateReady(1, true)")
+		}
+		t.Logf("Successfully verified that Ready(1) returns true after ProcessCycle(0)")
+	case <-time.After(1 * time.Second):
+		t.Fatal("Ready(1) blocked - ProcessCycle(0) did not call UpdateReady(1, true)!")
+	}
+
+	// Verify readyMap was updated
+	// We can't directly access readyMap, but we can verify by checking Ready() again
+	if !upstreamPort.Ready(1) {
+		t.Fatal("Ready(1) should return true after ProcessCycle(0)")
+	}
+
+	// Process cycle 1
+	upstreamPort.SetDoneUntil(1)
+	err = processor.ProcessCycle(1)
+	if err != nil {
+		t.Fatalf("ProcessCycle failed: %v", err)
+	}
+
+	// Verify Ready(2) also works
+	readyChan2 := make(chan bool, 1)
+	go func() {
+		ready := upstreamPort.Ready(2)
+		readyChan2 <- ready
+	}()
+
+	select {
+	case ready := <-readyChan2:
+		if !ready {
+			t.Fatal("expected Ready(2) to return true after ProcessCycle(1) calls UpdateReady(2, true)")
+		}
+		t.Logf("Successfully verified that Ready(2) returns true after ProcessCycle(1)")
+	case <-time.After(1 * time.Second):
+		t.Fatal("Ready(2) blocked - ProcessCycle(1) did not call UpdateReady(2, true)!")
+	}
+}
+
+// TestCycleProcessorUpdateReadyWithoutUpdateReadyBlocks tests that without UpdateReady,
+// upstream would block when calling Ready(cycle+1). This test demonstrates the problem
+// that UpdateReady solves.
+func TestCycleProcessorUpdateReadyWithoutUpdateReadyBlocks(t *testing.T) {
+	t.Parallel()
+
+	upstreamPort := NewPort(8)
+
+	// Set initial state
+	upstreamPort.SetDoneUntil(0)
+	// DO NOT call UpdateReady(1, true)
+	// This simulates the buggy behavior where ProcessCycle doesn't call UpdateReady
+
+	// Now verify that upstream blocks when calling Ready(1)
+	readyChan := make(chan bool, 1)
+	go func() {
+		// This should block because UpdateReady(1, true) was never called
+		ready := upstreamPort.Ready(1)
+		readyChan <- ready
+	}()
+
+	// Wait for result with timeout
+	select {
+	case <-readyChan:
+		// If we get here, Ready(1) returned, which means either:
+		// 1. readyUntil fast path kicked in (unlikely if we set it correctly)
+		// 2. Something else set readyMap[1]
+		// Let's check readyUntil
+		readyUntil := upstreamPort.GetReadyUntil()
+		if readyUntil > 1 {
+			t.Logf("Ready(1) returned true via fast path (readyUntil=%d), which is expected if readyUntil was set", readyUntil)
+		} else {
+			t.Logf("Ready(1) returned unexpectedly - this might indicate readyMap[1] was set elsewhere")
+		}
+	case <-time.After(100 * time.Millisecond):
+		// Expected: Ready(1) should block because UpdateReady(1, true) was never called
+		t.Logf("Successfully verified that Ready(1) blocks when UpdateReady(1, true) is not called")
+	}
+
+	// Now verify that with UpdateReady, it works
+	upstreamPort.UpdateReady(1, true)
+
+	// Now Ready(1) should return immediately
+	readyChan2 := make(chan bool, 1)
+	go func() {
+		ready := upstreamPort.Ready(1)
+		readyChan2 <- ready
+	}()
+
+	select {
+	case ready := <-readyChan2:
+		if !ready {
+			t.Fatal("expected Ready(1) to return true after UpdateReady(1, true)")
+		}
+		t.Logf("Successfully verified that Ready(1) returns true after UpdateReady(1, true)")
+	case <-time.After(1 * time.Second):
+		t.Fatal("Ready(1) still blocked after UpdateReady(1, true) - this should not happen!")
+	}
 }

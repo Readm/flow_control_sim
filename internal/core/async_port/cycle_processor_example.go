@@ -1,94 +1,74 @@
 package async_port
 
 import (
-	"fmt"
 	"log"
 )
 
 // Example: Custom implementation for a specific Flow type
 
-// FIFOFlowHooks implements CycleProcessorHooks for a FIFO flow.
-type FIFOFlowHooks struct {
-	*DefaultHooks // Embed default implementations
-	flowID        int
+// FIFOFlowProcessor implements PacketProcessor for a FIFO flow.
+type FIFOFlowProcessor struct {
+	*DefaultProcessor // Embed default implementation
+	flowID            int
 }
 
-func NewFIFOFlowHooks(flowID int) *FIFOFlowHooks {
-	return &FIFOFlowHooks{
-		DefaultHooks: &DefaultHooks{},
-		flowID:       flowID,
+func NewFIFOFlowProcessor(flowID int) *FIFOFlowProcessor {
+	return &FIFOFlowProcessor{
+		DefaultProcessor: &DefaultProcessor{},
+		flowID:           flowID,
 	}
 }
 
-// Override OnCycleStart to add custom logging
-func (f *FIFOFlowHooks) OnCycleStart(cycle int) {
-	log.Printf("Flow %d: Starting cycle %d", f.flowID, cycle)
-}
+// Override ProcessPackets to add custom processing
+func (f *FIFOFlowProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+	// Use default processing logic
+	f.DefaultProcessor.ProcessPackets(receiveChan, cycle, checkReady, sendPacket, setDoneUntil, updateUpstreamReady)
 
-// Override OnDataReceived to add custom processing
-func (f *FIFOFlowHooks) OnDataReceived(pkt PacketWithCycle, cycle int) {
-	log.Printf("Flow %d: Received packet at cycle %d, packet cycle %d",
-		f.flowID, cycle, pkt.Cycle)
-}
-
-// Override OnPacketReceived to add processing
-func (f *FIFOFlowHooks) OnPacketReceived(pkt PacketWithCycle, cycle int) PacketWithCycle {
-	// Example: Add flow ID to packet payload
-	modifiedPkt := pkt
-	modifiedPkt.Packet.Payload = fmt.Sprintf("Flow%d: %s", f.flowID, pkt.Packet.Payload)
-	return modifiedPkt
-}
-
-// Override OnDownstreamReady for custom ready/not-ready logic
-func (f *FIFOFlowHooks) OnDownstreamReady(pkt PacketWithCycle, cycle int, ready bool) int {
-	if ready {
-		log.Printf("Flow %d: Downstream ready for cycle %d", f.flowID, cycle)
-		return cycle
-	} else {
-		log.Printf("Flow %d: Downstream not ready for cycle %d, will increment", f.flowID, cycle)
-		return cycle + 1
-	}
+	// Add custom logging
+	log.Printf("Flow %d: Completed processing cycle %d", f.flowID, cycle)
 }
 
 // Example: Another implementation for a Priority Flow
 
-// PriorityFlowHooks implements CycleProcessorHooks for a priority-based flow.
-type PriorityFlowHooks struct {
-	*DefaultHooks
-	flowID    int
-	priority  int
-	processed []PacketWithCycle
+// PriorityFlowProcessor implements PacketProcessor for a priority-based flow.
+type PriorityFlowProcessor struct {
+	*DefaultProcessor
+	flowID   int
+	priority int
 }
 
-func NewPriorityFlowHooks(flowID, priority int) *PriorityFlowHooks {
-	return &PriorityFlowHooks{
-		DefaultHooks: &DefaultHooks{},
-		flowID:       flowID,
-		priority:     priority,
-		processed:    make([]PacketWithCycle, 0),
+func NewPriorityFlowProcessor(flowID, priority int) *PriorityFlowProcessor {
+	return &PriorityFlowProcessor{
+		DefaultProcessor: &DefaultProcessor{},
+		flowID:           flowID,
+		priority:         priority,
 	}
 }
 
-// Override OnPacketReceived to implement priority logic
-func (p *PriorityFlowHooks) OnPacketReceived(pkt PacketWithCycle, cycle int) PacketWithCycle {
-	// Priority flow: might reorder packets or add priority metadata
-	// For simplicity, just store for later processing
-	p.processed = append(p.processed, pkt)
-	return pkt
-}
+// Override ProcessPackets to implement priority logic
+func (p *PriorityFlowProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+	// Collect all packets first
+	allPackets := make([]PacketWithCycle, 0)
 
-// Override OnDownstreamReady to implement priority-aware cycle increment
-func (p *PriorityFlowHooks) OnDownstreamReady(pkt PacketWithCycle, cycle int, ready bool) int {
-	if ready {
-		return cycle
+	// Process pending packets
+	for _, pkt := range p.pendingPackets {
+		allPackets = append(allPackets, pkt)
 	}
-	// High priority flows might have different increment strategy
-	if p.priority > 5 {
-		// High priority: only increment by 1, wait more
-		return cycle + 1
+
+	// Receive new packets
+	for {
+		select {
+		case pkt := <-receiveChan:
+			allPackets = append(allPackets, pkt)
+		default:
+			goto process
+		}
 	}
-	// Low priority: can increment more aggressively
-	return cycle + 2
+
+process:
+	// Priority-based processing: high priority packets first
+	// For simplicity, use default logic
+	p.DefaultProcessor.ProcessPackets(receiveChan, cycle, checkReady, sendPacket, setDoneUntil, updateUpstreamReady)
 }
 
 // Example usage:
@@ -98,11 +78,11 @@ func (p *PriorityFlowHooks) OnDownstreamReady(pkt PacketWithCycle, cycle int, re
 //     upstreamPort := NewPort(8)
 //     downstreamPort := NewPort(8)
 //
-//     // Create hooks for FIFO flow
-//     hooks := NewFIFOFlowHooks(1)
+//     // Create processor for FIFO flow
+//     proc := NewFIFOFlowProcessor(1)
 //
-//     // Create processor with the hooks
-//     processor := NewCycleProcessor(upstreamPort, downstreamPort, hooks)
+//     // Create cycle processor with the packet processor
+//     processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 //
 //     // Process cycles
 //     for cycle := 0; cycle < 10; cycle++ {

@@ -10,16 +10,16 @@ import (
 func TestPendingPacketsIsolation(t *testing.T) {
 	t.Parallel()
 
-	// Create two processors with separate DefaultHooks instances
+	// Create two processors with separate DefaultProcessor instances
 	upstreamPort1 := NewPort(8)
 	downstreamPort1 := NewPort(8)
-	hooks1 := &DefaultHooks{} // Separate instance
-	processor1 := NewCycleProcessor(upstreamPort1, downstreamPort1, hooks1)
+	proc1 := &DefaultProcessor{} // Separate instance
+	processor1 := NewCycleProcessor(upstreamPort1, downstreamPort1, proc1)
 
 	upstreamPort2 := NewPort(8)
 	downstreamPort2 := NewPort(8)
-	hooks2 := &DefaultHooks{} // Separate instance
-	processor2 := NewCycleProcessor(upstreamPort2, downstreamPort2, hooks2)
+	proc2 := &DefaultProcessor{} // Separate instance
+	processor2 := NewCycleProcessor(upstreamPort2, downstreamPort2, proc2)
 
 	// Set initial state for both
 	upstreamPort1.SetDoneUntil(0)
@@ -74,15 +74,15 @@ func TestPendingPacketsIsolation(t *testing.T) {
 	}
 
 	// Verify: processor2's pendingPackets should contain the packet
-	if len(hooks2.pendingPackets) != 1 {
-		t.Errorf("processor2: expected 1 pending packet, got %d", len(hooks2.pendingPackets))
-	} else if hooks2.pendingPackets[0].Packet.Payload != "processor2" {
-		t.Errorf("processor2: expected pending packet 'processor2', got '%s'", hooks2.pendingPackets[0].Packet.Payload)
+	if len(proc2.pendingPackets) != 1 {
+		t.Errorf("processor2: expected 1 pending packet, got %d", len(proc2.pendingPackets))
+	} else if proc2.pendingPackets[0].Packet.Payload != "processor2" {
+		t.Errorf("processor2: expected pending packet 'processor2', got '%s'", proc2.pendingPackets[0].Packet.Payload)
 	}
 
 	// Verify: processor1's pendingPackets should be empty (packet was sent)
-	if len(hooks1.pendingPackets) != 0 {
-		t.Errorf("processor1: expected 0 pending packets, got %d", len(hooks1.pendingPackets))
+	if len(proc1.pendingPackets) != 0 {
+		t.Errorf("processor1: expected 0 pending packets, got %d", len(proc1.pendingPackets))
 	}
 }
 
@@ -90,16 +90,16 @@ func TestPendingPacketsIsolation(t *testing.T) {
 func TestPendingPacketsSharing(t *testing.T) {
 	t.Parallel()
 
-	// Create two processors sharing the SAME DefaultHooks instance
-	sharedHooks := &DefaultHooks{} // Shared instance
+	// Create two processors sharing the SAME DefaultProcessor instance
+	sharedProc := &DefaultProcessor{} // Shared instance
 
 	upstreamPort1 := NewPort(8)
 	downstreamPort1 := NewPort(8)
-	processor1 := NewCycleProcessor(upstreamPort1, downstreamPort1, sharedHooks)
+	processor1 := NewCycleProcessor(upstreamPort1, downstreamPort1, sharedProc)
 
 	upstreamPort2 := NewPort(8)
 	downstreamPort2 := NewPort(8)
-	processor2 := NewCycleProcessor(upstreamPort2, downstreamPort2, sharedHooks) // Same hooks instance
+	processor2 := NewCycleProcessor(upstreamPort2, downstreamPort2, sharedProc) // Same processor instance
 
 	// Set initial state
 	upstreamPort1.SetDoneUntil(0)
@@ -134,13 +134,13 @@ func TestPendingPacketsSharing(t *testing.T) {
 	}
 
 	// Verify: both packets should be in the shared pendingPackets
-	if len(sharedHooks.pendingPackets) != 2 {
-		t.Errorf("shared hooks: expected 2 pending packets, got %d", len(sharedHooks.pendingPackets))
+	if len(sharedProc.pendingPackets) != 2 {
+		t.Errorf("shared processor: expected 2 pending packets, got %d", len(sharedProc.pendingPackets))
 	}
 
 	// Verify both packets are present
 	found1, found2 := false, false
-	for _, pkt := range sharedHooks.pendingPackets {
+	for _, pkt := range sharedProc.pendingPackets {
 		if pkt.Packet.Payload == "processor1" {
 			found1 = true
 		}
@@ -149,10 +149,10 @@ func TestPendingPacketsSharing(t *testing.T) {
 		}
 	}
 	if !found1 {
-		t.Error("shared hooks: processor1's packet not found in pendingPackets")
+		t.Error("shared processor: processor1's packet not found in pendingPackets")
 	}
 	if !found2 {
-		t.Error("shared hooks: processor2's packet not found in pendingPackets")
+		t.Error("shared processor: processor2's packet not found in pendingPackets")
 	}
 }
 

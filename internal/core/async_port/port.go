@@ -103,6 +103,31 @@ func (p *Port) Ready(cycle int) bool {
 	return p.waitForReady(cycle)
 }
 
+// ReadyNonBlocking checks if downstream is ready to process the given cycle without blocking.
+// Returns (ready, configured):
+//   - ready: true if downstream is ready, false otherwise
+//   - configured: true if the cycle is configured (readyMap contains it or readyUntil covers it),
+//     false if the cycle is not configured and Ready() would block
+func (p *Port) ReadyNonBlocking(cycle int) (ready bool, configured bool) {
+	// Fast path: if cycle < readyUntil, downstream can execute ahead
+	readyUntil := atomic.LoadInt64(&p.readyUntil)
+	if int64(cycle) < readyUntil {
+		return true, true // ready and configured
+	}
+
+	// Check readyMap
+	p.waiterMu.Lock()
+	ready, exists := p.readyMap[cycle]
+	p.waiterMu.Unlock()
+
+	if exists {
+		return ready, true // configured (ready or not ready)
+	}
+
+	// Not exist, not configured
+	return false, false // not ready and not configured (would block)
+}
+
 // waitForReady blocks until the given cycle becomes ready.
 // Go 语言没有像 C++/Java 一样的条件变量(condvar)，但 sync.Cond 可以实现类似效果。
 // 下面用 sync.Cond 优化等待 readyMap，避免 goroutine/channel 的单独唤醒，实现直接监听 readyMap 的变化。

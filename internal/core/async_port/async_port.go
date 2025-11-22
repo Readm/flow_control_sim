@@ -39,6 +39,14 @@ type ASyncPort interface {
 	// Otherwise, queries readyMap or blocks until downstream signals readiness.
 	Ready(cycle int) bool
 
+	// ReadyNonBlocking checks if downstream is ready to process the given cycle without blocking.
+	// Returns (ready, configured):
+	//   - ready: true if downstream is ready, false otherwise
+	//   - configured: true if the cycle is configured (readyMap contains it or readyUntil covers it),
+	//                 false if the cycle is not configured and Ready() would block
+	// This method never blocks and is useful for assertions and checking configuration status.
+	ReadyNonBlocking(cycle int) (ready bool, configured bool)
+
 	// GetDoneUntil returns the current DoneUntil value set by upstream.
 	// Can be called by both upstream and downstream to check progress.
 	// This is useful for upstream to verify its own progress, or for downstream
