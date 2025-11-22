@@ -67,94 +67,120 @@ type CyclePort interface {
 
 Flow -> Link 和 Link -> Flow 都是一样的逻辑。下面，我们按方向称为上游和下游。
 
+**注意**：`CyclePort` 接口通常与 `CycleProcessor` 和 `PacketProcessor` 配合使用。`CycleProcessor` 提供了标准的 cycle 处理流程，而 `PacketProcessor` 定义了包处理策略。详见 `architecture_relationship.md`。
+
+## CycleProcessor 处理流程
+
+以下流程图展示了 `CycleProcessor.ProcessCycle(cycle)` 的完整执行流程，包括与 `PacketProcessor` 的交互：
+
 ``` mermaid
 ---
 config:
   layout: dagre
 ---
 flowchart TB
- subgraph s4["CheckReady(Cycle)"]
-        RU["ReadyUntil上游可以提前执行到ReadyUntil"]
-        RM["readymap(cycle -> Ready)"]
-        TRUE(["True"])
-        FALSE(["False"])
-        STALL["阻塞"]
-        Q["计算N+1是否Ready?"]
-        S4IN(["Start"])
-  end
- subgraph s3["模拟逻辑"]
-        A(["Start Cycle N"])
-        H["获取数据：<br>合并pendingPackets + Chan() -&gt; in_queue"]
-        I_Packet["下游反压无关逻辑模拟<br/>有数据包时"]
-        I_NoPacket["下游反压无关逻辑模拟<br/>无数据包时也执行"]
-        PENDING["保存到pendingPackets<br/>在下一个cycle再次检查"]
-        E["发送数据 <br>下游.Chan() &lt;- (Packet, Cycle)"]
-        C["下游Ready时模拟逻辑"]
-        P["N++"]
-        F(["SetDoneUntil(N+1)<br>如果可以预测可以Set更远, 例如Fixed Latency Link"])
-        n2["上游DoneUntil=M"]
-        s4
-  end
- subgraph s1["上游同步"]
-        K(["上游调用CheckReady(QueryCycle)"])
-        M(["Return"])
-        n3(["SetDoneUntil(M)"])
-  end
- subgraph s2["下游同步"]
-        B_Packet(["下游.CheckReady(pktCycle)<br/>有数据包时，只检查一次，不循环递增"])
-        B_NoPacket(["下游.CheckReady(cycle)<br/>无数据包时也检查"])
-        n1["DoneUntil"]
-  end
-    RU -- Cycle &lt; ReadyUntil --> TRUE
-    RU -- "Cycle >= ReadyUntil" --> RM
-    RM -- 查询 --> TRUE & FALSE
-    RM -- 无数据 wait --> STALL
-    STALL -- 重新查询 --> RM
-    Q -- Wakeup --> STALL
-    S4IN --> RU
-    K -- 可能阻塞 --> s4
-    H --> CheckData{有数据包?}
-    CheckData -->|Yes| I_Packet
-    CheckData -->|No| I_NoPacket
-    I_Packet == 可能阻塞 ==> B_Packet
-    I_NoPacket == 可能阻塞 ==> B_NoPacket
-    B_Packet == True ==> C
-    B_Packet == False ==> PENDING
-    B_NoPacket ==> F
-    C ==> E
-    F ==> P
-    F --> Q
-    F -.-> n1
-    E ==> F
-    PENDING ==> F
-    Q -. update .-> RM
-    Q -. "if True<br>Ready:=max(ReadyUntil, N+1)" .-> RU
-    P ==> A
-    A == "<span style=background-color:>wait until M &gt; N</span>" ==> n2
-    n2 ==> H
-    n2 -. remove &lt; M .-> RM
-    s4 --> s3 & M
-    n3 -.-> n2
+    subgraph CP["CycleProcessor.ProcessCycle(cycle)"]
+        START(["开始 ProcessCycle(cycle)"])
+        WAIT["1. WaitForDoneUntil(cycle)<br/>等待上游 DoneUntil >= cycle"]
+        PREPARE["2. 准备 updateUpstreamReady 函数<br/>通过类型断言获取 CyclePortImpl.UpdateReady"]
+        CALL_PROC["3. 调用 processor.ProcessPackets()<br/>传入: receiveChan, cycle, checkReady,<br/>sendPacket, setDoneUntil, updateUpstreamReady"]
+        SET_DONE["4. SetDoneUntil(cycle+1)<br/>如果当前值 < cycle+1<br/>确保单调递增"]
+        ASSERT["5. 断言 cycle+1 已配置<br/>ReadyNonBlocking(cycle+1) 必须返回 configured=true"]
+        END_CP(["结束 ProcessCycle"])
+    end
 
-    RU@{ shape: card}
-    RM@{ shape: card}
-    H@{ shape: subproc}
-    I_Packet@{ shape: subproc}
-    I_NoPacket@{ shape: subproc}
-    PENDING@{ shape: subproc}
-    E@{ shape: subproc}
-    C@{ shape: subproc}
-    n2@{ shape: card}
-    n1@{ shape: card}
-    style I_Packet stroke-width:2px,stroke-dasharray: 0
-    style I_NoPacket stroke-width:2px,stroke-dasharray: 0
-    style I_NoPacket fill:#E6F3FF
-    style PENDING fill:#FFF4E6
-    style s4 fill:#BBDEFB
+    subgraph PP["PacketProcessor.ProcessPackets()"]
+        START_PP(["开始 ProcessPackets"])
+        PENDING["处理 pendingPackets<br/>从处理器状态中获取"]
+        RECV["从 receiveChan 接收所有可用包<br/>非阻塞，drain all"]
+        LOOP["循环处理每个包"]
+        CHECK["对每个包调用 checkReady(pktCycle)<br/>即 downstreamPort.Ready(pktCycle)"]
+        READY{Ready?}
+        SEND["调用 sendPacket(pkt)<br/>发送到下游.Chan()"]
+        KEEP["加入 newPendingPackets<br/>在下一个 cycle 再次检查"]
+        DONE_PP["调用 setDoneUntil(cycle+1)"]
+        UPDATE["调用 updateUpstreamReady(cycle+1, true)<br/>通知上游 cycle+1 已就绪"]
+        SAVE["更新 pendingPackets = newPendingPackets"]
+        END_PP(["结束 ProcessPackets"])
+    end
+
+    subgraph READY_LOGIC["Ready(cycle) 内部逻辑"]
+        RU["ReadyUntil 快速路径<br/>如果 cycle < readyUntil<br/>立即返回 true"]
+        RM["查询 readyMap<br/>检查 cycle 的 ready 状态"]
+        BLOCK["阻塞等待<br/>直到 UpdateReady 被调用"]
+        TRUE_R(["返回 True"])
+        FALSE_R(["返回 False"])
+    end
+
+    START --> WAIT
+    WAIT --> PREPARE
+    PREPARE --> CALL_PROC
+    CALL_PROC --> SET_DONE
+    SET_DONE --> ASSERT
+    ASSERT --> END_CP
+
+    CALL_PROC --> START_PP
+    START_PP --> PENDING
+    PENDING --> RECV
+    RECV --> LOOP
+    LOOP --> CHECK
+    CHECK -.->|调用| READY_LOGIC
+    READY_LOGIC -.->|返回结果| READY
+    READY -->|True| SEND
+    READY -->|False| KEEP
+    SEND --> LOOP
+    KEEP --> LOOP
+    LOOP -->|所有包处理完| DONE_PP
+    DONE_PP --> UPDATE
+    UPDATE --> SAVE
+    SAVE --> END_PP
+    END_PP --> SET_DONE
+
+    RU -->|"cycle < readyUntil"| TRUE_R
+    RU -->|"cycle >= readyUntil"| RM
+    RM -->|"readyMap(cycle) = true"| TRUE_R
+    RM -->|"readyMap(cycle) = false"| FALSE_R
+    RM -->|"readyMap 中不存在"| BLOCK
+    BLOCK -->|"被 UpdateReady 唤醒"| RM
+
+    style CP fill:#FFE6E6
+    style PP fill:#E6F3FF
+    style READY_LOGIC fill:#FFF4E6
+    style WAIT fill:#FFCCCC
+    style CALL_PROC fill:#CCE5FF
+    style SET_DONE fill:#CCFFCC
+    style ASSERT fill:#FFFFCC
 ```
 
+### 流程图说明
+
+1. **CycleProcessor.ProcessCycle(cycle)**（红色区域）：
+   - 这是框架层，负责协调整个 cycle 的处理流程
+   - 步骤 1：等待上游完成（`WaitForDoneUntil`）
+   - 步骤 2-3：准备并调用 `PacketProcessor.ProcessPackets()`
+   - 步骤 4-5：确保下游 `DoneUntil` 正确设置，并断言上游已配置
+
+2. **PacketProcessor.ProcessPackets()**（蓝色区域）：
+   - 这是策略层，由用户自定义或使用 `DefaultProcessor`
+   - 处理 `pendingPackets`（之前未发送的包）
+   - 从 `receiveChan` 接收所有可用包（非阻塞）
+   - 对每个包检查下游是否 ready，ready 则发送，否则保存到 `pendingPackets`
+   - 最后通知上游下一个 cycle 已就绪
+
+3. **Ready(cycle) 内部逻辑**（黄色区域）：
+   - 展示 `CyclePort.Ready()` 方法的内部实现
+   - 快速路径：如果 `cycle < readyUntil`，立即返回 true
+   - 否则查询 `readyMap`，如果不存在则阻塞等待
+
+### 关键设计点
+
+- **职责分离**：`CycleProcessor` 负责框架流程，`PacketProcessor` 负责包处理策略
+- **非阻塞接收**：`ProcessPackets` 从 channel 非阻塞地接收所有可用包，避免阻塞
+- **pendingPackets 机制**：如果下游不 ready，包会保存到 `pendingPackets`，在下一个 cycle 再次检查
+- **双向同步**：通过 `SetDoneUntil` 和 `UpdateReady` 实现上下游的双向同步
+
 在SetDoneUntil前，需要保证所有的包已经通过Chan()中发送完毕。
-发包的逻辑是：先CheckReady(cycle) 如果为True，那么发送(packet, cycle);
+发包的逻辑是：先调用 `Ready(cycle)` 如果为True，那么发送(packet, cycle)。
 上游可以配置自身的DoneUntil N，表示自身的N-1的交互已经完成，希望发送的Packet都发送完了。
 
 

@@ -1,6 +1,6 @@
 # 架构关系梳理
 
-## 当前架构关系图
+## 架构关系图
 
 ```mermaid
 ---
@@ -153,91 +153,15 @@ CyclePortImpl (结构体)
 
 ---
 
-## 命名问题总结
-
-### 已解决的问题
-
-重命名已完成：
-- ✅ `ASyncPort` → `CyclePort` - 明确表示基于 cycle 的同步端口
-- ✅ `Port` → `CyclePortImpl` - 明确是 CyclePort 的实现
-- ✅ `NewPort` → `NewCyclePort` - 与类型名一致
-- ✅ `packet.Envelope` → `packet.PacketWithCycle` - 命名更清晰
-
-### 命名一致性
-
-- ✅ `CyclePort` (Interface) + `CyclePortImpl` (Struct) - 关系清晰
-- ✅ `PacketProcessor` (Interface) + `DefaultProcessor` (Struct) - 关系清晰
-
----
-
-## 改进后的架构关系（推荐）
-
-```mermaid
----
-config:
-  layout: dagre
----
-flowchart TB
-    subgraph Interfaces["接口层 (Interfaces)"]
-        CyclePort["CyclePort<br/>Cycle 同步端口接口"]
-        PacketProcessor["PacketProcessor<br/>包处理策略接口"]
-    end
-    
-    subgraph Implementations["实现层 (Implementations)"]
-        CyclePortImpl["CyclePortImpl<br/>实现 CyclePort"]
-        DefaultProcessor["DefaultProcessor<br/>实现 PacketProcessor"]
-        FIFOFlowProcessor["FIFOFlowProcessor<br/>实现 PacketProcessor"]
-    end
-    
-    subgraph Coordinator["协调层 (Coordinator)"]
-        CycleProcessor["CycleProcessor<br/>协调 CyclePort 和 Processor"]
-    end
-    
-    CyclePort -->|实现| CyclePortImpl
-    PacketProcessor -->|实现| DefaultProcessor
-    PacketProcessor -->|实现| FIFOFlowProcessor
-    
-    DefaultProcessor -.->|嵌入| FIFOFlowProcessor
-    
-    CycleProcessor -->|持有| CyclePort
-    CycleProcessor -->|持有| PacketProcessor
-    
-    style CyclePort fill:#E6F3FF
-    style PacketProcessor fill:#E6F3FF
-    style CyclePortImpl fill:#FFF4E6
-    style DefaultProcessor fill:#FFF4E6
-    style CycleProcessor fill:#FFE6E6
-```
-
-### 改进后的命名
-
-| 当前 | 推荐 | 理由 |
-|------|------|------|
-| `ASyncPort` | `CyclePort` | 明确表示基于 cycle 的同步 |
-| `Port` | `CyclePortImpl` | 明确是 CyclePort 的实现 |
-| `NewPort` | `NewCyclePort` | 与类型名一致 |
-| `PacketProcessor` | `PacketProcessor` | ✅ 保持不变 |
-| `DefaultProcessor` | `DefaultProcessor` | ✅ 保持不变 |
-| `CycleProcessor` | `CycleProcessor` | ✅ 保持不变 |
-
----
-
 ## 总结
 
-### 架构的优点
-1. ✅ 职责分离清晰（CyclePortImpl 负责同步，Processor 负责处理策略）
-2. ✅ 支持组合模式（Processor 可以嵌入 DefaultProcessor）
-3. ✅ 接口设计合理（解耦、可测试、可扩展）
+### 架构优点
+1. 职责分离清晰：`CyclePortImpl` 负责同步机制，`PacketProcessor` 负责处理策略
+2. 支持组合模式：`Processor` 可以嵌入 `DefaultProcessor` 复用逻辑和状态
+3. 接口设计合理：解耦、可测试、可扩展
 
-### 命名改进（已完成）
-- ✅ `ASyncPort` → `CyclePort` - 明确表示基于 cycle 的同步机制
-- ✅ `Port` → `CyclePortImpl` - 明确是 CyclePort 的实现
-- ✅ `NewPort` → `NewCyclePort` - 与类型名一致
-- ✅ `packet.Envelope` → `packet.PacketWithCycle` - 命名更清晰
-
-改进后的效果：
-- ✅ 明确表示基于 cycle 的同步机制
-- ✅ 与 `CycleProcessor` 命名一致
-- ✅ 接口和实现关系清晰（CyclePort + CyclePortImpl）
-- ✅ 避免与异步概念混淆
+### 命名规范
+- `CyclePort` (接口) + `CyclePortImpl` (实现) - 关系清晰
+- `PacketProcessor` (接口) + `DefaultProcessor` (实现) - 关系清晰
+- `PacketWithCycle` - 表示带 cycle 信息的包
 
