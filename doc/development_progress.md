@@ -82,7 +82,7 @@
 #### DataFlow - Packet (`internal/dataflow/packet/`)
 - ✅ **Packet 定义** (`packet.go`)
   - `Packet` 结构体（SourceID, TargetID, Payload）
-  - `Envelope` 结构体（Cycle, Packet）
+  - `PacketWithCycle` 结构体（Cycle, Packet）
   - 扩展字段：TransactionID, MessageID, Sequence（保持向后兼容）
 
 #### DataFlow - Flow (`internal/dataflow/flow/`)

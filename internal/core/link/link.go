@@ -102,7 +102,7 @@ func (l *Link) Transmit(cycle uint64, pkt packet.Packet) {
 
 	// Optimization: if receiver guarantees no backpressure until targetCycle, send directly
 	if l.noBackpressureUntil >= targetCycle {
-		env := packet.Envelope{
+		env := packet.PacketWithCycle{
 			Cycle:  targetCycle,
 			Packet: pkt,
 		}
@@ -180,7 +180,7 @@ func (l *Link) Advance(cycle uint64) {
 			continue
 		}
 
-		env := packet.Envelope{
+		env := packet.PacketWithCycle{
 			Cycle:  cycle,
 			Packet: pkt,
 		}

@@ -12,9 +12,9 @@ type Packet struct {
 	Sequence      int   // Sequence number in Message (for multi-packet messages)
 }
 
-// Envelope associates a packet with the cycle in which it becomes visible to
+// PacketWithCycle associates a packet with the cycle in which it becomes visible to
 // the destination flow. This is the element transmitted through link channels.
-type Envelope struct {
+type PacketWithCycle struct {
 	Cycle  uint64
 	Packet Packet
 }

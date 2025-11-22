@@ -5,92 +5,116 @@ import (
 	"sync/atomic"
 )
 
-// Port implements ASyncPort interface.
-// It provides synchronization between upstream and downstream components.
-type Port struct {
-	// doneUntil is the cycle until which upstream has completed.
+// CyclePortImpl implements CyclePort interface.
+// It provides bidirectional synchronization between upstream and downstream components.
+// A single CyclePortImpl instance can be used by both upstream (sender) and downstream (receiver).
+type CyclePortImpl struct {
+	// doneUntil is the cycle until which upstream has completed processing.
 	// Updated by upstream using atomic operations.
+	// DoneUntil N means upstream has completed cycle N-1 and all packets for cycle N-1 have been sent.
+	// Downstream uses WaitForDoneUntil to block until this value reaches a target cycle.
 	doneUntil int64
 
-	// readyUntil is the cycle until which downstream can execute ahead.
-	// If cycle < readyUntil, Ready() returns true immediately.
+	// readyUntil is the cycle until which downstream can execute ahead (fast path).
+	// If cycle < readyUntil, Ready(cycle) returns true immediately without checking readyMap.
+	// Updated atomically when UpdateReady sets a cycle to ready and that cycle >= readyUntil.
+	// This provides an optimization to avoid map lookups for cycles that are guaranteed to be ready.
 	readyUntil int64
 
-	// readyMap stores ready status for specific cycles.
+	// readyMap stores ready status for specific cycles that are not covered by readyUntil.
 	// Key: cycle, Value: ready status (true = ready, false = not ready).
-	// No lock protection needed as per requirements.
+	// Protected by waiterMu for concurrent access.
+	// Used when cycle >= readyUntil to check if a specific cycle is ready.
 	readyMap map[int]bool
 
 	// packetChan is the internal channel for packet transmission.
-	// Upstream pushes through Chan() (write-only), downstream receives from ReceiveChan().
+	// Upstream pushes packets through Chan() (write-only view).
+	// Downstream receives packets from ReceiveChan() (read-only view).
+	// Both views refer to the same underlying channel.
 	packetChan chan PacketWithCycle
 
-	// readyWaiters stores channels waiting for specific cycles to become ready.
-	// Key: cycle, Value: list of channels to notify when ready.
-	readyWaiters map[int][]chan bool
-	waiterMu     sync.Mutex
-	cond         *sync.Cond // Condition variable for waiting on readyMap changes
+	// waiterMu protects readyMap and cond for concurrent access.
+	// Used when checking/updating readyMap and when waiting for ready status changes.
+	waiterMu sync.Mutex
+	// cond is a condition variable for waiting on readyMap changes.
+	// Used by waitForReady to block goroutines until UpdateReady is called.
+	cond *sync.Cond
 
-	// doneUntilMu protects doneUntilCond and allows waiting for DoneUntil changes
-	doneUntilMu   sync.Mutex
-	doneUntilCond *sync.Cond // Condition variable for waiting on DoneUntil changes
+	// doneUntilMu protects doneUntilCond and allows waiting for DoneUntil changes.
+	doneUntilMu sync.Mutex
+	// doneUntilCond is a condition variable for waiting on DoneUntil changes.
+	// Used by WaitForDoneUntil to block goroutines until SetDoneUntil is called.
+	doneUntilCond *sync.Cond
 }
 
-// NewPort creates a new ASyncPort with the specified channel buffer size.
-func NewPort(bufferSize int) *Port {
+// NewCyclePort creates a new CyclePort with the specified channel buffer size.
+func NewCyclePort(bufferSize int) *CyclePortImpl {
 	if bufferSize <= 0 {
 		bufferSize = 8
 	}
-	return &Port{
-		doneUntil:    -1,
-		readyUntil:   -1,
-		readyMap:     make(map[int]bool),
-		packetChan:   make(chan PacketWithCycle, bufferSize),
-		readyWaiters: make(map[int][]chan bool),
+	return &CyclePortImpl{
+		doneUntil:  -1,
+		readyUntil: -1,
+		readyMap:   make(map[int]bool),
+		packetChan: make(chan PacketWithCycle, bufferSize),
 	}
 }
 
 // SetDoneUntil updates DoneUntil using atomic store.
-// Called by upstream to indicate completion up to cycle N.
-// Wakes up goroutines waiting for DoneUntil to reach a certain value.
-func (p *Port) SetDoneUntil(cycle int) {
+// Called by upstream to notify downstream that it has completed processing up to cycle N-1.
+// DoneUntil N means:
+//   - Upstream has completed cycle N-1
+//   - All packets for cycle N-1 have been sent
+//
+// This wakes up all goroutines waiting in WaitForDoneUntil for DoneUntil to reach a certain value.
+func (p *CyclePortImpl) SetDoneUntil(cycle int) {
 	atomic.StoreInt64(&p.doneUntil, int64(cycle))
 
-	// Wake up goroutines waiting for DoneUntil changes
+	// Wake up all goroutines waiting for DoneUntil changes
 	p.doneUntilMu.Lock()
 	if p.doneUntilCond != nil {
-		p.doneUntilCond.Broadcast() // Wake all waiters
+		p.doneUntilCond.Broadcast()
 	}
 	p.doneUntilMu.Unlock()
 }
 
-// GetDoneUntil returns the current DoneUntil value.
-// Called by downstream to check upstream progress.
-func (p *Port) GetDoneUntil() int {
+// GetDoneUntil returns the current DoneUntil value set by upstream.
+// Can be called by both upstream and downstream to check progress.
+// This is useful for upstream to verify its own progress, or for downstream
+// to check upstream completion status without blocking.
+func (p *CyclePortImpl) GetDoneUntil() int {
 	return int(atomic.LoadInt64(&p.doneUntil))
 }
 
-// Chan returns a write-only channel for upstream to push packets.
-func (p *Port) Chan() chan<- PacketWithCycle {
+// Chan returns a write-only channel for upstream to push packets to downstream.
+// Upstream sends (Packet, Cycle) pairs through this channel.
+// The same underlying channel is accessible to downstream via ReceiveChan().
+func (p *CyclePortImpl) Chan() chan<- PacketWithCycle {
 	return p.packetChan
 }
 
-// ReceiveChan returns a read-only channel for downstream to receive packets.
-// This is an internal method for downstream use.
-func (p *Port) ReceiveChan() <-chan PacketWithCycle {
+// ReceiveChan returns a read-only channel for downstream to receive packets from upstream.
+// This is the same underlying channel as Chan(), but from downstream's perspective.
+// Downstream reads (Packet, Cycle) pairs from this channel.
+func (p *CyclePortImpl) ReceiveChan() <-chan PacketWithCycle {
 	return p.packetChan
 }
 
 // Ready checks if downstream is ready to process the given cycle.
-// Returns true if ready, false otherwise. May block waiting for downstream to become ready.
-func (p *Port) Ready(cycle int) bool {
+// Called by upstream before sending a packet for a specific cycle.
+// Returns true if downstream is ready, false otherwise.
+// This method may block waiting for downstream to become ready.
+//
+// Fast path: if cycle < readyUntil, returns true immediately (downstream can execute ahead).
+// Otherwise, queries readyMap or blocks until downstream signals readiness via UpdateReady.
+func (p *CyclePortImpl) Ready(cycle int) bool {
 	// Fast path: if cycle < readyUntil, downstream can execute ahead
 	readyUntil := atomic.LoadInt64(&p.readyUntil)
 	if int64(cycle) < readyUntil {
 		return true
 	}
 
-	// Check readyMap
+	// Check readyMap for specific cycle status
 	p.waiterMu.Lock()
 	ready, exists := p.readyMap[cycle]
 	p.waiterMu.Unlock()
@@ -99,23 +123,24 @@ func (p *Port) Ready(cycle int) bool {
 		return ready
 	}
 
-	// Not exist, need to wait
+	// Cycle not configured in readyMap, need to wait for downstream to call UpdateReady
 	return p.waitForReady(cycle)
 }
 
 // ReadyNonBlocking checks if downstream is ready to process the given cycle without blocking.
+// This method never blocks and is useful for assertions and checking configuration status.
 // Returns (ready, configured):
 //   - ready: true if downstream is ready, false otherwise
 //   - configured: true if the cycle is configured (readyMap contains it or readyUntil covers it),
 //     false if the cycle is not configured and Ready() would block
-func (p *Port) ReadyNonBlocking(cycle int) (ready bool, configured bool) {
+func (p *CyclePortImpl) ReadyNonBlocking(cycle int) (ready bool, configured bool) {
 	// Fast path: if cycle < readyUntil, downstream can execute ahead
 	readyUntil := atomic.LoadInt64(&p.readyUntil)
 	if int64(cycle) < readyUntil {
 		return true, true // ready and configured
 	}
 
-	// Check readyMap
+	// Check readyMap for specific cycle status
 	p.waiterMu.Lock()
 	ready, exists := p.readyMap[cycle]
 	p.waiterMu.Unlock()
@@ -124,42 +149,48 @@ func (p *Port) ReadyNonBlocking(cycle int) (ready bool, configured bool) {
 		return ready, true // configured (ready or not ready)
 	}
 
-	// Not exist, not configured
+	// Cycle not configured in readyMap, Ready() would block
 	return false, false // not ready and not configured (would block)
 }
 
 // waitForReady blocks until the given cycle becomes ready.
-// Go 语言没有像 C++/Java 一样的条件变量(condvar)，但 sync.Cond 可以实现类似效果。
-// 下面用 sync.Cond 优化等待 readyMap，避免 goroutine/channel 的单独唤醒，实现直接监听 readyMap 的变化。
-
-func (p *Port) waitForReady(cycle int) bool {
+// Uses sync.Cond to efficiently wait for readyMap changes, avoiding busy waiting.
+// The goroutine will block until UpdateReady is called for this cycle.
+func (p *CyclePortImpl) waitForReady(cycle int) bool {
 	p.waiterMu.Lock()
 	defer p.waiterMu.Unlock()
 
-	// 初始化条件变量
+	// Initialize condition variable if needed
 	if p.cond == nil {
 		p.cond = sync.NewCond(&p.waiterMu)
 	}
 
+	// Wait until the cycle is configured in readyMap
 	for {
 		if ready, exists := p.readyMap[cycle]; exists {
 			return ready
 		}
-		// 等待条件变化（会自动解锁并阻塞，收到 Signal/Broadcast 时再加锁苏醒）
+		// Wait() will:
+		// 1. Unlock waiterMu
+		// 2. Block the goroutine
+		// 3. When Broadcast() is called in UpdateReady, re-lock waiterMu and continue
 		p.cond.Wait()
 	}
 }
 
 // UpdateReady updates the ready status for a specific cycle and wakes up waiting goroutines.
-// Called by downstream when it determines readiness for a cycle.
-func (p *Port) UpdateReady(cycle int, ready bool) {
+// Called by downstream (via CycleProcessor) when it determines readiness for a cycle.
+// This is an internal method, not part of the CyclePort interface.
+// It updates both readyMap and readyUntil, and wakes up all goroutines waiting in waitForReady.
+func (p *CyclePortImpl) UpdateReady(cycle int, ready bool) {
 	p.waiterMu.Lock()
 	defer p.waiterMu.Unlock()
 
-	// Update readyMap
+	// Update readyMap with the cycle's ready status
 	p.readyMap[cycle] = ready
 
-	// Update readyUntil if ready and cycle is ahead
+	// Update readyUntil if ready and cycle is ahead of current readyUntil
+	// This extends the fast path: cycles < readyUntil will return true immediately
 	if ready {
 		currentReadyUntil := atomic.LoadInt64(&p.readyUntil)
 		if int64(cycle) >= currentReadyUntil {
@@ -167,26 +198,17 @@ func (p *Port) UpdateReady(cycle int, ready bool) {
 		}
 	}
 
-	// Wake up waiters for this cycle
-	if waiters, exists := p.readyWaiters[cycle]; exists {
-		for _, waiter := range waiters {
-			select {
-			case waiter <- ready:
-			default:
-			}
-		}
-		delete(p.readyWaiters, cycle)
-	}
-
-	// Wake up goroutines waiting on cond
+	// Wake up all goroutines waiting in waitForReady
+	// They will re-check readyMap and return if their cycle is now configured
 	if p.cond != nil {
 		p.cond.Broadcast()
 	}
 }
 
 // RemoveReadyBefore removes readyMap entries for cycles less than the given cycle.
-// Called by downstream to clean up old entries.
-func (p *Port) RemoveReadyBefore(cycle int) {
+// Called by downstream to clean up old entries that are no longer needed.
+// This is useful for memory management when processing many cycles.
+func (p *CyclePortImpl) RemoveReadyBefore(cycle int) {
 	p.waiterMu.Lock()
 	defer p.waiterMu.Unlock()
 
@@ -199,19 +221,24 @@ func (p *Port) RemoveReadyBefore(cycle int) {
 
 // SetReadyUntil sets the readyUntil value directly.
 // Called by downstream to indicate it can execute ahead up to a certain cycle.
-func (p *Port) SetReadyUntil(cycle int) {
+// This extends the fast path: cycles < readyUntil will return true immediately in Ready().
+// Useful for initialization or when downstream knows it can process many cycles ahead.
+func (p *CyclePortImpl) SetReadyUntil(cycle int) {
 	atomic.StoreInt64(&p.readyUntil, int64(cycle))
 }
 
 // GetReadyUntil returns the current readyUntil value.
-func (p *Port) GetReadyUntil() int {
+// Can be used to check the current fast path threshold.
+func (p *CyclePortImpl) GetReadyUntil() int {
 	return int(atomic.LoadInt64(&p.readyUntil))
 }
 
-// WaitForDoneUntil blocks until DoneUntil >= targetCycle.
-// This uses condition variable to avoid busy waiting.
-// Returns immediately if DoneUntil >= targetCycle.
-func (p *Port) WaitForDoneUntil(targetCycle int) {
+// WaitForDoneUntil blocks the calling goroutine until upstream's DoneUntil >= targetCycle.
+// Called by downstream at the start of cycle N to ensure upstream has completed cycle N-1.
+// This uses condition variable to avoid busy waiting - the goroutine will block until
+// upstream calls SetDoneUntil with a value >= targetCycle.
+// Returns immediately if DoneUntil >= targetCycle (no blocking needed).
+func (p *CyclePortImpl) WaitForDoneUntil(targetCycle int) {
 	// Fast path: check if already satisfied
 	if p.GetDoneUntil() >= targetCycle {
 		return
@@ -228,9 +255,9 @@ func (p *Port) WaitForDoneUntil(targetCycle int) {
 	// Wait until condition is satisfied
 	for p.GetDoneUntil() < targetCycle {
 		// Wait() will:
-		// 1. Unlock the mutex
+		// 1. Unlock doneUntilMu
 		// 2. Block the goroutine
-		// 3. When Broadcast() is called, re-lock the mutex and continue
+		// 3. When Broadcast() is called in SetDoneUntil, re-lock doneUntilMu and continue
 		p.doneUntilCond.Wait()
 	}
 }

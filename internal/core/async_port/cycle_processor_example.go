@@ -75,8 +75,8 @@ process:
 
 // func ExampleUsage() {
 //     // Create ports
-//     upstreamPort := NewPort(8)
-//     downstreamPort := NewPort(8)
+//     upstreamPort := NewCyclePort(8)
+//     downstreamPort := NewCyclePort(8)
 //
 //     // Create processor for FIFO flow
 //     proc := NewFIFOFlowProcessor(1)

@@ -10,7 +10,7 @@ import (
 // implementations can apply arbitrary policies while conforming to this API.
 type Flow interface {
 	ID() int
-	Mailbox() chan<- packet.Envelope
+	Mailbox() chan<- packet.PacketWithCycle
 	Tick(ctx context.Context, cycle uint64) error
 	Emit(pkts ...packet.Packet)
 	ProcessedCount() int
@@ -33,7 +33,7 @@ type Flow interface {
 	DrainDispatchQueue(index int) []packet.Packet
 	DispatchQueueSendFinishedCycle(index int) uint64
 	IsDispatchQueueFull(index int) bool
-	DispatchQueueMailbox(index int) <-chan packet.Envelope
+	DispatchQueueMailbox(index int) <-chan packet.PacketWithCycle
 }
 
 // FIFO implements Flow by draining packets in the order they arrive. It uses a
@@ -96,7 +96,7 @@ func (f *FIFO) ID() int {
 }
 
 // Mailbox exposes the send-only channel so links can inject envelopes.
-func (f *FIFO) Mailbox() chan<- packet.Envelope {
+func (f *FIFO) Mailbox() chan<- packet.PacketWithCycle {
 	return f.inQueue.Mailbox()
 }
 
@@ -195,7 +195,7 @@ func (f *FIFO) Emit(pkts ...packet.Packet) {
 	}
 	// Send packets via channel
 	for _, pkt := range pkts {
-		env := packet.Envelope{
+		env := packet.PacketWithCycle{
 			Cycle:  f.currentCycle,
 			Packet: pkt,
 		}
@@ -381,7 +381,7 @@ func (f *FIFO) IsDispatchQueueFull(index int) bool {
 
 // DispatchQueueMailbox returns the receive-only channel for the specified dispatch queue.
 // This allows Link to receive packets from the dispatch queue via channel.
-func (f *FIFO) DispatchQueueMailbox(index int) <-chan packet.Envelope {
+func (f *FIFO) DispatchQueueMailbox(index int) <-chan packet.PacketWithCycle {
 	if dq := f.getDispatchQueue(index); dq != nil {
 		return dq.ReceiveMailbox()
 	}

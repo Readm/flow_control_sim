@@ -7,7 +7,7 @@ import "github.com/Readm/flow_sim/internal/dataflow/packet"
 // - out_queue: for staging processed packets (link should be nil)
 // - dispatch_queue: for routing packets to specific links (link should be set)
 type Queue struct {
-	mailbox           chan packet.Envelope
+	mailbox           chan packet.PacketWithCycle
 	sendFinishedCycle uint64      // Only used by dispatch_queue
 	link              interface{} // Associated Link (only used by dispatch_queue, use interface{} to avoid circular dependency)
 }
@@ -19,7 +19,7 @@ func NewQueue(capacity int, link interface{}) *Queue {
 		capacity = 16 // Default capacity
 	}
 	return &Queue{
-		mailbox: make(chan packet.Envelope, capacity),
+		mailbox: make(chan packet.PacketWithCycle, capacity),
 		link:    link,
 	}
 }
@@ -56,13 +56,13 @@ func (q *Queue) Link() interface{} {
 
 // Mailbox returns the send-only channel for this queue.
 // This provides a unified interface for sending packets via channel.
-func (q *Queue) Mailbox() chan<- packet.Envelope {
+func (q *Queue) Mailbox() chan<- packet.PacketWithCycle {
 	return q.mailbox
 }
 
 // ReceiveMailbox returns the receive-only channel for this queue.
 // This allows receivers to read packets from the queue via channel.
-func (q *Queue) ReceiveMailbox() <-chan packet.Envelope {
+func (q *Queue) ReceiveMailbox() <-chan packet.PacketWithCycle {
 	return q.mailbox
 }
 

@@ -5,16 +5,16 @@ import (
 )
 
 // PacketWithCycle represents a packet with its associated cycle.
-// It is an alias for packet.Envelope.
-type PacketWithCycle = packet.Envelope
+// It is an alias for packet.PacketWithCycle.
+type PacketWithCycle = packet.PacketWithCycle
 
-// ASyncPort is a bidirectional interface for synchronous communication between Flow and Link components.
-// A single ASyncPort instance provides both upstream and downstream operations:
+// CyclePort is a bidirectional interface for cycle-based synchronous communication between Flow and Link components.
+// A single CyclePort instance provides both upstream and downstream operations:
 // - Upstream component (e.g., Flow0) uses upstream operations to send packets and check downstream readiness.
 // - Downstream component (e.g., Flow1) uses downstream operations to receive packets and wait for upstream completion.
 // This bidirectional design allows the same port to be used from both perspectives, enabling flexible
 // composition of Flow and Link components in a dataflow graph.
-type ASyncPort interface {
+type CyclePort interface {
 	// ===== Upstream Operations =====
 	// These methods are called by the upstream component (the sender).
 

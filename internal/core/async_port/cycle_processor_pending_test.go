@@ -11,13 +11,13 @@ func TestPendingPacketsIsolation(t *testing.T) {
 	t.Parallel()
 
 	// Create two processors with separate DefaultProcessor instances
-	upstreamPort1 := NewPort(8)
-	downstreamPort1 := NewPort(8)
+	upstreamPort1 := NewCyclePort(8)
+	downstreamPort1 := NewCyclePort(8)
 	proc1 := &DefaultProcessor{} // Separate instance
 	processor1 := NewCycleProcessor(upstreamPort1, downstreamPort1, proc1)
 
-	upstreamPort2 := NewPort(8)
-	downstreamPort2 := NewPort(8)
+	upstreamPort2 := NewCyclePort(8)
+	downstreamPort2 := NewCyclePort(8)
 	proc2 := &DefaultProcessor{} // Separate instance
 	processor2 := NewCycleProcessor(upstreamPort2, downstreamPort2, proc2)
 
@@ -93,12 +93,12 @@ func TestPendingPacketsSharing(t *testing.T) {
 	// Create two processors sharing the SAME DefaultProcessor instance
 	sharedProc := &DefaultProcessor{} // Shared instance
 
-	upstreamPort1 := NewPort(8)
-	downstreamPort1 := NewPort(8)
+	upstreamPort1 := NewCyclePort(8)
+	downstreamPort1 := NewCyclePort(8)
 	processor1 := NewCycleProcessor(upstreamPort1, downstreamPort1, sharedProc)
 
-	upstreamPort2 := NewPort(8)
-	downstreamPort2 := NewPort(8)
+	upstreamPort2 := NewCyclePort(8)
+	downstreamPort2 := NewCyclePort(8)
 	processor2 := NewCycleProcessor(upstreamPort2, downstreamPort2, sharedProc) // Same processor instance
 
 	// Set initial state

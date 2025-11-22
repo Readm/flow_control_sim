@@ -133,5 +133,5 @@ echo ""
 # 使用 cloc 显示详细统计
 if command -v cloc &> /dev/null; then
     echo "=== 详细统计（cloc）==="
-    cloc --exclude-dir=tests,vendor --exclude-ext=test.go . 2>/dev/null | grep -E "^Go|^SUM" | head -2
+    cloc --exclude-dir=tests,vendor --exclude-ext=test.go,example.go . 2>/dev/null | grep -E "^Go|^SUM" | head -2
 fi
