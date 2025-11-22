@@ -1,4 +1,4 @@
-package async_port
+package cycle_port
 
 import (
 	"testing"

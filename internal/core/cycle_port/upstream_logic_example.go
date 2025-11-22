@@ -1,4 +1,4 @@
-package async_port
+package cycle_port
 
 import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
