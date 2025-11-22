@@ -57,8 +57,10 @@ func (cp *CycleProcessor) ProcessCycle(cycle int) error {
 	var updateUpstreamReady func(cycle int, ready bool)
 	if upstreamPort, ok := cp.upstreamPort.(*CyclePortImpl); ok {
 		updateUpstreamReady = upstreamPort.UpdateReady
+	} else if multiUpstream, ok := cp.upstreamPort.(*MultiUpstreamPort); ok {
+		updateUpstreamReady = multiUpstream.UpdateReady
 	} else {
-		// If upstreamPort is not a *CyclePortImpl (e.g., a mock), provide a no-op function
+		// If upstreamPort is not a *CyclePortImpl or *MultiUpstreamPort (e.g., a mock), provide a no-op function
 		updateUpstreamReady = func(cycle int, ready bool) {}
 	}
 
@@ -91,6 +93,11 @@ func (cp *CycleProcessor) ProcessCycle(cycle int) error {
 		_, configured := upstreamPort.ReadyNonBlocking(cycle + 1)
 		if !configured {
 			panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
+		}
+	} else if multiUpstream, ok := cp.upstreamPort.(*MultiUpstreamPort); ok {
+		_, configured := multiUpstream.ReadyNonBlocking(cycle + 1)
+		if !configured {
+			panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in all upstream ports. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 		}
 	}
 
