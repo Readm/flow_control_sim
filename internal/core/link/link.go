@@ -26,17 +26,16 @@ func (lcp *LinkCycleProcessor) ProcessCycle(cycle int) error {
 	// Wait for upstream Done >= cycle-latency
 	// This allows Link to start processing earlier, utilizing the latency buffer
 	targetWaitCycle := cycle - lcp.latency
-	if targetWaitCycle < -1 {
-		targetWaitCycle = -1
-	}
 	lcp.upstreamPort.WaitForDone(targetWaitCycle)
 
 	// Prepare updateUpstreamReady function
 	var updateUpstreamReady func(cycle int, ready bool)
-	if upstreamPort, ok := lcp.upstreamPort.(*cycle_port.CyclePortImpl); ok {
-		updateUpstreamReady = upstreamPort.UpdateReady
-	} else if multiUpstream, ok := lcp.upstreamPort.(*cycle_port.MultiUpstreamPort); ok {
-		updateUpstreamReady = multiUpstream.UpdateReady
+	if lcp.upstreamPort != nil {
+		if updater, ok := lcp.upstreamPort.(interface{ UpdateReady(int, bool) }); ok && updater != nil {
+			updateUpstreamReady = updater.UpdateReady
+		} else {
+			panic("upstreamPort does not implement UpdateReady interface")
+		}
 	} else {
 		updateUpstreamReady = func(cycle int, ready bool) {}
 	}
@@ -58,15 +57,12 @@ func (lcp *LinkCycleProcessor) ProcessCycle(cycle int) error {
 	}
 
 	// Assert that cycle+1 has been configured in upstream port
-	if upstreamPort, ok := lcp.upstreamPort.(*cycle_port.CyclePortImpl); ok {
-		_, configured := upstreamPort.ReadyNonBlocking(cycle + 1)
-		if !configured {
-			panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
-		}
-	} else if multiUpstream, ok := lcp.upstreamPort.(*cycle_port.MultiUpstreamPort); ok {
-		_, configured := multiUpstream.ReadyNonBlocking(cycle + 1)
-		if !configured {
-			panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in all upstream ports. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
+	if lcp.upstreamPort != nil {
+		if checker, ok := lcp.upstreamPort.(interface{ ReadyNonBlocking(int) (bool, bool) }); ok && checker != nil {
+			_, configured := checker.ReadyNonBlocking(cycle + 1)
+			if !configured {
+				panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
+			}
 		}
 	}
 
@@ -106,9 +102,6 @@ type LinkPacketProcessor struct {
 // NewLinkPacketProcessor creates a new LinkPacketProcessor.
 func NewLinkPacketProcessor(link *Link) *LinkPacketProcessor {
 	slotCount := link.latency
-	if slotCount == 0 {
-		slotCount = 1
-	}
 	slots := make([][]cycle_port.PacketWithCycle, slotCount)
 	return &LinkPacketProcessor{
 		link:           link,
@@ -210,6 +203,7 @@ doneProcessing:
 	setDone(cycle)
 
 	// Notify upstream that we are ready for next cycle using waitGroup to wait for completion
+	// TODO: This may remove to further optimization
 	wg.Wait()
 }
 
@@ -221,11 +215,11 @@ doneProcessing:
 // - latency: number of cycles for packet delivery (defaults to 1 if 0)
 // - bandwidth: maximum packets per cycle (defaults to 1 if 0)
 func NewLink(sourceID int, targetID int, upstreamPort cycle_port.CyclePort, downstreamPort cycle_port.CyclePort, latency int, bandwidth int) *Link {
-	if latency == 0 {
-		latency = 1
+	if latency < 0 {
+		panic("latency must not be negative")
 	}
-	if bandwidth == 0 {
-		bandwidth = 1
+	if bandwidth <= 0 {
+		panic("bandwidth must be positive")
 	}
 	if upstreamPort == nil {
 		panic("Link requires an upstream port")
