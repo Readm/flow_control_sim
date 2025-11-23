@@ -41,8 +41,8 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 	nodeB.Flows()[0].AddOutPort(flowBOutPort)
 
 	// Create links with CyclePort
-	linkAB := link.NewLink(nodeA.ID(), nodeB.ID(), []cycle_port.CyclePort{flowAOutPort}, nodeB.Flows()[0].InPort(), linkCycles, 1)
-	linkBA := link.NewLink(nodeB.ID(), nodeA.ID(), []cycle_port.CyclePort{flowBOutPort}, nodeA.Flows()[0].InPort(), linkCycles, 1)
+	linkAB := link.NewLink(nodeA.ID(), nodeB.ID(), flowAOutPort, nodeB.Flows()[0].InPort(), linkCycles, 1)
+	linkBA := link.NewLink(nodeB.ID(), nodeA.ID(), flowBOutPort, nodeA.Flows()[0].InPort(), linkCycles, 1)
 
 	// Initialize downstream ready state
 	if flowAInPortImpl, ok := nodeA.Flows()[0].InPort().(*cycle_port.CyclePortImpl); ok {
@@ -91,7 +91,9 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 		t.Fatalf("expected runtime < %v, got %v", serialEstimate, duration)
 	}
 
-	expectedPackets := int(cycles - linkCycles)
+	expectedReceived := int(cycles - linkCycles)
+	expectedEmitted := int(cycles - 1)
+	expectedPackets := expectedReceived + expectedEmitted
 	if got := nodeA.processedCount(); got != expectedPackets {
 		t.Fatalf("nodeA processed %d packets, want %d", got, expectedPackets)
 	}
@@ -115,6 +117,16 @@ type flowNode struct {
 
 func newFlowNode(id, peerID int, mailboxSize int, tracker *concurrencyTracker, workload time.Duration, totalCycles uint64) *flowNode {
 	f := flow.NewFIFO(id, mailboxSize)
+	// Add router hook to prevent infinite loops (consume if TargetID == id)
+	f.SetRouterHook(func(pkt packet.Packet, outPorts []interface{}, topology interface{}) int {
+		if pkt.TargetID == id {
+			return -1 // Consume (do not forward)
+		}
+		if len(outPorts) > 0 {
+			return 0 // Forward to peer
+		}
+		return -1
+	})
 	return &flowNode{
 		id:          id,
 		peerID:      peerID,

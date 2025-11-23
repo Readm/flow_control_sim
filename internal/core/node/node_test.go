@@ -99,7 +99,7 @@ func TestNodeWithSingleFlow(t *testing.T) {
 	flow0.AddOutPort(outPort)
 	inPort := flow0.InPort()
 
-	link := link.NewLink(0, 1, []cycle_port.CyclePort{outPort}, inPort, 1, 1)
+	link := link.NewLink(0, 1, outPort, inPort, 1, 1)
 	pkt := packet.Packet{
 		SourceID: 0,
 		TargetID: 1,
@@ -150,7 +150,7 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 		flow.AddOutPort(outPort)
 		inPort := flow.InPort()
 
-		links[i] = link.NewLink(0, flow.ID(), []cycle_port.CyclePort{outPort}, inPort, 1, 1)
+		links[i] = link.NewLink(0, flow.ID(), outPort, inPort, 1, 1)
 
 		// Initialize upstream DoneUntil for flow (no upstream, so set to 0)
 		flow.InPort().SetDoneUntil(0)
@@ -201,7 +201,7 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 		flow.AddOutPort(outPort)
 		inPort := flow.InPort()
 
-		links[i] = link.NewLink(0, flow.ID(), []cycle_port.CyclePort{outPort}, inPort, 1, 1)
+		links[i] = link.NewLink(0, flow.ID(), outPort, inPort, 1, 1)
 
 		// Initialize upstream DoneUntil for flow (no upstream, so set to 0)
 		flow.InPort().SetDoneUntil(0)
@@ -256,7 +256,18 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 	flow0.AddOutPort(outPort)
 	inPort := flow0.InPort()
 
-	link := link.NewLink(0, flow0.ID(), []cycle_port.CyclePort{outPort}, inPort, 1, 1)
+	link := link.NewLink(0, flow0.ID(), outPort, inPort, 1, 1)
+
+	// Fix: prevent re-circulation of packets
+	flow0.SetRouterHook(func(pkt packet.Packet, outPorts []interface{}, topology interface{}) int {
+		if pkt.TargetID == flow0.ID() {
+			return -1
+		}
+		if len(outPorts) > 0 {
+			return 0
+		}
+		return -1
+	})
 
 	// Initialize upstream DoneUntil for flow (no upstream, so set to 0)
 	flow0.InPort().SetDoneUntil(0)
@@ -311,7 +322,7 @@ func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
 	outPort := cycle_port.NewCyclePort(8)
 	f.AddOutPort(outPort)
 	targetInPort := targetFlow.InPort()
-	link := link.NewLink(1, 2, []cycle_port.CyclePort{outPort}, targetInPort, 1, 10)
+	link := link.NewLink(1, 2, outPort, targetInPort, 1, 10)
 
 	// Initialize upstream DoneUntil for flows
 	f.InPort().SetDoneUntil(0)

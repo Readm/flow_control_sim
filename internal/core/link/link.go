@@ -1,19 +1,21 @@
 package link
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/Readm/flow_sim/internal/core/cycle_port"
 )
 
 // Link represents a directed edge in the topology using CyclePort.
-// Link can aggregate multiple upstream Flow output ports and forward to a single downstream Flow.
+// Link receives packets from an upstream CyclePort (which can be a single port or an aggregator)
+// and forwards them to a single downstream Flow.
 // It implements latency and bandwidth constraints.
 type Link struct {
 	sourceID          int
 	targetID          int
-	upstreamPorts     []cycle_port.CyclePort // Multiple upstream ports from source Flows
-	downstreamPort    cycle_port.CyclePort   // Single downstream port to target Flow
+	upstreamPort      cycle_port.CyclePort // Single upstream port (may be an aggregator)
+	downstreamPort    cycle_port.CyclePort // Single downstream port to target Flow
 	processor         *cycle_port.CycleProcessor
 	packetProc        *LinkPacketProcessor
 	latency           uint64
@@ -61,75 +63,67 @@ func (l *LinkPacketProcessor) ProcessPackets(
 		defer wg.Done()
 		updateUpstreamReady(cycle+1, checkReady(cycle+1))
 	}()
-	// Collect all incoming packets
-	var incomingPackets []cycle_port.PacketWithCycle
 
-	// Process pending packets first
-	incomingPackets = append(incomingPackets, l.pendingPackets...)
+	newPendingPackets := make([]cycle_port.PacketWithCycle, 0)
 
-	// Receive all available packets from channel (non-blocking, drain all)
+	// Helper to add packet to slot
+	addToSlot := func(pkt cycle_port.PacketWithCycle, targetCycle int) {
+		// Calculate target slot index with backpressure adjustment.
+		// Design guarantee: totalBackpressure will never exceed targetCycle (in practice)
+		targetSlotIndex := (targetCycle - int(l.link.totalBackpressure)) % len(l.slots)
+		// Check bandwidth limit for the target slot
+		if len(l.slots[targetSlotIndex]) >= int(l.link.bandwidth) {
+			panic(fmt.Sprintf("Slot is full (bandwidth limit exceeded) for targetSlotIndex %d at cycle %d", targetSlotIndex, cycle))
+		} else {
+			l.slots[targetSlotIndex] = append(l.slots[targetSlotIndex], pkt)
+		}
+	}
+
+	// 1. Process pending packets (already have correct TargetCycle)
+	for _, pkt := range l.pendingPackets {
+		targetCycle := int(pkt.Cycle)
+		// Check if it fits in window
+		// The ring buffer has 'latency' slots, covering [cycle, cycle + latency - 1].
+		// If targetCycle >= cycle + latency, it doesn't fit in current window.
+		if targetCycle-cycle >= int(l.link.latency) {
+			newPendingPackets = append(newPendingPackets, pkt)
+			continue
+		}
+		addToSlot(pkt, targetCycle)
+	}
+
+	// 2. Receive and process new packets from channel
 	for {
 		select {
 		case pkt := <-receiveChan:
-			incomingPackets = append(incomingPackets, pkt)
+			sourceCycle := int(pkt.Cycle)
+			targetCycle := sourceCycle + int(l.link.latency)
+
+			// Create packet with target cycle
+			delayedPkt := cycle_port.PacketWithCycle{
+				Cycle:  uint64(targetCycle),
+				Packet: pkt.Packet,
+			}
+
+			// Check if it fits in window
+			if targetCycle-cycle >= int(l.link.latency) {
+				newPendingPackets = append(newPendingPackets, delayedPkt)
+				continue
+			}
+			addToSlot(delayedPkt, targetCycle)
+
 		default:
-			goto process
+			goto doneProcessing
 		}
 	}
 
-process:
-	// Process incoming packets: apply latency and bandwidth constraints
-	newPendingPackets := make([]cycle_port.PacketWithCycle, 0)
-
-	// Process new incoming packets: add latency and put into slots
-	for _, pkt := range incomingPackets {
-		sourceCycle := int(pkt.Cycle)
-		targetCycle := sourceCycle + int(l.link.latency)
-		if cycle < targetCycle {
-			panic("Past cycle detected in link processing")
-		}
-
-		// Create packet with target cycle
-		delayedPkt := cycle_port.PacketWithCycle{
-			Cycle:  uint64(targetCycle),
-			Packet: pkt.Packet,
-		}
-
-		// Future cycle: put into slot
-		// If the target cycle is more than or equal to one full loop ahead, treat as after wraparound and put into pendingPackets.
-		if targetCycle-cycle >= int(l.link.latency)-1 {
-			newPendingPackets = append(newPendingPackets, delayedPkt)
-			continue
-		}
-		// Calculate target slot index with backpressure adjustment.
-		// Design guarantee: totalBackpressure will never exceed targetCycle because:
-		// 1. totalBackpressure only increases when downstream is not ready for the current cycle
-		// 2. targetCycle = sourceCycle + latency, and we only process packets where cycle >= targetCycle
-		// 3. Therefore, targetCycle >= cycle >= totalBackpressure (in practice)
-		// This ensures the subtraction (targetCycle - totalBackpressure) is always non-negative.
-		targetSlotIndex := (targetCycle - int(l.link.totalBackpressure)) % len(l.slots)
-		// Check bandwidth limit for the target slot
-		// Design constraint: slot capacity = bandwidth. If slot is full, panic to enforce bandwidth limit.
-		// Callers must ensure packets don't exceed bandwidth per cycle.
-		if len(l.slots[targetSlotIndex]) >= int(l.link.bandwidth) {
-			panic("Slot is full (bandwidth limit exceeded)")
-		} else {
-			l.slots[targetSlotIndex] = append(l.slots[targetSlotIndex], delayedPkt)
-		}
-	}
-
+doneProcessing:
 	// Update pending packets
 	l.pendingPackets = newPendingPackets
 
 	// If the downstream is ready, send the packets from the slots.
 	if checkReady(cycle) {
 		// Calculate slot index with backpressure adjustment.
-		// Design guarantee: totalBackpressure will never exceed cycle because:
-		// 1. totalBackpressure only increases when downstream is not ready
-		// 2. We only process cycle N when upstream DoneUntil >= N
-		// 3. totalBackpressure tracks how many cycles we've been blocked
-		// 4. In practice, totalBackpressure <= cycle (blocked cycles <= current cycle)
-		// This ensures the subtraction (cycle - totalBackpressure) is always non-negative.
 		slotIndex := int(cycle-int(l.link.totalBackpressure)) % len(l.slots)
 		for _, pkt := range l.slots[slotIndex] {
 			pkt.Cycle = uint64(cycle)
@@ -145,32 +139,31 @@ process:
 	setDoneUntil(cycle + 1)
 
 	// Notify upstream that we are ready for next cycle using waitGroup to wait for completion
-
 	wg.Wait()
 }
 
-// NewLink creates a link with the specified upstream ports and downstream port.
+// NewLink creates a link with the specified upstream port and downstream port.
 // - sourceID: ID of the source node
 // - targetID: ID of the target node
-// - upstreamPorts: list of CyclePorts from source Flows (can be multiple)
+// - upstreamPort: CyclePort from source Flows (can be a single port or an aggregator)
 // - downstreamPort: CyclePort to target Flow (single)
 // - latency: number of cycles for packet delivery (defaults to 1 if 0)
 // - bandwidth: maximum packets per cycle (defaults to 1 if 0)
-func NewLink(sourceID int, targetID int, upstreamPorts []cycle_port.CyclePort, downstreamPort cycle_port.CyclePort, latency uint64, bandwidth uint64) *Link {
+func NewLink(sourceID int, targetID int, upstreamPort cycle_port.CyclePort, downstreamPort cycle_port.CyclePort, latency uint64, bandwidth uint64) *Link {
 	if latency == 0 {
 		latency = 1
 	}
 	if bandwidth == 0 {
 		bandwidth = 1
 	}
-	if len(upstreamPorts) == 0 {
-		panic("Link requires at least one upstream port")
+	if upstreamPort == nil {
+		panic("Link requires an upstream port")
 	}
 
 	link := &Link{
 		sourceID:          sourceID,
 		targetID:          targetID,
-		upstreamPorts:     upstreamPorts,
+		upstreamPort:      upstreamPort,
 		downstreamPort:    downstreamPort,
 		latency:           latency,
 		bandwidth:         bandwidth,
@@ -179,14 +172,6 @@ func NewLink(sourceID int, targetID int, upstreamPorts []cycle_port.CyclePort, d
 
 	// Create packet processor
 	link.packetProc = NewLinkPacketProcessor(link)
-
-	// Create multi-upstream port if multiple upstream ports
-	var upstreamPort cycle_port.CyclePort
-	if len(upstreamPorts) == 1 {
-		upstreamPort = upstreamPorts[0]
-	} else {
-		upstreamPort = cycle_port.NewMultiUpstreamPort(upstreamPorts)
-	}
 
 	// Create cycle processor
 	link.processor = cycle_port.NewCycleProcessor(upstreamPort, downstreamPort, link.packetProc)
@@ -219,9 +204,9 @@ func (l *Link) ProcessCycle(cycle int) error {
 	return l.processor.ProcessCycle(cycle)
 }
 
-// UpstreamPorts returns all upstream ports.
-func (l *Link) UpstreamPorts() []cycle_port.CyclePort {
-	return l.upstreamPorts
+// UpstreamPort returns the upstream port.
+func (l *Link) UpstreamPort() cycle_port.CyclePort {
+	return l.upstreamPort
 }
 
 // DownstreamPort returns the downstream port.

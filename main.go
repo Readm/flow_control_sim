@@ -90,6 +90,16 @@ type flowNode struct {
 
 func newFlowNode(id, peerID int, totalCycles uint64) *flowNode {
 	f := flow.NewFIFO(id, mailboxSize)
+	// Add router hook to prevent infinite loops (consume if TargetID == id)
+	f.SetRouterHook(func(pkt packet.Packet, outPorts []interface{}, topology interface{}) int {
+		if pkt.TargetID == id {
+			return -1 // Consume (do not forward)
+		}
+		if len(outPorts) > 0 {
+			return 0 // Forward to peer
+		}
+		return -1
+	})
 	return &flowNode{
 		id:          id,
 		peerID:      peerID,
@@ -149,8 +159,8 @@ func createManagerBuilder() controller.ManagerBuilder {
 		node1.Flows()[0].AddOutPort(flow1OutPort)
 
 		// Create bidirectional links with 5 cycle latency and bandwidth 1
-		linkAB := link.NewLink(0, 1, []cycle_port.CyclePort{flow0OutPort}, node1.Flows()[0].InPort(), linkLatency, linkBandwidth)
-		linkBA := link.NewLink(1, 0, []cycle_port.CyclePort{flow1OutPort}, node0.Flows()[0].InPort(), linkLatency, linkBandwidth)
+		linkAB := link.NewLink(0, 1, flow0OutPort, node1.Flows()[0].InPort(), linkLatency, linkBandwidth)
+		linkBA := link.NewLink(1, 0, flow1OutPort, node0.Flows()[0].InPort(), linkLatency, linkBandwidth)
 
 		graph := map[int][]*link.Link{
 			0: {linkAB}, // node 0 -> node 1

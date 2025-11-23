@@ -205,6 +205,13 @@ func (p *CyclePortImpl) UpdateReady(cycle int, ready bool) {
 	}
 }
 
+// SetChannel replaces the internal packet channel.
+// This is used for optimizing multi-upstream aggregation by sharing a single channel.
+// WARNING: This should only be called during initialization before any processing starts.
+func (p *CyclePortImpl) SetChannel(ch chan PacketWithCycle) {
+	p.packetChan = ch
+}
+
 // RemoveReadyBefore removes readyMap entries for cycles less than the given cycle.
 // Called by downstream to clean up old entries that are no longer needed.
 // This is useful for memory management when processing many cycles.
