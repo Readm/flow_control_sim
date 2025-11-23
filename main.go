@@ -16,9 +16,10 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/Readm/flow_sim/internal/config"
+	"github.com/Readm/flow_sim/internal/core/cycle_port"
 	"github.com/Readm/flow_sim/internal/core/link"
-	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/network"
+	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/dataflow/flow"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 	"github.com/Readm/flow_sim/pkg/controller"
@@ -88,7 +89,7 @@ type flowNode struct {
 }
 
 func newFlowNode(id, peerID int, totalCycles uint64) *flowNode {
-	f := flow.NewFIFO(id, mailboxSize, 0, 0, nil, 0)
+	f := flow.NewFIFO(id, mailboxSize)
 	return &flowNode{
 		id:          id,
 		peerID:      peerID,
@@ -106,12 +107,7 @@ func (n *flowNode) Flows() []flow.Flow {
 }
 
 func (n *flowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
-	// Process incoming packets
-	if err := n.flow.Tick(ctx, cycle); err != nil {
-		return err
-	}
-
-	// Send packet to peer if not the last cycle
+	// Send packet to peer if not the last cycle (before processing, so it's included in this cycle)
 	if cycle+1 < n.totalCycles {
 		payload := fmt.Sprintf("node-%d-cycle-%d", n.id, cycle)
 		n.flow.Emit(packet.Packet{
@@ -119,6 +115,11 @@ func (n *flowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 			TargetID: n.peerID,
 			Payload:  payload,
 		})
+	}
+
+	// Process incoming packets
+	if err := n.flow.ProcessCycle(int(cycle)); err != nil {
+		return err
 	}
 
 	return nil
@@ -139,13 +140,17 @@ func createManagerBuilder() controller.ManagerBuilder {
 
 		nodes := []node.Node{node0, node1}
 
-		// Add dispatch queues to flows for sending to peer
-		node0.Flows()[0].AddDispatchQueue(node1.Flows()[0], 16)
-		node1.Flows()[0].AddDispatchQueue(node0.Flows()[0], 16)
+		// Create output ports for flows
+		flow0OutPort := cycle_port.NewCyclePort(mailboxSize)
+		flow1OutPort := cycle_port.NewCyclePort(mailboxSize)
+
+		// Connect flows to output ports
+		node0.Flows()[0].AddOutPort(flow0OutPort)
+		node1.Flows()[0].AddOutPort(flow1OutPort)
 
 		// Create bidirectional links with 5 cycle latency and bandwidth 1
-		linkAB := link.NewLink(0, node1.Flows()[0], node0.Flows()[0], 0, linkLatency, linkBandwidth, 0)
-		linkBA := link.NewLink(1, node0.Flows()[0], node1.Flows()[0], 0, linkLatency, linkBandwidth, 0)
+		linkAB := link.NewLink(0, 1, []cycle_port.CyclePort{flow0OutPort}, node1.Flows()[0].InPort(), linkLatency, linkBandwidth)
+		linkBA := link.NewLink(1, 0, []cycle_port.CyclePort{flow1OutPort}, node0.Flows()[0].InPort(), linkLatency, linkBandwidth)
 
 		graph := map[int][]*link.Link{
 			0: {linkAB}, // node 0 -> node 1
@@ -177,9 +182,9 @@ type webServer struct {
 	hub *wsHub
 
 	// Persistent simulation state
-	simMu      sync.Mutex
-	manager    *network.Manager
-	recorder   *recorder.Recorder
+	simMu        sync.Mutex
+	manager      *network.Manager
+	recorder     *recorder.Recorder
 	currentCycle uint64
 	isRunning    bool
 }
@@ -193,13 +198,13 @@ func newWebServer(staticDir string, ctrl controller.SimulationController) (*webS
 	}
 
 	srv := &webServer{
-		controller:   ctrl,
-		staticDir:    staticDir,
+		controller:    ctrl,
+		staticDir:     staticDir,
 		defaultCycles: defaultTotalCycles,
 		defaultConfig: defaultEntityConfig(),
 		hub:           newHub(),
-		currentCycle: 0,
-		isRunning:    false,
+		currentCycle:  0,
+		isRunning:     false,
 	}
 
 	srv.mux = http.NewServeMux()
@@ -560,8 +565,8 @@ func createInitialFrame() *frame.Frame {
 					"processed": 0,
 				},
 				// Explicitly set backpressure fields to false
-				InQueueBackpressure:  false,
-				OutQueueBackpressure: false,
+				InQueueBackpressure:    false,
+				OutQueueBackpressure:   false,
 				DownstreamBackpressure: false,
 			},
 			{
@@ -572,8 +577,8 @@ func createInitialFrame() *frame.Frame {
 					"processed": 0,
 				},
 				// Explicitly set backpressure fields to false
-				InQueueBackpressure:  false,
-				OutQueueBackpressure: false,
+				InQueueBackpressure:    false,
+				OutQueueBackpressure:   false,
 				DownstreamBackpressure: false,
 			},
 		},
@@ -648,4 +653,3 @@ func (h *wsHub) closeAll() {
 	}
 	h.clients = make(map[*websocket.Conn]struct{})
 }
-

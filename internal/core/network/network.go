@@ -89,11 +89,11 @@ func (m *Manager) Run(ctx context.Context, cycles uint64) error {
 		if err := m.dispatchCycle(ctx, cycle, delay); err != nil {
 			return err
 		}
-		
+
 		// Advance links again to allow same-cycle routing
 		// This ensures packets routed during dispatchCycle can be transmitted immediately
 		m.advanceLinks(cycle)
-		
+
 		if m.cycleHook != nil {
 			m.cycleHook.OnCycleEnd(cycle, m.order, m.links)
 		}
@@ -109,7 +109,7 @@ func (m *Manager) Run(ctx context.Context, cycles uint64) error {
 
 func (m *Manager) advanceLinks(cycle uint64) {
 	for _, l := range m.links {
-		l.Advance(cycle)
+		_ = l.ProcessCycle(int(cycle))
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Readm/flow_sim/internal/core/cycle_port"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/dataflow/flow"
@@ -17,8 +18,8 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 	t.Parallel()
 
 	const (
-		cycles      = 6  // Increased to account for dispatch queue and routing delay
-		linkCycles  = 2  // Account for both link latency and routing delay
+		cycles      = 6 // Increased to account for dispatch queue and routing delay
+		linkCycles  = 2 // Account for both link latency and routing delay
 		nodeWork    = 35 * time.Millisecond
 		testTimeout = time.Second
 		mailboxSize = 4
@@ -31,16 +32,36 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 	nodeA := newFlowNode(0, 1, mailboxSize, tracker, nodeWork, cycles)
 	nodeB := newFlowNode(1, 0, mailboxSize, tracker, nodeWork, cycles)
 
-	// Add dispatch queues to flows for sending to peer
-	nodeA.Flows()[0].AddDispatchQueue(nodeB.Flows()[0], 16)
-	nodeB.Flows()[0].AddDispatchQueue(nodeA.Flows()[0], 16)
+	// Create output ports for flows
+	flowAOutPort := cycle_port.NewCyclePort(mailboxSize)
+	flowBOutPort := cycle_port.NewCyclePort(mailboxSize)
 
-	linkAB := link.NewLink(nodeA.ID(), nodeB.Flows()[0], nodeA.Flows()[0], 0, linkCycles, 1, 0)
-	linkBA := link.NewLink(nodeB.ID(), nodeA.Flows()[0], nodeB.Flows()[0], 0, linkCycles, 1, 0)
-	
-	// Set noBackpressureUntil to allow packet transmission
-	linkAB.SetNoBackpressureUntil(cycles + 10)
-	linkBA.SetNoBackpressureUntil(cycles + 10)
+	// Connect flows to output ports
+	nodeA.Flows()[0].AddOutPort(flowAOutPort)
+	nodeB.Flows()[0].AddOutPort(flowBOutPort)
+
+	// Create links with CyclePort
+	linkAB := link.NewLink(nodeA.ID(), nodeB.ID(), []cycle_port.CyclePort{flowAOutPort}, nodeB.Flows()[0].InPort(), linkCycles, 1)
+	linkBA := link.NewLink(nodeB.ID(), nodeA.ID(), []cycle_port.CyclePort{flowBOutPort}, nodeA.Flows()[0].InPort(), linkCycles, 1)
+
+	// Initialize downstream ready state
+	if flowAInPortImpl, ok := nodeA.Flows()[0].InPort().(*cycle_port.CyclePortImpl); ok {
+		flowAInPortImpl.SetReadyUntil(int(cycles) + 10)
+	}
+	if flowBInPortImpl, ok := nodeB.Flows()[0].InPort().(*cycle_port.CyclePortImpl); ok {
+		flowBInPortImpl.SetReadyUntil(int(cycles) + 10)
+	}
+	flowAOutPort.SetReadyUntil(int(cycles) + 10)
+	flowBOutPort.SetReadyUntil(int(cycles) + 10)
+
+	// Initialize upstream DoneUntil for outPorts (allows Link to start processing)
+	// Link needs upstream DoneUntil >= cycle, so we initialize to 0
+	flowAOutPort.SetDoneUntil(0)
+	flowBOutPort.SetDoneUntil(0)
+
+	// Initialize upstream DoneUntil for flows (no upstream initially)
+	nodeA.Flows()[0].InPort().SetDoneUntil(0)
+	nodeB.Flows()[0].InPort().SetDoneUntil(0)
 
 	graph := map[int][]*link.Link{
 		nodeA.ID(): {linkAB},
@@ -93,9 +114,7 @@ type flowNode struct {
 }
 
 func newFlowNode(id, peerID int, mailboxSize int, tracker *concurrencyTracker, workload time.Duration, totalCycles uint64) *flowNode {
-	// Create flow without dispatch queues initially
-	// Dispatch queue will be added after creating the peer flow
-	f := flow.NewFIFO(id, mailboxSize, 0, 0, nil, 0)
+	f := flow.NewFIFO(id, mailboxSize)
 	return &flowNode{
 		id:          id,
 		peerID:      peerID,
@@ -120,10 +139,7 @@ func (n *flowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 		defer n.tracker.exit()
 	}
 
-	if err := n.flow.Tick(ctx, cycle); err != nil {
-		return err
-	}
-
+	// Send packet to peer if not the last cycle (before processing, so it's included in this cycle)
 	if cycle+1 < n.totalCycles {
 		payload := fmt.Sprintf("node-%d-cycle-%d", n.id, cycle)
 		n.flow.Emit(packet.Packet{
@@ -131,6 +147,16 @@ func (n *flowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 			TargetID: n.peerID,
 			Payload:  payload,
 		})
+	}
+
+	// Initialize upstream DoneUntil if needed (no upstream initially)
+	if n.flow.InPort().GetDoneUntil() < 0 {
+		n.flow.InPort().SetDoneUntil(int(cycle))
+	}
+
+	// Process incoming packets
+	if err := n.flow.ProcessCycle(int(cycle)); err != nil {
+		return err
 	}
 
 	select {

@@ -12,23 +12,23 @@ func NewDispatchQueue(link interface{}, capacity int) *DispatchQueue {
 	return NewQueue(capacity, link)
 }
 
-// RouterHook is a function type that determines which dispatch queue a packet should be routed to.
+// RouterHook is a function type that determines which output port a packet should be routed to.
 // Parameters:
 //   - pkt: the packet to route
-//   - queues: all available dispatch queues
+//   - outPorts: all available output CyclePorts
 //   - topology: network topology information (optional, can be nil)
 //
 // Returns:
-//   - index of the selected dispatch queue, or -1 to discard the packet
-type RouterHook func(pkt packet.Packet, queues []*Queue, topology interface{}) int
+//   - index of the selected output port, or -1 to discard the packet
+type RouterHook func(pkt packet.Packet, outPorts []interface{}, topology interface{}) int
 
-// DefaultRouterHook is the default routing strategy that sends all packets to the first dispatch queue.
+// DefaultRouterHook is the default routing strategy that sends all packets to the first output port.
 // This is suitable when there's only one outgoing link or when no routing decision is needed.
-func DefaultRouterHook(pkt packet.Packet, queues []*Queue, topology interface{}) int {
-	if len(queues) == 0 {
-		return -1 // No dispatch queues available, discard
+func DefaultRouterHook(pkt packet.Packet, outPorts []interface{}, topology interface{}) int {
+	if len(outPorts) == 0 {
+		return -1 // No output ports available, discard
 	}
-	// Send to the first dispatch queue
+	// Send to the first output port
 	return 0
 }
 

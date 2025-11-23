@@ -58,7 +58,7 @@ func TestControllerRunRespectsContext(t *testing.T) {
 
 func TestControllerRunRequiresCycles(t *testing.T) {
 	ctrl := controller.New(func(cfg config.EntityConfig) (*network.Manager, uint64, error) {
-		f := flow.NewFIFO(1, 2, 0, 0, nil, 0)
+		f := flow.NewFIFO(1, 2)
 		n := &mockNode{id: 1, delay: time.Millisecond, flow: f}
 		mgr, err := network.NewManager([]node.Node{n}, map[int][]*link.Link{
 			n.ID(): nil,
@@ -85,7 +85,7 @@ func newTestBuilder(t *testing.T, tickDelay time.Duration) controller.ManagerBui
 		edges := make(map[int][]*link.Link)
 
 		for _, nodeCfg := range cfg.Nodes {
-			f := flow.NewFIFO(nodeCfg.ID, 8, 0, 0, nil, 0)
+			f := flow.NewFIFO(nodeCfg.ID, 8)
 			n := &mockNode{
 				id:        nodeCfg.ID,
 				delay:     tickDelay,
@@ -93,9 +93,9 @@ func newTestBuilder(t *testing.T, tickDelay time.Duration) controller.ManagerBui
 				processed: 0,
 			}
 			nodes = append(nodes, n)
-			edges[n.ID()] = []*link.Link{
-				link.NewLink(n.ID(), n.Flows()[0], nil, 0, 1, 1, 0),
-			}
+			// Note: Links are not created in test builder as they require CyclePort setup
+			// This test doesn't actually use links, so empty edges is fine
+			edges[n.ID()] = []*link.Link{}
 		}
 
 		mgr, err := network.NewManager(nodes, edges)
@@ -123,7 +123,20 @@ func (m *mockNode) Flows() []flow.Flow {
 }
 
 func (m *mockNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
-	if err := m.flow.Tick(ctx, cycle); err != nil {
+	// Initialize upstream DoneUntil (no upstream, so set to current cycle)
+	// Must be >= cycle for ProcessCycle to proceed
+	m.flow.InPort().SetDoneUntil(int(cycle))
+
+	// Send packet to peer if not the last cycle (before processing, so it's included in this cycle)
+	// Note: In a real scenario, this would be sent through a link, but for this test we just emit
+	m.flow.Emit(packet.Packet{
+		SourceID: m.id,
+		TargetID: m.id,
+		Payload:  fmt.Sprintf("cycle-%d", cycle),
+	})
+
+	// Process incoming packets
+	if err := m.flow.ProcessCycle(int(cycle)); err != nil {
 		return err
 	}
 
@@ -133,11 +146,6 @@ func (m *mockNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 	case <-time.After(m.delay):
 	}
 
-	m.flow.Emit(packet.Packet{
-		SourceID: m.id,
-		TargetID: m.id,
-		Payload:  fmt.Sprintf("cycle-%d", cycle),
-	})
 	m.processed++
 	return nil
 }

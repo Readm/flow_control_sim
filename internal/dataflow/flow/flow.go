@@ -1,93 +1,171 @@
 package flow
 
 import (
-	"context"
-
+	"github.com/Readm/flow_sim/internal/core/cycle_port"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// Flow defines the contract for moving packets through a node. Concrete
-// implementations can apply arbitrary policies while conforming to this API.
+// Flow defines the contract for moving packets through a node using CyclePort.
+// Concrete implementations can apply arbitrary policies while conforming to this API.
 type Flow interface {
 	ID() int
-	Mailbox() chan<- packet.PacketWithCycle
-	Tick(ctx context.Context, cycle uint64) error
-	Emit(pkts ...packet.Packet)
+	// ProcessCycle processes a single cycle, receiving packets from upstream and sending to downstream.
+	ProcessCycle(cycle int) error
+	// InPort returns the input CyclePort for receiving packets from upstream Link.
+	InPort() cycle_port.CyclePort
+	// OutPorts returns all output CyclePorts for sending packets to downstream Links.
+	OutPorts() []cycle_port.CyclePort
+	// ProcessedCount returns the number of packets processed lifecycle-wide.
 	ProcessedCount() int
-	// Backpressure methods
-	IsInQueueFull() bool
-	IsOutQueueFull() bool
-	SetDownstreamBackpressure(bool)
-	GetDownstreamBackpressure() bool
-	SetUpstreamBackpressureCallback(func())
-	// Cross-cycle parallel methods
-	CurrentCycle() uint64
-	SetNoBackpressureUntil(uint64)
-	NoBackpressureUntil() uint64
-	AdvanceTo(cycle uint64, linkSFC uint64) error
-	SetUpstreamLink(link interface{}) // Use interface{} to avoid circular dependency
-	// Dispatch queue methods
+	// SetRouterHook sets the routing hook function for determining which outPort to use.
 	SetRouterHook(hook RouterHook)
-	AddDispatchQueue(link interface{}, capacity int)
-	DispatchQueueCount() int
-	DrainDispatchQueue(index int) []packet.Packet
-	DispatchQueueSendFinishedCycle(index int) uint64
-	IsDispatchQueueFull(index int) bool
-	DispatchQueueMailbox(index int) <-chan packet.PacketWithCycle
+	// AddOutPort adds a new output port for a downstream Link.
+	AddOutPort(port cycle_port.CyclePort)
+	// Emit sends packets to output ports. Packets will be routed based on router hook.
+	Emit(pkts ...packet.Packet)
 }
 
-// FIFO implements Flow by draining packets in the order they arrive. It uses a
-// dedicated mailbox channel so links can push envelopes without locking.
+// FlowPacketProcessor implements PacketProcessor for Flow.
+// It handles receiving packets, processing them, and routing to multiple output ports.
+type FlowPacketProcessor struct {
+	flow           *FIFO
+	pendingPackets []cycle_port.PacketWithCycle
+}
+
+// NewFlowPacketProcessor creates a new FlowPacketProcessor.
+func NewFlowPacketProcessor(flow *FIFO) *FlowPacketProcessor {
+	return &FlowPacketProcessor{
+		flow:           flow,
+		pendingPackets: make([]cycle_port.PacketWithCycle, 0),
+	}
+}
+
+// ProcessPackets processes packets for Flow: receive, process, and route to output ports.
+// Note: checkReady and sendPacket are not used here since we route to multiple output ports.
+func (f *FlowPacketProcessor) ProcessPackets(
+	receiveChan <-chan cycle_port.PacketWithCycle,
+	cycle int,
+	checkReady func(int) bool,
+	sendPacket func(cycle_port.PacketWithCycle),
+	setDoneUntil func(int),
+	updateUpstreamReady func(cycle int, ready bool),
+) {
+	// Collect all incoming packets
+	var incomingPackets []packet.Packet
+
+	// Process pending packets first
+	for _, pkt := range f.pendingPackets {
+		// Process the packet (simple FIFO: just add to processed list)
+		incomingPackets = append(incomingPackets, pkt.Packet)
+	}
+
+	// Receive all available packets from channel (non-blocking, drain all)
+	for {
+		select {
+		case pkt := <-receiveChan:
+			incomingPackets = append(incomingPackets, pkt.Packet)
+		default:
+			goto process
+		}
+	}
+
+process:
+	// Add packets from emit queue (from Emit method)
+	incomingPackets = append(incomingPackets, f.flow.emitQueue...)
+	f.flow.emitQueue = nil // Clear emit queue
+
+	// Process all incoming packets (simple FIFO processing)
+	f.flow.processed = append(f.flow.processed, incomingPackets...)
+
+	// Route processed packets to output ports
+	newPendingPackets := make([]cycle_port.PacketWithCycle, 0)
+	// Convert outPorts to []interface{} for router hook
+	outPortsInterface := make([]interface{}, len(f.flow.outPorts))
+	for i, port := range f.flow.outPorts {
+		outPortsInterface[i] = port
+	}
+	for _, pkt := range incomingPackets {
+		// Use router hook to determine which output port to use
+		portIndex := f.flow.routerHook(pkt, outPortsInterface, f.flow.topology)
+		if portIndex < 0 || portIndex >= len(f.flow.outPorts) {
+			// Invalid port index, discard packet
+			continue
+		}
+
+		outPort := f.flow.outPorts[portIndex]
+		pktCycle := cycle
+		env := cycle_port.PacketWithCycle{
+			Cycle:  uint64(pktCycle),
+			Packet: pkt,
+		}
+
+		// Check if downstream is ready for this cycle
+		if outPort.Ready(pktCycle) {
+			// Ready: send immediately
+			outPort.Chan() <- env
+		} else {
+			// Not ready: keep in pending
+			newPendingPackets = append(newPendingPackets, env)
+		}
+	}
+
+	// Update pending packets
+	f.pendingPackets = newPendingPackets
+
+	// Set DoneUntil for all output ports
+	for _, outPort := range f.flow.outPorts {
+		currentDoneUntil := outPort.GetDoneUntil()
+		if currentDoneUntil < cycle+1 {
+			outPort.SetDoneUntil(cycle + 1)
+		}
+	}
+
+	// Notify upstream that we are ready for next cycle
+	updateUpstreamReady(cycle+1, true)
+}
+
+// FIFO implements Flow by draining packets in the order they arrive using CyclePort.
 type FIFO struct {
-	id                           int
-	inQueue                      *Queue // in_queue instance
-	outQueue                     *Queue // out_queue instance
-	incoming                     []packet.Packet
-	processed                    []packet.Packet
-	downstreamBackpressure       bool
-	upstreamBackpressureCallback func()
-	currentCycle                 uint64
-	noBackpressureUntil          uint64
-	upstreamLink                 interface{} // Use interface{} to avoid circular dependency
-	// Dispatch queue fields
-	dispatchQueues []*Queue // dispatch_queue instances
-	routerHook     RouterHook
-	topology       interface{} // Network topology information for Router Hook
+	id         int
+	inPort     cycle_port.CyclePort   // Input port from upstream Link
+	outPorts   []cycle_port.CyclePort // Output ports to downstream Links
+	processor  *cycle_port.CycleProcessor
+	packetProc *FlowPacketProcessor
+	processed  []packet.Packet
+	routerHook RouterHook
+	topology   interface{}     // Network topology information for Router Hook
+	emitQueue  []packet.Packet // Queue for packets to be emitted (from Emit method)
 }
 
-// NewFIFO constructs a FIFO flow with the provided identifier. mailboxSize
-// controls how many envelopes can queue up before backpressure is applied.
-// inQueueCapacity and outQueueCapacity control the capacity limits for backpressure.
-// links: list of links for which to create dispatch queues (optional)
-// dispatchQueueCapacity: capacity of each dispatch queue (defaults to outQueueCapacity).
-// All queues (in_queue, out_queue, dispatch_queue) use the unified Queue implementation.
-func NewFIFO(id int, mailboxSize int, inQueueCapacity int, outQueueCapacity int, links []interface{}, dispatchQueueCapacity int) *FIFO {
-	if mailboxSize <= 0 {
-		mailboxSize = 8
-	}
-	if inQueueCapacity <= 0 {
-		inQueueCapacity = mailboxSize
-	}
-	if outQueueCapacity <= 0 {
-		outQueueCapacity = 16
-	}
-	if dispatchQueueCapacity <= 0 {
-		dispatchQueueCapacity = outQueueCapacity
+// NewFIFO constructs a FIFO flow with the provided identifier.
+// Creates a CyclePort for input and CycleProcessor for processing.
+func NewFIFO(id int, bufferSize int) *FIFO {
+	if bufferSize <= 0 {
+		bufferSize = 8
 	}
 
-	// Create dispatch queues for each link
-	dispatchQueues := make([]*Queue, len(links))
-	for i, link := range links {
-		dispatchQueues[i] = NewQueue(dispatchQueueCapacity, link)
+	// Create input port
+	inPort := cycle_port.NewCyclePort(bufferSize)
+
+	// Create flow instance
+	f := &FIFO{
+		id:         id,
+		inPort:     inPort,
+		outPorts:   make([]cycle_port.CyclePort, 0),
+		routerHook: DefaultRouterHook,
+		processed:  make([]packet.Packet, 0),
+		emitQueue:  make([]packet.Packet, 0),
 	}
 
-	return &FIFO{
-		id:             id,
-		inQueue:        NewQueue(mailboxSize, nil),      // in_queue instance
-		outQueue:       NewQueue(outQueueCapacity, nil), // out_queue instance
-		dispatchQueues: dispatchQueues,
-		routerHook:     DefaultRouterHook, // Use default router hook
-	}
+	// Create packet processor
+	f.packetProc = NewFlowPacketProcessor(f)
+
+	// Create cycle processor (downstream port will be set per packet via router)
+	// For now, we'll use a dummy downstream port that will be replaced in ProcessPackets
+	dummyDownstream := cycle_port.NewCyclePort(bufferSize)
+	f.processor = cycle_port.NewCycleProcessor(inPort, dummyDownstream, f.packetProc)
+
+	return f
 }
 
 // ID returns the node identifier that owns the flow.
@@ -95,238 +173,30 @@ func (f *FIFO) ID() int {
 	return f.id
 }
 
-// Mailbox exposes the send-only channel so links can inject envelopes.
-func (f *FIFO) Mailbox() chan<- packet.PacketWithCycle {
-	return f.inQueue.Mailbox()
+// ProcessCycle processes a single cycle.
+func (f *FIFO) ProcessCycle(cycle int) error {
+	// CycleProcessor needs a downstream port, but Flow has multiple output ports.
+	// We create a dummy downstream port that won't be used (FlowPacketProcessor routes to outPorts directly).
+	// Recreate processor if outPorts changed (for simplicity, always recreate with dummy downstream)
+	dummyDownstream := cycle_port.NewCyclePort(8)
+	f.processor = cycle_port.NewCycleProcessor(f.inPort, dummyDownstream, f.packetProc)
+
+	return f.processor.ProcessCycle(cycle)
 }
 
-// Tick drains the mailbox and processes packets that arrived prior to or during
-// the cycle. It respects context cancellation to avoid blocking the scheduler.
-// When out_queue is full, processing is blocked. When in_queue is full, upstream
-// backpressure callback is triggered.
-func (f *FIFO) Tick(ctx context.Context, cycle uint64) error {
-	// Update currentCycle
-	f.currentCycle = cycle
-
-	// Check if in_queue is full and notify upstream
-	if f.IsInQueueFull() && f.upstreamBackpressureCallback != nil {
-		f.upstreamBackpressureCallback()
-	}
-
-	for {
-		select {
-		case env := <-f.inQueue.ReceiveMailbox():
-			f.incoming = append(f.incoming, env.Packet)
-		default:
-			goto PROCESS
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-
-PROCESS:
-	// Only process if out_queue is not full
-	if !f.IsOutQueueFull() {
-		for len(f.incoming) > 0 {
-			pkt := f.incoming[0]
-			f.incoming = f.incoming[1:]
-			f.processed = append(f.processed, pkt)
-		}
-	}
-
-	// Route packets from out_queue to dispatch_queues
-	f.Route()
-
-	return nil
+// InPort returns the input CyclePort.
+func (f *FIFO) InPort() cycle_port.CyclePort {
+	return f.inPort
 }
 
-// Route takes packets from the out_queue channel and distributes them to dispatch_queues
-// based on the router hook function. Packets are received from outQueue channel
-// and sent to dispatch queue channels.
-func (f *FIFO) Route() {
-	if len(f.dispatchQueues) == 0 {
-		// No dispatch queues, drain outQueue to prevent blocking
-		f.outQueue.Drain()
-		return
-	}
-
-	// Receive packets from outQueue channel and route to dispatch queues
-	for {
-		select {
-		case env := <-f.outQueue.ReceiveMailbox():
-			// Call router hook to determine which dispatch queue to use
-			index := f.routerHook(env.Packet, f.dispatchQueues, f.topology)
-
-			// Discard packet if index is -1 or invalid
-			if index < 0 || index >= len(f.dispatchQueues) {
-				continue
-			}
-
-			// Send to selected dispatch queue via channel
-			dq := f.dispatchQueues[index]
-			select {
-			case dq.Mailbox() <- env:
-				// Successfully sent to dispatch queue
-				// Update dispatch queue SFC
-				if f.currentCycle >= dq.SendFinishedCycle() {
-					dq.SetSendFinishedCycle(f.currentCycle)
-				}
-			default:
-				// Dispatch queue channel is full, packet is dropped (backpressure)
-				// Could optionally buffer back to outgoing slice, but for simplicity we drop it
-			}
-		default:
-			// No more packets in outQueue
-			return
-		}
-	}
+// OutPorts returns all output CyclePorts.
+func (f *FIFO) OutPorts() []cycle_port.CyclePort {
+	return f.outPorts
 }
 
-// Emit stages packets for delivery to downstream links.
-// If downstream backpressure is active, packets are not added to out_queue.
-// Packets are sent via outQueue channel.
-func (f *FIFO) Emit(pkts ...packet.Packet) {
-	if len(pkts) == 0 {
-		return
-	}
-	// Block emission if downstream backpressure is active
-	if f.downstreamBackpressure {
-		return
-	}
-	// Send packets via channel
-	for _, pkt := range pkts {
-		env := packet.PacketWithCycle{
-			Cycle:  f.currentCycle,
-			Packet: pkt,
-		}
-		select {
-		case f.outQueue.Mailbox() <- env:
-			// Successfully sent
-		default:
-			// Channel full, packet is dropped (backpressure)
-		}
-	}
-}
-
-// ProcessedCount exposes how many packets have been processed lifecycle-wide.
+// ProcessedCount returns the number of packets processed.
 func (f *FIFO) ProcessedCount() int {
 	return len(f.processed)
-}
-
-// IsInQueueFull checks if the in_queue is full.
-func (f *FIFO) IsInQueueFull() bool {
-	return f.inQueue.IsFull()
-}
-
-// IsOutQueueFull checks if the out_queue channel is full or if all dispatch queues are full.
-func (f *FIFO) IsOutQueueFull() bool {
-	if f.outQueue.IsFull() {
-		return true
-	}
-	// Check if all dispatch queues are full
-	for _, dq := range f.dispatchQueues {
-		if !dq.IsFull() {
-			return false
-		}
-	}
-	return len(f.dispatchQueues) > 0
-}
-
-// SetDownstreamBackpressure sets the downstream backpressure state.
-func (f *FIFO) SetDownstreamBackpressure(bp bool) {
-	f.downstreamBackpressure = bp
-}
-
-// GetDownstreamBackpressure returns the downstream backpressure state.
-func (f *FIFO) GetDownstreamBackpressure() bool {
-	return f.downstreamBackpressure
-}
-
-// SetUpstreamBackpressureCallback sets the callback function to notify upstream
-// when in_queue is full.
-func (f *FIFO) SetUpstreamBackpressureCallback(callback func()) {
-	f.upstreamBackpressureCallback = callback
-}
-
-// CurrentCycle returns the current cycle the flow has advanced to.
-func (f *FIFO) CurrentCycle() uint64 {
-	return f.currentCycle
-}
-
-// SetNoBackpressureUntil sets the cycle until which receiver guarantees no backpressure.
-func (f *FIFO) SetNoBackpressureUntil(cycle uint64) {
-	f.noBackpressureUntil = cycle
-	// Notify upstream link
-	if f.upstreamLink != nil {
-		if link, ok := f.upstreamLink.(interface {
-			SetNoBackpressureUntil(uint64)
-		}); ok {
-			link.SetNoBackpressureUntil(cycle)
-		}
-	}
-}
-
-// NoBackpressureUntil returns the cycle until which receiver guarantees no backpressure.
-func (f *FIFO) NoBackpressureUntil() uint64 {
-	return f.noBackpressureUntil
-}
-
-// AdvanceTo advances the flow to the specified cycle, using Link SFC to determine execution condition.
-func (f *FIFO) AdvanceTo(cycle uint64, linkSFC uint64) error {
-	// Check execution condition: currentCycle <= linkSFC
-	if f.currentCycle > linkSFC {
-		return nil // Cannot execute, wait for Link SFC to update
-	}
-
-	// Receive data from channel (if no data, means no data until linkSFC)
-	for f.currentCycle <= linkSFC && f.currentCycle < cycle {
-		select {
-		case env := <-f.inQueue.ReceiveMailbox():
-			f.incoming = append(f.incoming, env.Packet)
-			f.currentCycle = env.Cycle
-		default:
-			// No data, means no data until linkSFC
-			f.currentCycle = linkSFC
-			goto process
-		}
-	}
-process:
-
-	// Process data (only if out_queue is not full)
-	if !f.IsOutQueueFull() {
-		for len(f.incoming) > 0 {
-			pkt := f.incoming[0]
-			f.incoming = f.incoming[1:]
-			f.processed = append(f.processed, pkt)
-		}
-	}
-
-	// Calculate noBackpressureUntil (based on in_queue capacity)
-	f.noBackpressureUntil = f.calculateNoBackpressureUntil()
-
-	// Notify upstream link
-	if f.upstreamLink != nil {
-		if link, ok := f.upstreamLink.(interface {
-			SetNoBackpressureUntil(uint64)
-		}); ok {
-			link.SetNoBackpressureUntil(f.noBackpressureUntil)
-		}
-	}
-
-	return nil
-}
-
-// SetUpstreamLink sets the upstream link for notifying backpressure signals.
-func (f *FIFO) SetUpstreamLink(link interface{}) {
-	f.upstreamLink = link
-}
-
-// calculateNoBackpressureUntil calculates the cycle until which no backpressure will occur.
-func (f *FIFO) calculateNoBackpressureUntil() uint64 {
-	// Based on in_queue current capacity and bandwidth
-	remainingCapacity := f.inQueue.Capacity() - f.inQueue.Length()
-	// Assume receiving 1 packet per cycle
-	return f.currentCycle + uint64(remainingCapacity)
 }
 
 // SetRouterHook sets the routing hook function.
@@ -337,53 +207,16 @@ func (f *FIFO) SetRouterHook(hook RouterHook) {
 	f.routerHook = hook
 }
 
-// AddDispatchQueue adds a new dispatch queue for the specified link.
-func (f *FIFO) AddDispatchQueue(link interface{}, capacity int) {
-	f.dispatchQueues = append(f.dispatchQueues, NewQueue(capacity, link))
+// AddOutPort adds a new output port for a downstream Link.
+func (f *FIFO) AddOutPort(port cycle_port.CyclePort) {
+	f.outPorts = append(f.outPorts, port)
 }
 
-// DispatchQueueCount returns the number of dispatch queues.
-func (f *FIFO) DispatchQueueCount() int {
-	return len(f.dispatchQueues)
-}
-
-// getDispatchQueue returns the dispatch queue at the specified index, or nil if invalid.
-func (f *FIFO) getDispatchQueue(index int) *Queue {
-	if index < 0 || index >= len(f.dispatchQueues) {
-		return nil
+// Emit sends packets to output ports. Packets will be routed based on router hook.
+// Packets are queued and will be sent in the next ProcessCycle.
+func (f *FIFO) Emit(pkts ...packet.Packet) {
+	if len(pkts) == 0 {
+		return
 	}
-	return f.dispatchQueues[index]
-}
-
-// DrainDispatchQueue drains all packets from the specified dispatch queue.
-func (f *FIFO) DrainDispatchQueue(index int) []packet.Packet {
-	if dq := f.getDispatchQueue(index); dq != nil {
-		return dq.Drain()
-	}
-	return nil
-}
-
-// DispatchQueueSendFinishedCycle returns the SFC of the specified dispatch queue.
-func (f *FIFO) DispatchQueueSendFinishedCycle(index int) uint64 {
-	if dq := f.getDispatchQueue(index); dq != nil {
-		return dq.SendFinishedCycle()
-	}
-	return 0
-}
-
-// IsDispatchQueueFull checks if the specified dispatch queue is full.
-func (f *FIFO) IsDispatchQueueFull(index int) bool {
-	if dq := f.getDispatchQueue(index); dq != nil {
-		return dq.IsFull()
-	}
-	return false
-}
-
-// DispatchQueueMailbox returns the receive-only channel for the specified dispatch queue.
-// This allows Link to receive packets from the dispatch queue via channel.
-func (f *FIFO) DispatchQueueMailbox(index int) <-chan packet.PacketWithCycle {
-	if dq := f.getDispatchQueue(index); dq != nil {
-		return dq.ReceiveMailbox()
-	}
-	return nil
+	f.emitQueue = append(f.emitQueue, pkts...)
 }

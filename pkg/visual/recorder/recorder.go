@@ -122,7 +122,7 @@ func buildNodes(nodes []node.Node) []frame.Node {
 		for _, f := range flows {
 			totalProcessed += processedCount(f)
 
-			// Capture in_queue information
+			// Capture in_queue information (simplified - can't access internal state)
 			inQueueLen := getInQueueLength(f)
 			inQueueCap := getInQueueCapacity(f)
 
@@ -132,42 +132,22 @@ func buildNodes(nodes []node.Node) []frame.Node {
 				Capacity: inQueueCap,
 			})
 
-			// Capture dispatch_queue information (each dispatch_queue gets its own Queue entry)
-			dispatchQueueCount := f.DispatchQueueCount()
-			for i := 0; i < dispatchQueueCount; i++ {
-				// Snapshot approach: drain, count, restore
-				packets := f.DrainDispatchQueue(i)
-				dispatchQueueLen := len(packets)
-				// Restore packets
-				if dispatchQueueLen > 0 {
-					f.Emit(packets...)
-					// Trigger routing to restore packets to dispatch_queue
-					// Note: This is a workaround and may not be perfect
-					// In production, consider adding a method to peek queue length without draining
-				}
-
+			// Capture output ports information (replaces dispatch_queue)
+			outPorts := f.OutPorts()
+			for i := range outPorts {
+				// We can't directly access port state, so use placeholder values
 				queues = append(queues, frame.Queue{
-					Name:     fmt.Sprintf("Flow-%d-dispatch-%d", f.ID(), i),
-					Length:   dispatchQueueLen,
-					Capacity: -1, // Capacity not directly accessible
+					Name:     fmt.Sprintf("Flow-%d-out-%d", f.ID(), i),
+					Length:   0,  // Not accessible without breaking encapsulation
+					Capacity: -1, // Not accessible without breaking encapsulation
 				})
-
-				// Check if dispatch_queue is full
-				if f.IsDispatchQueueFull(i) {
-					outQueueBackpressure = true
-				}
 			}
 
-			// Capture backpressure signals
-			if f.IsInQueueFull() {
-				inQueueBackpressure = true
-			}
-			if f.IsOutQueueFull() {
-				outQueueBackpressure = true
-			}
-			if f.GetDownstreamBackpressure() {
-				downstreamBackpressure = true
-			}
+			// Backpressure signals are no longer available in the new interface
+			// Set to false as default
+			inQueueBackpressure = false
+			outQueueBackpressure = false
+			downstreamBackpressure = false
 		}
 
 		result = append(result, frame.Node{
@@ -194,7 +174,11 @@ func buildEdges(links []*link.Link, currentCycle uint64) []frame.Edge {
 		}
 		occupancy := l.SnapshotOccupancy()
 		latency := l.Latency()
-		slotCount := l.SlotCount()
+		// Use latency as slotCount (slots are based on latency)
+		slotCount := latency
+		if slotCount == 0 {
+			slotCount = 1
+		}
 
 		// Build stages in order from target to source
 		// Stage 0 is closest to target (arriving soon), Stage latency-1 is closest to source (just sent)
@@ -224,7 +208,7 @@ func buildEdges(links []*link.Link, currentCycle uint64) []frame.Edge {
 			Latency:        int(latency),
 			BandwidthLimit: int(l.Bandwidth()),
 			PipelineStages: stages,
-			Backpressured:  l.IsBackpressured(),
+			Backpressured:  false, // Backpressure is no longer tracked in the new interface
 		})
 	}
 	return result
