@@ -7,6 +7,77 @@ import (
 	"github.com/Readm/flow_sim/internal/core/cycle_port"
 )
 
+// LinkCycleProcessor is a custom cycle processor for Link that waits for DoneUntil(cycle+1-latency)
+// instead of DoneUntil(cycle). This allows Link to process packets earlier, taking advantage
+// of the latency buffer.
+type LinkCycleProcessor struct {
+	upstreamPort   cycle_port.CyclePort
+	downstreamPort cycle_port.CyclePort
+	processor      cycle_port.PacketProcessor
+	latency        uint64
+}
+
+// ProcessCycle implements the cycle processing workflow with custom wait logic.
+func (lcp *LinkCycleProcessor) ProcessCycle(cycle int) error {
+	if lcp.processor == nil {
+		panic("LinkCycleProcessor.processor is nil")
+	}
+
+	// Wait for upstream DoneUntil >= cycle+1-latency
+	// This allows Link to start processing earlier, utilizing the latency buffer
+	targetWaitCycle := cycle + 1 - int(lcp.latency)
+	if targetWaitCycle < 0 {
+		targetWaitCycle = 0
+	}
+	lcp.upstreamPort.WaitForDoneUntil(targetWaitCycle)
+
+	// Prepare updateUpstreamReady function
+	var updateUpstreamReady func(cycle int, ready bool)
+	if upstreamPort, ok := lcp.upstreamPort.(*cycle_port.CyclePortImpl); ok {
+		updateUpstreamReady = upstreamPort.UpdateReady
+	} else if multiUpstream, ok := lcp.upstreamPort.(*cycle_port.MultiUpstreamPort); ok {
+		updateUpstreamReady = multiUpstream.UpdateReady
+	} else {
+		updateUpstreamReady = func(cycle int, ready bool) {}
+	}
+
+	// Process all packets
+	lcp.processor.ProcessPackets(
+		lcp.upstreamPort.ReceiveChan(),
+		cycle,
+		lcp.downstreamPort.Ready,
+		lcp.sendPacket,
+		lcp.downstreamPort.SetDoneUntil,
+		updateUpstreamReady,
+	)
+
+	// SetDoneUntil after processing all packets
+	currentDoneUntil := lcp.downstreamPort.GetDoneUntil()
+	if currentDoneUntil < cycle+1 {
+		lcp.downstreamPort.SetDoneUntil(cycle + 1)
+	}
+
+	// Assert that cycle+1 has been configured in upstream port
+	if upstreamPort, ok := lcp.upstreamPort.(*cycle_port.CyclePortImpl); ok {
+		_, configured := upstreamPort.ReadyNonBlocking(cycle + 1)
+		if !configured {
+			panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
+		}
+	} else if multiUpstream, ok := lcp.upstreamPort.(*cycle_port.MultiUpstreamPort); ok {
+		_, configured := multiUpstream.ReadyNonBlocking(cycle + 1)
+		if !configured {
+			panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in all upstream ports. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
+		}
+	}
+
+	return nil
+}
+
+// sendPacket sends a packet to downstream.
+func (lcp *LinkCycleProcessor) sendPacket(pkt cycle_port.PacketWithCycle) {
+	lcp.downstreamPort.Chan() <- pkt
+}
+
 // Link represents a directed edge in the topology using CyclePort.
 // Link receives packets from an upstream CyclePort (which can be a single port or an aggregator)
 // and forwards them to a single downstream Flow.
@@ -16,7 +87,7 @@ type Link struct {
 	targetID          int
 	upstreamPort      cycle_port.CyclePort // Single upstream port (may be an aggregator)
 	downstreamPort    cycle_port.CyclePort // Single downstream port to target Flow
-	processor         *cycle_port.CycleProcessor
+	processor         *LinkCycleProcessor
 	packetProc        *LinkPacketProcessor
 	latency           uint64
 	bandwidth         uint64
@@ -173,8 +244,13 @@ func NewLink(sourceID int, targetID int, upstreamPort cycle_port.CyclePort, down
 	// Create packet processor
 	link.packetProc = NewLinkPacketProcessor(link)
 
-	// Create cycle processor
-	link.processor = cycle_port.NewCycleProcessor(upstreamPort, downstreamPort, link.packetProc)
+	// Create custom cycle processor with latency-aware wait logic
+	link.processor = &LinkCycleProcessor{
+		upstreamPort:   upstreamPort,
+		downstreamPort: downstreamPort,
+		processor:      link.packetProc,
+		latency:        latency,
+	}
 
 	return link
 }
