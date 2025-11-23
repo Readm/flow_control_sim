@@ -1,199 +1,33 @@
 package cycle_port
 
-import (
-	"sync"
-	"sync/atomic"
-)
-
 // MultiUpstreamPort implements CyclePort interface to aggregate multiple upstream ports.
-// It allows a downstream component to wait for multiple upstream components and receive
-// packets from all of them.
+// DEPRECATED: Use NewSharedPortGroup instead for better performance and simpler architecture.
+// This implementation is kept for backward compatibility but should not be used in new code.
 type MultiUpstreamPort struct {
 	upstreamPorts []CyclePort // List of upstream ports to aggregate
-
-	// mergedChan merges packets from all upstream ports
-	mergedChan chan PacketWithCycle
-	// stopChan signals the goroutines to stop
-	stopChan chan struct{}
-	// wg waits for the goroutines to finish
-	wg sync.WaitGroup
-
-	// Synchronization state
-	mu       sync.Mutex
-	cond     *sync.Cond
-	safeDone []int64 // Index corresponds to upstreamPorts. Protected by mu.
-
-	// Internal communication
-	upstreamDone []int64         // Atomic access
-	notifyChans  []chan struct{} // Watcher notifies Forwarder
 }
 
 // NewMultiUpstreamPort creates a new MultiUpstreamPort that aggregates multiple upstream ports.
+// DEPRECATED: Use NewSharedPortGroup instead.
+// This implementation simply delegates to SyncAggregator for synchronization.
+// Note: This does NOT perform data forwarding - upstream ports must share a channel
+// or be handled differently. For proper multi-upstream support, use NewSharedPortGroup.
 func NewMultiUpstreamPort(upstreamPorts []CyclePort) *MultiUpstreamPort {
 	if len(upstreamPorts) == 0 {
 		panic("MultiUpstreamPort requires at least one upstream port")
 	}
 
-	count := len(upstreamPorts)
-	multi := &MultiUpstreamPort{
+	// For backward compatibility, we create a simple wrapper
+	// that delegates synchronization to the upstream ports directly.
+	// This assumes upstream ports already share a channel or are handled separately.
+	return &MultiUpstreamPort{
 		upstreamPorts: upstreamPorts,
-		mergedChan:    make(chan PacketWithCycle, 8*count), // Larger buffer for aggregation
-		stopChan:      make(chan struct{}),
-		safeDone:      make([]int64, count),
-		upstreamDone:  make([]int64, count),
-		notifyChans:   make([]chan struct{}, count),
-	}
-	multi.cond = sync.NewCond(&multi.mu)
-
-	// Initialize states
-	for i := range multi.safeDone {
-		multi.safeDone[i] = -1
-		multi.upstreamDone[i] = -1
-		multi.notifyChans[i] = make(chan struct{}, 1)
-	}
-
-	// Start goroutines for each upstream port
-	for i, port := range multi.upstreamPorts {
-		multi.wg.Add(2) // Watcher + Forwarder
-		go multi.watcher(i, port)
-		go multi.forwarder(i, port)
-	}
-
-	return multi
-}
-
-// watcher monitors the upstream port's Done and notifies the forwarder.
-func (m *MultiUpstreamPort) watcher(index int, port CyclePort) {
-	defer m.wg.Done()
-
-	// We start checking from cycle -1 (initial state).
-	// If Done is already advanced, WaitForDone will return immediately.
-	currentTarget := -1
-
-	for {
-		select {
-		case <-m.stopChan:
-			return
-		default:
-		}
-
-		// Block until upstream completes currentTarget
-		port.WaitForDone(currentTarget)
-
-		// Update atomic state
-		atomic.StoreInt64(&m.upstreamDone[index], int64(currentTarget))
-
-		// Notify forwarder
-		select {
-		case m.notifyChans[index] <- struct{}{}:
-		default:
-			// Notification already pending
-		}
-
-		// Move to next cycle
-		currentTarget++
-
-		// Optimization: if upstream is far ahead, we might want to jump?
-		// But WaitForDone is efficient if already satisfied.
-		// However, simple incrementing works correctly.
-		// To avoid busy looping if upstream is very far ahead, we rely on the fact that
-		// port.WaitForDone is usually fast.
-		// If we want to skip, we could check GetDone occasionally.
-		if currentTarget%10 == 0 {
-			actual := port.GetDone()
-			if actual > currentTarget {
-				currentTarget = actual
-			}
-		}
 	}
 }
 
-// forwarder drains the upstream channel and updates safeDone.
-func (m *MultiUpstreamPort) forwarder(index int, port CyclePort) {
-	defer m.wg.Done()
-
-	notifyChan := m.notifyChans[index]
-	inputChan := port.ReceiveChan()
-
-	for {
-		// Priority 1: Drain data
-		select {
-		case pkt, ok := <-inputChan:
-			if !ok {
-				return
-			}
-			m.mergedChan <- pkt
-			// We have processed a packet for this cycle.
-			// This implies cycle-1 is definitely done.
-			// And we are making progress on cycle.
-			// We can conservatively update safeDone to cycle-1.
-			// If we see packet for Cycle C, it means Cycle C is NOT complete (packets are flowing).
-			// But Cycle C-1 IS complete.
-			// So we can update to C-1.
-			m.updateSafeDone(index, int64(pkt.Cycle)-1)
-			continue
-		case <-m.stopChan:
-			return
-		default:
-			// Channel empty, proceed to wait
-		}
-
-		// Priority 2: Wait for data or notification
-		select {
-		case pkt, ok := <-inputChan:
-			if !ok {
-				return
-			}
-			m.mergedChan <- pkt
-			m.updateSafeDone(index, int64(pkt.Cycle)-1)
-
-		case <-notifyChan:
-			// Upstream reported progress.
-			// Drain any remaining packets in channel to ensure consistency.
-			for {
-				select {
-				case pkt, ok := <-inputChan:
-					if !ok {
-						return
-					}
-					m.mergedChan <- pkt
-					m.updateSafeDone(index, int64(pkt.Cycle)-1)
-				default:
-					// Channel empty. Now safe to sync with upstreamDone.
-					ud := atomic.LoadInt64(&m.upstreamDone[index])
-					m.updateSafeDone(index, ud)
-					goto mainLoop
-				}
-			}
-
-		case <-m.stopChan:
-			return
-		}
-	mainLoop:
-	}
-}
-
-// updateSafeDone updates safeDone and broadcasts if changed.
-// It only increases the value.
-func (m *MultiUpstreamPort) updateSafeDone(index int, val int64) {
-	m.mu.Lock()
-	if val > m.safeDone[index] {
-		m.safeDone[index] = val
-		m.cond.Broadcast()
-	}
-	m.mu.Unlock()
-}
-
-// Close stops the goroutines and closes the merged channel.
+// Close is a no-op for backward compatibility.
 func (m *MultiUpstreamPort) Close() {
-	close(m.stopChan)
-	m.wg.Wait()
-	// Drain mergedChan to unblock any pending writes
-	select {
-	case <-m.mergedChan:
-	default:
-	}
-	close(m.mergedChan)
+	// No goroutines to stop, no channel to close
 }
 
 // ===== Upstream Operations =====
@@ -234,50 +68,39 @@ func (m *MultiUpstreamPort) ReadyNonBlocking(cycle int) (ready bool, configured 
 	return allReady, allConfigured
 }
 
-// GetDone returns the minimum safe Done value from all upstream ports.
+// GetDone returns the minimum Done value from all upstream ports.
 func (m *MultiUpstreamPort) GetDone() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if len(m.safeDone) == 0 {
+	if len(m.upstreamPorts) == 0 {
 		return -1
 	}
-	minDone := m.safeDone[0]
-	for i := 1; i < len(m.safeDone); i++ {
-		if m.safeDone[i] < minDone {
-			minDone = m.safeDone[i]
+	min := m.upstreamPorts[0].GetDone()
+	for i := 1; i < len(m.upstreamPorts); i++ {
+		val := m.upstreamPorts[i].GetDone()
+		if val < min {
+			min = val
 		}
 	}
-	return int(minDone)
+	return min
 }
 
 // ===== Downstream Operations =====
 
-// ReceiveChan returns the merged channel.
+// ReceiveChan returns the first upstream port's channel.
+// WARNING: This is a simplified implementation that only works if all upstream ports
+// share the same channel (e.g., created via NewSharedPortGroup).
+// For proper multi-upstream support, use NewSharedPortGroup instead.
 func (m *MultiUpstreamPort) ReceiveChan() <-chan PacketWithCycle {
-	return m.mergedChan
+	if len(m.upstreamPorts) == 0 {
+		return nil
+	}
+	// Return first port's channel - assumes all ports share the same channel
+	return m.upstreamPorts[0].ReceiveChan()
 }
 
-// WaitForDone blocks until all ports have safeDone >= targetCycle.
+// WaitForDone blocks until all ports have Done >= targetCycle.
 func (m *MultiUpstreamPort) WaitForDone(targetCycle int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for {
-		// Check condition
-		allSatisfied := true
-		for _, done := range m.safeDone {
-			if done < int64(targetCycle) {
-				allSatisfied = false
-				break
-			}
-		}
-
-		if allSatisfied {
-			return
-		}
-
-		m.cond.Wait()
+	for _, port := range m.upstreamPorts {
+		port.WaitForDone(targetCycle)
 	}
 }
 
