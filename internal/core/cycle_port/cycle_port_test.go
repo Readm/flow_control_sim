@@ -1152,5 +1152,5 @@ func TestUpstreamCycleIncrementMatchesNonReadyCount(t *testing.T) {
 	}
 
 	t.Logf("Cycle increment matches non-ready count: original %d, final %d, incremented by %d",
-		originalCycle, receivedPkt.Cycle, receivedPkt.Cycle-uint64(originalCycle))
+		originalCycle, receivedPkt.Cycle, receivedPkt.Cycle-originalCycle)
 }

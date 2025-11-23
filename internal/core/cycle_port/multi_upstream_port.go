@@ -12,6 +12,9 @@ type MultiUpstreamPort struct {
 // upstreamPorts: list of upstream ports that share the same underlying channel
 // sharedChan: the shared channel that all upstream ports write to
 func NewMultiUpstreamPort(upstreamPorts []CyclePort, sharedChan chan PacketWithCycle) *MultiUpstreamPort {
+	if len(upstreamPorts) == 0 {
+		panic("upstreamPorts must not be empty")
+	}
 	return &MultiUpstreamPort{
 		upstreamPorts: upstreamPorts,
 		sharedChan:    sharedChan,

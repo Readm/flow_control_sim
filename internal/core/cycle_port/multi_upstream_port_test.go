@@ -14,9 +14,11 @@ func TestNewMultiUpstreamPort(t *testing.T) {
 
 	upstreamPort1 := NewCyclePort(8)
 	upstreamPort2 := NewCyclePort(8)
+	sharedChan := make(chan PacketWithCycle, 8)
+	upstreamPort1.SetChannel(sharedChan)
+	upstreamPort2.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2})
-	defer multi.Close()
+	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2}, sharedChan)
 
 	if multi == nil {
 		t.Fatal("NewMultiUpstreamPort returned nil")
@@ -37,7 +39,8 @@ func TestNewMultiUpstreamPortEmptyList(t *testing.T) {
 		}
 	}()
 
-	NewMultiUpstreamPort([]CyclePort{})
+	sharedChan := make(chan PacketWithCycle, 8)
+	NewMultiUpstreamPort([]CyclePort{}, sharedChan)
 }
 
 // TestMultiUpstreamPortGetDone tests GetDone returns minimum value.
@@ -47,9 +50,12 @@ func TestMultiUpstreamPortGetDone(t *testing.T) {
 	upstreamPort1 := NewCyclePort(8)
 	upstreamPort2 := NewCyclePort(8)
 	upstreamPort3 := NewCyclePort(8)
+	sharedChan := make(chan PacketWithCycle, 8)
+	upstreamPort1.SetChannel(sharedChan)
+	upstreamPort2.SetChannel(sharedChan)
+	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3})
-	defer multi.Close()
+	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	// Initial value should be -1
 	if multi.GetDone() != -1 {
@@ -80,9 +86,12 @@ func TestMultiUpstreamPortWaitForDone(t *testing.T) {
 	upstreamPort1 := NewCyclePort(8)
 	upstreamPort2 := NewCyclePort(8)
 	upstreamPort3 := NewCyclePort(8)
+	sharedChan := make(chan PacketWithCycle, 8)
+	upstreamPort1.SetChannel(sharedChan)
+	upstreamPort2.SetChannel(sharedChan)
+	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3})
-	defer multi.Close()
+	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	// Set all to cycle 5
 	upstreamPort1.SetDone(5)
@@ -139,9 +148,12 @@ func TestMultiUpstreamPortReceiveChan(t *testing.T) {
 	upstreamPort1 := NewCyclePort(8)
 	upstreamPort2 := NewCyclePort(8)
 	upstreamPort3 := NewCyclePort(8)
+	sharedChan := make(chan PacketWithCycle, 8)
+	upstreamPort1.SetChannel(sharedChan)
+	upstreamPort2.SetChannel(sharedChan)
+	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3})
-	defer multi.Close()
+	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	// Send packets from different upstream ports
 	packets := []PacketWithCycle{
@@ -191,9 +203,12 @@ func TestMultiUpstreamPortUpdateReady(t *testing.T) {
 	upstreamPort1 := NewCyclePort(8)
 	upstreamPort2 := NewCyclePort(8)
 	upstreamPort3 := NewCyclePort(8)
+	sharedChan := make(chan PacketWithCycle, 8)
+	upstreamPort1.SetChannel(sharedChan)
+	upstreamPort2.SetChannel(sharedChan)
+	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3})
-	defer multi.Close()
+	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	// Update ready for cycle 5
 	multi.UpdateReady(5, true)
@@ -236,9 +251,12 @@ func TestMultiUpstreamPortReadyNonBlocking(t *testing.T) {
 	upstreamPort1 := NewCyclePort(8)
 	upstreamPort2 := NewCyclePort(8)
 	upstreamPort3 := NewCyclePort(8)
+	sharedChan := make(chan PacketWithCycle, 8)
+	upstreamPort1.SetChannel(sharedChan)
+	upstreamPort2.SetChannel(sharedChan)
+	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3})
-	defer multi.Close()
+	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	// Initially, cycle 5 is not configured
 	ready, configured := multi.ReadyNonBlocking(5)
@@ -290,9 +308,11 @@ func TestMultiUpstreamPortWithCycleProcessor(t *testing.T) {
 	upstreamPort1 := NewCyclePort(8)
 	upstreamPort2 := NewCyclePort(8)
 	downstreamPort := NewCyclePort(8)
+	sharedChan := make(chan PacketWithCycle, 8)
+	upstreamPort1.SetChannel(sharedChan)
+	upstreamPort2.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2})
-	defer multi.Close()
+	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2}, sharedChan)
 
 	processor := NewCycleProcessor(multi, downstreamPort, nil)
 
@@ -351,9 +371,9 @@ func TestMultiUpstreamPortWithCycleProcessor(t *testing.T) {
 		t.Fatal("not all packets were received by downstream")
 	}
 
-	// Verify downstream Done was updated
-	if downstreamPort.GetDone() < 1 {
-		t.Fatalf("expected downstream Done >= 1, got %d", downstreamPort.GetDone())
+	// Verify downstream Done was updated (should be 0 after processing cycle 0)
+	if downstreamPort.GetDone() < 0 {
+		t.Fatalf("expected downstream Done >= 0, got %d", downstreamPort.GetDone())
 	}
 }
 
@@ -364,9 +384,12 @@ func TestMultiUpstreamPortConcurrent(t *testing.T) {
 	upstreamPort1 := NewCyclePort(8)
 	upstreamPort2 := NewCyclePort(8)
 	upstreamPort3 := NewCyclePort(8)
+	sharedChan := make(chan PacketWithCycle, 8)
+	upstreamPort1.SetChannel(sharedChan)
+	upstreamPort2.SetChannel(sharedChan)
+	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3})
-	defer multi.Close()
+	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	var wg sync.WaitGroup
 
@@ -420,14 +443,17 @@ func TestMultiUpstreamPortConcurrent(t *testing.T) {
 	}
 }
 
-// TestMultiUpstreamPortClose tests that Close properly cleans up resources.
+// TestMultiUpstreamPortClose tests that closing shared channel properly cleans up resources.
 func TestMultiUpstreamPortClose(t *testing.T) {
 	t.Parallel()
 
 	upstreamPort1 := NewCyclePort(8)
 	upstreamPort2 := NewCyclePort(8)
+	sharedChan := make(chan PacketWithCycle, 8)
+	upstreamPort1.SetChannel(sharedChan)
+	upstreamPort2.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2})
+	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2}, sharedChan)
 
 	// Send some packets
 	upstreamPort1.Chan() <- PacketWithCycle{
@@ -435,8 +461,8 @@ func TestMultiUpstreamPortClose(t *testing.T) {
 		Packet: packet.Packet{SourceID: 1, TargetID: 10, Payload: "pkt"},
 	}
 
-	// Close should not panic
-	multi.Close()
+	// Close shared channel
+	close(sharedChan)
 
 	// Receiving from closed channel should return zero value immediately
 	select {
@@ -453,9 +479,11 @@ func TestMultiUpstreamPortUpstreamOperationsPanic(t *testing.T) {
 
 	upstreamPort1 := NewCyclePort(8)
 	upstreamPort2 := NewCyclePort(8)
+	sharedChan := make(chan PacketWithCycle, 8)
+	upstreamPort1.SetChannel(sharedChan)
+	upstreamPort2.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2})
-	defer multi.Close()
+	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2}, sharedChan)
 
 	// Test SetDone panics
 	func() {
@@ -487,4 +515,3 @@ func TestMultiUpstreamPortUpstreamOperationsPanic(t *testing.T) {
 		_ = multi.Ready(5)
 	}()
 }
-

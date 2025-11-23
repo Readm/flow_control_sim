@@ -350,31 +350,3 @@ func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
 		t.Fatalf("expected 2 processed packets, got %d", targetFlow.ProcessedCount())
 	}
 }
-
-// TestBackpressureInQueueFull tests that in_queue full triggers backpressure signal.
-// TODO: Backpressure functionality has been removed in the new CyclePort-based interface.
-// This test needs to be rewritten to use the new interface if backpressure is re-implemented.
-func TestBackpressureInQueueFull(t *testing.T) {
-	t.Skip("Backpressure functionality removed in new CyclePort interface")
-}
-
-// TestBackpressureDownstreamBlocksEmit tests that downstream backpressure blocks Emit.
-// TODO: Backpressure functionality has been removed in the new CyclePort-based interface.
-// This test needs to be rewritten to use the new interface if backpressure is re-implemented.
-func TestBackpressureDownstreamBlocksEmit(t *testing.T) {
-	t.Skip("Backpressure functionality removed in new CyclePort interface")
-}
-
-// TestBackpressureOutQueueFullBlocksProcess tests that out_queue or dispatch queues full blocks processing.
-// TODO: Backpressure functionality has been removed in the new CyclePort-based interface.
-// This test needs to be rewritten to use the new interface if backpressure is re-implemented.
-func TestBackpressureOutQueueFullBlocksProcess(t *testing.T) {
-	t.Skip("Backpressure functionality removed in new CyclePort interface")
-}
-
-// TestBackpressureLinkBlocksTransmit tests that backpressured link blocks Transmit.
-// TODO: Backpressure functionality has been removed in the new CyclePort-based interface.
-// This test needs to be rewritten to use the new interface if backpressure is re-implemented.
-func TestBackpressureLinkBlocksTransmit(t *testing.T) {
-	t.Skip("Backpressure functionality removed in new CyclePort interface")
-}
