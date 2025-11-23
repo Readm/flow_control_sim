@@ -13,10 +13,10 @@ type PacketProcessor interface {
 	// cycle: the current cycle number
 	// checkReady: function to check if downstream is ready for a given cycle
 	// sendPacket: function to send a packet to downstream (called when packet is ready)
-	// setDoneUntil: function to set downstream DoneUntil
+	// setDone: function to set downstream Done
 	// updateUpstreamReady: function to notify upstream about readiness for next cycle (Q node in flowchart)
 	// Called by processor to indicate readiness for cycle N+1 after completing cycle N
-	ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool))
+	ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDone func(int), updateUpstreamReady func(cycle int, ready bool))
 }
 
 // CycleProcessor provides the base workflow for processing cycles.
@@ -47,10 +47,10 @@ func (cp *CycleProcessor) ProcessCycle(cycle int) error {
 		panic("CycleProcessor.processor is nil, this should never happen. Use NewCycleProcessor to create CycleProcessor.")
 	}
 
-	// Wait for upstream DoneUntil >= cycle
+	// Wait for upstream Done >= cycle-1
 	// Uses condition variable to avoid busy waiting - goroutine will block until
-	// SetDoneUntil is called and condition is satisfied
-	cp.upstreamPort.WaitForDoneUntil(cycle)
+	// SetDone is called and condition is satisfied
+	cp.upstreamPort.WaitForDone(cycle - 1)
 
 	// Prepare updateUpstreamReady function
 	// UpdateReady is an internal implementation detail, accessed via type assertion
@@ -73,17 +73,17 @@ func (cp *CycleProcessor) ProcessCycle(cycle int) error {
 		cycle,
 		cp.downstreamPort.Ready,
 		cp.sendPacket,
-		cp.downstreamPort.SetDoneUntil,
+		cp.downstreamPort.SetDone,
 		updateUpstreamReady,
 	)
 
-	// SetDoneUntil after processing all packets
-	// Only set downstream DoneUntil to cycle + 1 (current cycle completed) if it's not already larger
-	// This ensures DoneUntil is monotonically increasing and doesn't decrease if processor already set a larger value
-	// Upstream DoneUntil should be set by upstream itself, not by this processor
-	currentDoneUntil := cp.downstreamPort.GetDoneUntil()
-	if currentDoneUntil < cycle+1 {
-		cp.downstreamPort.SetDoneUntil(cycle + 1)
+	// SetDone after processing all packets
+	// Only set downstream Done to cycle (current cycle completed) if it's not already larger
+	// This ensures Done is monotonically increasing and doesn't decrease if processor already set a larger value
+	// Upstream Done should be set by upstream itself, not by this processor
+	currentDone := cp.downstreamPort.GetDone()
+	if currentDone < cycle {
+		cp.downstreamPort.SetDone(cycle)
 	}
 
 	// Assert that cycle+1 has been configured in upstream port
@@ -118,23 +118,23 @@ type DefaultProcessor struct {
 	pendingPackets []PacketWithCycle
 }
 
-func (d *DefaultProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+func (d *DefaultProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDone func(int), updateUpstreamReady func(cycle int, ready bool)) {
 	// pendingPackets is a static variable (struct field) - access directly
 	newPendingPackets := make([]PacketWithCycle, 0)
 
-	// Helper function to process a single packet
-	processPacket := func(pkt PacketWithCycle) {
-		pktCycle := int(pkt.Cycle)
-		isReady := checkReady(pktCycle)
-		if isReady {
-			// Ready: send the packet immediately
-			pkt.Cycle = uint64(pktCycle)
-			sendPacket(pkt)
-		} else {
-			// Not ready: keep in pending
-			newPendingPackets = append(newPendingPackets, pkt)
+		// Helper function to process a single packet
+		processPacket := func(pkt PacketWithCycle) {
+			pktCycle := int(pkt.Cycle)
+			isReady := checkReady(pktCycle)
+			if isReady {
+				// Ready: send the packet immediately
+				pkt.Cycle = int(pktCycle)
+				sendPacket(pkt)
+			} else {
+				// Not ready: keep in pending
+				newPendingPackets = append(newPendingPackets, pkt)
+			}
 		}
-	}
 
 	// Process pending packets first (from static variable)
 	for _, pkt := range d.pendingPackets {
@@ -154,9 +154,9 @@ func (d *DefaultProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cy
 	}
 
 done:
-	// F: SetDoneUntil after processing all packets
-	// Only set downstream DoneUntil to cycle + 1 (current cycle completed)
-	setDoneUntil(cycle + 1)
+	// F: SetDone after processing all packets
+	// Set downstream Done to cycle (current cycle completed)
+	setDone(cycle)
 
 	// Q: Calculate if cycle N+1 is ready and notify upstream
 	// After completing cycle N, notify upstream that we are ready for cycle N+1

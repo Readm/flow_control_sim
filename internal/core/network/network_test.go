@@ -54,14 +54,14 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 	flowAOutPort.SetReadyUntil(int(cycles) + 10)
 	flowBOutPort.SetReadyUntil(int(cycles) + 10)
 
-	// Initialize upstream DoneUntil for outPorts (allows Link to start processing)
-	// Link needs upstream DoneUntil >= cycle, so we initialize to 0
-	flowAOutPort.SetDoneUntil(0)
-	flowBOutPort.SetDoneUntil(0)
+	// Initialize upstream Done for outPorts (allows Link to start processing)
+	// Link needs upstream Done >= cycle, so we initialize to 0
+	flowAOutPort.SetDone(-1)
+	flowBOutPort.SetDone(-1)
 
-	// Initialize upstream DoneUntil for flows (no upstream initially)
-	nodeA.Flows()[0].InPort().SetDoneUntil(0)
-	nodeB.Flows()[0].InPort().SetDoneUntil(0)
+	// Initialize upstream Done for flows (no upstream initially)
+	nodeA.Flows()[0].InPort().SetDone(-1)
+	nodeB.Flows()[0].InPort().SetDone(-1)
 
 	graph := map[int][]*link.Link{
 		nodeA.ID(): {linkAB},
@@ -161,9 +161,9 @@ func (n *flowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 		})
 	}
 
-	// Initialize upstream DoneUntil if needed (no upstream initially)
-	if n.flow.InPort().GetDoneUntil() < 0 {
-		n.flow.InPort().SetDoneUntil(int(cycle))
+	// Initialize upstream Done if needed (no upstream initially)
+	if n.flow.InPort().GetDone() < 0 {
+		n.flow.InPort().SetDone(int(cycle))
 	}
 
 	// Process incoming packets

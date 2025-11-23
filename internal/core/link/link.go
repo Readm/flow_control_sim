@@ -7,14 +7,14 @@ import (
 	"github.com/Readm/flow_sim/internal/core/cycle_port"
 )
 
-// LinkCycleProcessor is a custom cycle processor for Link that waits for DoneUntil(cycle+1-latency)
-// instead of DoneUntil(cycle). This allows Link to process packets earlier, taking advantage
+// LinkCycleProcessor is a custom cycle processor for Link that waits for Done(cycle-latency)
+// instead of Done(cycle-1). This allows Link to process packets earlier, taking advantage
 // of the latency buffer.
 type LinkCycleProcessor struct {
 	upstreamPort   cycle_port.CyclePort
 	downstreamPort cycle_port.CyclePort
 	processor      cycle_port.PacketProcessor
-	latency        uint64
+	latency        int
 }
 
 // ProcessCycle implements the cycle processing workflow with custom wait logic.
@@ -23,13 +23,13 @@ func (lcp *LinkCycleProcessor) ProcessCycle(cycle int) error {
 		panic("LinkCycleProcessor.processor is nil")
 	}
 
-	// Wait for upstream DoneUntil >= cycle+1-latency
+	// Wait for upstream Done >= cycle-latency
 	// This allows Link to start processing earlier, utilizing the latency buffer
-	targetWaitCycle := cycle + 1 - int(lcp.latency)
-	if targetWaitCycle < 0 {
-		targetWaitCycle = 0
+	targetWaitCycle := cycle - lcp.latency
+	if targetWaitCycle < -1 {
+		targetWaitCycle = -1
 	}
-	lcp.upstreamPort.WaitForDoneUntil(targetWaitCycle)
+	lcp.upstreamPort.WaitForDone(targetWaitCycle)
 
 	// Prepare updateUpstreamReady function
 	var updateUpstreamReady func(cycle int, ready bool)
@@ -47,14 +47,14 @@ func (lcp *LinkCycleProcessor) ProcessCycle(cycle int) error {
 		cycle,
 		lcp.downstreamPort.Ready,
 		lcp.sendPacket,
-		lcp.downstreamPort.SetDoneUntil,
+		lcp.downstreamPort.SetDone,
 		updateUpstreamReady,
 	)
 
-	// SetDoneUntil after processing all packets
-	currentDoneUntil := lcp.downstreamPort.GetDoneUntil()
-	if currentDoneUntil < cycle+1 {
-		lcp.downstreamPort.SetDoneUntil(cycle + 1)
+	// SetDone after processing all packets
+	currentDone := lcp.downstreamPort.GetDone()
+	if currentDone < cycle {
+		lcp.downstreamPort.SetDone(cycle)
 	}
 
 	// Assert that cycle+1 has been configured in upstream port
@@ -89,9 +89,9 @@ type Link struct {
 	downstreamPort    cycle_port.CyclePort // Single downstream port to target Flow
 	processor         *LinkCycleProcessor
 	packetProc        *LinkPacketProcessor
-	latency           uint64
-	bandwidth         uint64
-	totalBackpressure uint64
+	latency           int
+	bandwidth         int
+	totalBackpressure int
 }
 
 // LinkPacketProcessor implements PacketProcessor for Link.
@@ -123,7 +123,7 @@ func (l *LinkPacketProcessor) ProcessPackets(
 	cycle int,
 	checkReady func(int) bool,
 	sendPacket func(cycle_port.PacketWithCycle),
-	setDoneUntil func(int),
+	setDone func(int),
 	updateUpstreamReady func(cycle int, ready bool),
 ) {
 	// Link just transparently forwards the updateUpstreamReady call to the upstream ports.
@@ -141,9 +141,9 @@ func (l *LinkPacketProcessor) ProcessPackets(
 	addToSlot := func(pkt cycle_port.PacketWithCycle, targetCycle int) {
 		// Calculate target slot index with backpressure adjustment.
 		// Design guarantee: totalBackpressure will never exceed targetCycle (in practice)
-		targetSlotIndex := (targetCycle - int(l.link.totalBackpressure)) % len(l.slots)
+		targetSlotIndex := (targetCycle - l.link.totalBackpressure) % len(l.slots)
 		// Check bandwidth limit for the target slot
-		if len(l.slots[targetSlotIndex]) >= int(l.link.bandwidth) {
+		if len(l.slots[targetSlotIndex]) >= l.link.bandwidth {
 			panic(fmt.Sprintf("Slot is full (bandwidth limit exceeded) for targetSlotIndex %d at cycle %d", targetSlotIndex, cycle))
 		} else {
 			l.slots[targetSlotIndex] = append(l.slots[targetSlotIndex], pkt)
@@ -152,11 +152,11 @@ func (l *LinkPacketProcessor) ProcessPackets(
 
 	// 1. Process pending packets (already have correct TargetCycle)
 	for _, pkt := range l.pendingPackets {
-		targetCycle := int(pkt.Cycle)
+		targetCycle := pkt.Cycle
 		// Check if it fits in window
 		// The ring buffer has 'latency' slots, covering [cycle, cycle + latency - 1].
 		// If targetCycle >= cycle + latency, it doesn't fit in current window.
-		if targetCycle-cycle >= int(l.link.latency) {
+		if targetCycle-cycle >= l.link.latency {
 			newPendingPackets = append(newPendingPackets, pkt)
 			continue
 		}
@@ -167,17 +167,17 @@ func (l *LinkPacketProcessor) ProcessPackets(
 	for {
 		select {
 		case pkt := <-receiveChan:
-			sourceCycle := int(pkt.Cycle)
-			targetCycle := sourceCycle + int(l.link.latency)
+			sourceCycle := pkt.Cycle
+			targetCycle := sourceCycle + l.link.latency
 
 			// Create packet with target cycle
 			delayedPkt := cycle_port.PacketWithCycle{
-				Cycle:  uint64(targetCycle),
+				Cycle:  targetCycle,
 				Packet: pkt.Packet,
 			}
 
 			// Check if it fits in window
-			if targetCycle-cycle >= int(l.link.latency) {
+			if targetCycle-cycle >= l.link.latency {
 				newPendingPackets = append(newPendingPackets, delayedPkt)
 				continue
 			}
@@ -195,9 +195,9 @@ doneProcessing:
 	// If the downstream is ready, send the packets from the slots.
 	if checkReady(cycle) {
 		// Calculate slot index with backpressure adjustment.
-		slotIndex := int(cycle-int(l.link.totalBackpressure)) % len(l.slots)
+		slotIndex := (cycle - l.link.totalBackpressure) % len(l.slots)
 		for _, pkt := range l.slots[slotIndex] {
-			pkt.Cycle = uint64(cycle)
+			pkt.Cycle = cycle
 			sendPacket(pkt)
 		}
 		l.slots[slotIndex] = nil // Clear the slot
@@ -206,8 +206,8 @@ doneProcessing:
 		l.link.totalBackpressure = l.link.totalBackpressure + 1
 	}
 
-	// Set DoneUntil
-	setDoneUntil(cycle + 1)
+	// Set Done
+	setDone(cycle)
 
 	// Notify upstream that we are ready for next cycle using waitGroup to wait for completion
 	wg.Wait()
@@ -220,7 +220,7 @@ doneProcessing:
 // - downstreamPort: CyclePort to target Flow (single)
 // - latency: number of cycles for packet delivery (defaults to 1 if 0)
 // - bandwidth: maximum packets per cycle (defaults to 1 if 0)
-func NewLink(sourceID int, targetID int, upstreamPort cycle_port.CyclePort, downstreamPort cycle_port.CyclePort, latency uint64, bandwidth uint64) *Link {
+func NewLink(sourceID int, targetID int, upstreamPort cycle_port.CyclePort, downstreamPort cycle_port.CyclePort, latency int, bandwidth int) *Link {
 	if latency == 0 {
 		latency = 1
 	}
@@ -266,12 +266,12 @@ func (l *Link) TargetID() int {
 }
 
 // Latency returns the configured delay in cycles.
-func (l *Link) Latency() uint64 {
+func (l *Link) Latency() int {
 	return l.latency
 }
 
 // Bandwidth returns the maximum packets per cycle.
-func (l *Link) Bandwidth() uint64 {
+func (l *Link) Bandwidth() int {
 	return l.bandwidth
 }
 

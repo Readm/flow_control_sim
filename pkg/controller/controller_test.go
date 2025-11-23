@@ -123,9 +123,13 @@ func (m *mockNode) Flows() []flow.Flow {
 }
 
 func (m *mockNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
-	// Initialize upstream DoneUntil (no upstream, so set to current cycle)
-	// Must be >= cycle for ProcessCycle to proceed
-	m.flow.InPort().SetDoneUntil(int(cycle))
+	// Initialize upstream Done (no upstream, so set to cycle-1 to allow processing cycle)
+	// Must be >= cycle-1 for ProcessCycle to proceed
+	initDone := int(cycle) - 1
+	if initDone < -1 {
+		initDone = -1
+	}
+	m.flow.InPort().SetDone(initDone)
 
 	// Send packet to peer if not the last cycle (before processing, so it's included in this cycle)
 	// Note: In a real scenario, this would be sent through a link, but for this test we just emit

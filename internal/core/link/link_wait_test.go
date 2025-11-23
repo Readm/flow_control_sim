@@ -10,7 +10,7 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// TestLinkWaitLogic tests that Link waits for DoneUntil(cycle+1-latency) instead of DoneUntil(cycle).
+// TestLinkWaitLogic tests that Link waits for Done(cycle+1-latency) instead of Done(cycle).
 // This test verifies the optimization that allows Link to process packets earlier.
 func TestLinkWaitLogic(t *testing.T) {
 	t.Parallel()
@@ -24,11 +24,11 @@ func TestLinkWaitLogic(t *testing.T) {
 	flow0.AddOutPort(flow0OutPort)
 
 	// Create Link with latency=3
-	// At cycle 5, Link should wait for DoneUntil >= 5+1-3 = 3 (not 5)
+	// At cycle 5, Link should wait for Done >= 5+1-3 = 3 (not 5)
 	link := NewLink(0, 1, flow0OutPort, flow1InPort, 3, 1)
 
-	// Initialize upstream DoneUntil for flow0
-	flow0.InPort().SetDoneUntil(0)
+	// Initialize upstream Done for flow0
+	flow0.InPort().SetDone(-1)
 
 	// Initialize downstream ready state
 	if flow1InPortImpl, ok := flow1InPort.(*cycle_port.CyclePortImpl); ok {
@@ -42,18 +42,18 @@ func TestLinkWaitLogic(t *testing.T) {
 
 	// Process flow0 to send the packet
 	flow0.ProcessCycle(0)
-	flow0.InPort().SetDoneUntil(1)
+	flow0.InPort().SetDone(1)
 	flow0.ProcessCycle(1)
-	flow0.InPort().SetDoneUntil(2)
+	flow0.InPort().SetDone(2)
 
-	// At cycle 2, Link should wait for DoneUntil >= 2+1-3 = 0
-	// Since flow0OutPort.DoneUntil is already 2, it should proceed immediately
+	// At cycle 2, Link should wait for Done >= 2+1-3 = 0
+	// Since flow0OutPort.Done is already 2, it should proceed immediately
 	var wg sync.WaitGroup
 	wg.Add(1)
 	startTime := time.Now()
 	go func() {
 		defer wg.Done()
-		// This should not block because DoneUntil(2) >= 0
+		// This should not block because Done(2) >= 0
 		link.ProcessCycle(2)
 	}()
 	wg.Wait()
@@ -61,22 +61,22 @@ func TestLinkWaitLogic(t *testing.T) {
 
 	// Should complete quickly (no blocking)
 	if elapsed > 100*time.Millisecond {
-		t.Errorf("Link.ProcessCycle(2) should not block when DoneUntil(2) >= 0, but took %v", elapsed)
+		t.Errorf("Link.ProcessCycle(2) should not block when Done(2) >= 0, but took %v", elapsed)
 	}
 
 	// Now test that it waits correctly when upstream is behind
-	// At cycle 5, Link should wait for DoneUntil >= 5+1-3 = 3
-	// But flow0OutPort.DoneUntil is only 2, so it should wait
-	flow0.InPort().SetDoneUntil(3)
+	// At cycle 5, Link should wait for Done >= 5+1-3 = 3
+	// But flow0OutPort.Done is only 2, so it should wait
+	flow0.InPort().SetDone(3)
 	flow0.ProcessCycle(3)
-	// flow0OutPort.DoneUntil is now 3
+	// flow0OutPort.Done is now 3
 
 	// Test blocking behavior
 	done := make(chan bool, 1)
 	startTime = time.Now()
 	go func() {
-		// At cycle 4, Link should wait for DoneUntil >= 4+1-3 = 2
-		// flow0OutPort.DoneUntil is 3, so it should proceed immediately
+		// At cycle 4, Link should wait for Done >= 4+1-3 = 2
+		// flow0OutPort.Done is 3, so it should proceed immediately
 		link.ProcessCycle(4)
 		done <- true
 	}()
@@ -85,10 +85,10 @@ func TestLinkWaitLogic(t *testing.T) {
 	case <-done:
 		elapsed = time.Since(startTime)
 		if elapsed > 100*time.Millisecond {
-			t.Errorf("Link.ProcessCycle(4) should not block when DoneUntil(3) >= 2, but took %v", elapsed)
+			t.Errorf("Link.ProcessCycle(4) should not block when Done(3) >= 2, but took %v", elapsed)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Link.ProcessCycle(4) should complete immediately when DoneUntil(3) >= 2")
+		t.Fatal("Link.ProcessCycle(4) should complete immediately when Done(3) >= 2")
 	}
 }
 
@@ -108,20 +108,20 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 	link := NewLink(0, 1, flow0OutPort, flow1InPort, 5, 1)
 
 	// Initialize
-	flow0.InPort().SetDoneUntil(0)
+	flow0.InPort().SetDone(-1)
 	if flow1InPortImpl, ok := flow1InPort.(*cycle_port.CyclePortImpl); ok {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
 
 	// Test case: cycle=2, latency=5
 	// targetWaitCycle = 2+1-5 = -2, should clamp to 0
-	// At cycle 2, Link should wait for DoneUntil >= 0
+	// At cycle 2, Link should wait for Done >= 0
 	flow0.ProcessCycle(0)
-	flow0.InPort().SetDoneUntil(1)
+	flow0.InPort().SetDone(1)
 
 	done := make(chan bool, 1)
 	go func() {
-		// Should not block because DoneUntil(1) >= 0
+		// Should not block because Done(1) >= 0
 		link.ProcessCycle(2)
 		done <- true
 	}()
@@ -130,7 +130,7 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 	case <-done:
 		// Success
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Link.ProcessCycle(2) should complete when DoneUntil(1) >= 0 (clamped)")
+		t.Fatal("Link.ProcessCycle(2) should complete when Done(1) >= 0 (clamped)")
 	}
 }
 
@@ -151,7 +151,7 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	link := NewLink(0, 1, flow0OutPort, flow1InPort, 4, 1)
 
 	// Initialize
-	flow0.InPort().SetDoneUntil(0)
+	flow0.InPort().SetDone(-1)
 	if flow1InPortImpl, ok := flow1InPort.(*cycle_port.CyclePortImpl); ok {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
@@ -163,14 +163,14 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 
 	// Process flow0
 	flow0.ProcessCycle(0)
-	flow0.InPort().SetDoneUntil(1)
+	flow0.InPort().SetDone(1)
 	flow0.ProcessCycle(1)
-	flow0.InPort().SetDoneUntil(2)
+	flow0.InPort().SetDone(2)
 	flow0.ProcessCycle(2)
-	// flow0OutPort.DoneUntil is now 3
+	// flow0OutPort.Done is now 3
 
-	// At cycle 2, Link should wait for DoneUntil >= 2+1-4 = -1 (clamped to 0)
-	// Since flow0OutPort.DoneUntil is 3, it should proceed
+	// At cycle 2, Link should wait for Done >= 2+1-4 = -1 (clamped to 0)
+	// Since flow0OutPort.Done is 3, it should proceed
 	// The packet will be stored in slot for cycle 0+4=4
 	link.ProcessCycle(2)
 
@@ -180,7 +180,7 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	}
 
 	// Process cycle 4 - packet should be sent
-	flow0.InPort().SetDoneUntil(4)
+	flow0.InPort().SetDone(4)
 	flow0.ProcessCycle(4)
 	link.ProcessCycle(4)
 	flow1.ProcessCycle(4)

@@ -21,7 +21,7 @@ type testProcessor struct {
 	}
 }
 
-func (t *testProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+func (t *testProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDone func(int), updateUpstreamReady func(cycle int, ready bool)) {
 	// pendingPackets is a static variable (struct field from embedded DefaultProcessor) - access directly
 	pendingPackets := t.pendingPackets
 
@@ -69,7 +69,7 @@ processPackets:
 
 		if isReady {
 			// Ready: send the packet immediately
-			pkt.Cycle = uint64(pktCycle)
+			pkt.Cycle = pktCycle
 			sendPacket(pkt)
 		} else {
 			// Not ready: keep in pending
@@ -77,8 +77,8 @@ processPackets:
 		}
 	}
 
-	// F: SetDoneUntil after processing all packets
-	setDoneUntil(cycle + 1)
+	// F: SetDone after processing all packets
+	setDone(cycle + 1)
 
 	// Q: Notify upstream about readiness for next cycle
 	updateUpstreamReady(cycle+1, true)
@@ -94,7 +94,7 @@ type incrementTestProcessor struct {
 	finalCycle     *int
 }
 
-func (i *incrementTestProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+func (i *incrementTestProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDone func(int), updateUpstreamReady func(cycle int, ready bool)) {
 	// pendingPackets is a static variable (struct field from embedded DefaultProcessor) - access directly
 	pendingPackets := i.pendingPackets
 
@@ -125,7 +125,7 @@ processPackets:
 		if isReady {
 			*i.finalCycle = pktCycle
 			// Ready: send the packet immediately
-			pkt.Cycle = uint64(pktCycle)
+			pkt.Cycle = pktCycle
 			sendPacket(pkt)
 		} else {
 			*i.notReadyCycles = append(*i.notReadyCycles, pktCycle)
@@ -133,8 +133,8 @@ processPackets:
 		}
 	}
 
-	// F: SetDoneUntil after processing all packets
-	setDoneUntil(cycle + 1)
+	// F: SetDone after processing all packets
+	setDone(cycle + 1)
 
 	// Q: Notify upstream about readiness for next cycle
 	updateUpstreamReady(cycle+1, true)
@@ -149,7 +149,7 @@ type countIncrementProcessor struct {
 	incrementCount *int
 }
 
-func (c *countIncrementProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+func (c *countIncrementProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDone func(int), updateUpstreamReady func(cycle int, ready bool)) {
 	// pendingPackets is a static variable (struct field from embedded DefaultProcessor) - access directly
 	pendingPackets := c.pendingPackets
 
@@ -179,7 +179,7 @@ processPackets:
 
 		if isReady {
 			// Ready: send the packet immediately
-			pkt.Cycle = uint64(pktCycle)
+			pkt.Cycle = pktCycle
 			sendPacket(pkt)
 		} else {
 			*c.incrementCount++
@@ -187,8 +187,8 @@ processPackets:
 		}
 	}
 
-	// F: SetDoneUntil after processing all packets
-	setDoneUntil(cycle + 1)
+	// F: SetDone after processing all packets
+	setDone(cycle + 1)
 
 	// Q: Notify upstream about readiness for next cycle
 	updateUpstreamReady(cycle+1, true)
@@ -204,7 +204,7 @@ type allPacketsTestProcessor struct {
 	mu              *sync.Mutex
 }
 
-func (a *allPacketsTestProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+func (a *allPacketsTestProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDone func(int), updateUpstreamReady func(cycle int, ready bool)) {
 	// pendingPackets is a static variable (struct field from embedded DefaultHooks) - access directly
 	pendingPackets := a.pendingPackets
 
@@ -234,7 +234,7 @@ processPackets:
 		isReady := checkReady(pktCycle)
 		if isReady {
 			// Ready: send the packet immediately
-			pkt.Cycle = uint64(pktCycle)
+			pkt.Cycle = pktCycle
 			sendPacket(pkt)
 		} else {
 			// Not ready: keep in pending
@@ -252,8 +252,8 @@ processPackets:
 		processPacket(pkt)
 	}
 
-	// Set DoneUntil after processing all packets
-	setDoneUntil(cycle + 1)
+	// Set Done after processing all packets
+	setDone(cycle + 1)
 
 	// Q: Notify upstream about readiness for next cycle
 	updateUpstreamReady(cycle+1, true)
@@ -287,7 +287,7 @@ func TestCycleProcessorBasicFlow(t *testing.T) {
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, testProc)
 
 	// Set initial state
-	upstreamPort.SetDoneUntil(0)
+	upstreamPort.SetDone(-1)
 	downstreamPort.UpdateReady(0, true)
 
 	// Send a packet from upstream
@@ -296,7 +296,7 @@ func TestCycleProcessorBasicFlow(t *testing.T) {
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 	}
 	upstreamPort.Chan() <- pkt
-	upstreamPort.SetDoneUntil(1)
+	upstreamPort.SetDone(1)
 
 	// Process cycle 0
 	err := processor.ProcessCycle(0)
@@ -407,7 +407,7 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 
 	// Set initial state
-	upstreamPort.SetDoneUntil(5)
+	upstreamPort.SetDone(5)
 
 	// Send a packet for cycle 5
 	pkt := PacketWithCycle{
@@ -415,7 +415,7 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 	}
 	upstreamPort.Chan() <- pkt
-	upstreamPort.SetDoneUntil(6)
+	upstreamPort.SetDone(6)
 
 	// Process cycle 5 - cycle 5 is not ready, so packet should be saved to pendingPackets
 	err := processor.ProcessCycle(5)
@@ -461,8 +461,8 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 	// Now set cycle 5 as ready
 	downstreamPort.UpdateReady(5, true)
 
-	// Set upstream DoneUntil for cycle 7
-	upstreamPort.SetDoneUntil(7)
+	// Set upstream Done for cycle 7
+	upstreamPort.SetDone(7)
 
 	// Process cycle 7 - cycle 5 is now ready, packet should be sent
 	err = processor.ProcessCycle(7)
@@ -511,7 +511,7 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 
-	upstreamPort.SetDoneUntil(10)
+	upstreamPort.SetDone(10)
 
 	// Send packet for cycle 10
 	pkt := PacketWithCycle{
@@ -519,7 +519,7 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 	}
 	upstreamPort.Chan() <- pkt
-	upstreamPort.SetDoneUntil(11)
+	upstreamPort.SetDone(11)
 
 	// Process cycle 10 - cycle 10 is not ready, packet should be saved to pendingPackets
 	err := processor.ProcessCycle(10)
@@ -542,8 +542,8 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 
 	// Process cycles 11-14, each time checking cycle 10 (still not ready)
 	for cycle := 11; cycle <= 14; cycle++ {
-		// Set upstream DoneUntil for this cycle
-		upstreamPort.SetDoneUntil(cycle)
+		// Set upstream Done for this cycle
+		upstreamPort.SetDone(cycle)
 		err = processor.ProcessCycle(cycle)
 		if err != nil {
 			t.Fatalf("ProcessCycle failed: %v", err)
@@ -571,8 +571,8 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 	// Now set cycle 10 as ready
 	downstreamPort.UpdateReady(10, true)
 
-	// Set upstream DoneUntil for cycle 15
-	upstreamPort.SetDoneUntil(15)
+	// Set upstream Done for cycle 15
+	upstreamPort.SetDone(15)
 
 	// Process cycle 15 - cycle 10 is now ready, packet should be sent
 	err = processor.ProcessCycle(15)
@@ -602,7 +602,7 @@ func TestCycleProcessorWithCustomHooks(t *testing.T) {
 	proc := &DefaultProcessor{}
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 
-	upstreamPort.SetDoneUntil(0)
+	upstreamPort.SetDone(-1)
 	downstreamPort.UpdateReady(0, true)
 
 	// Send packet
@@ -611,7 +611,7 @@ func TestCycleProcessorWithCustomHooks(t *testing.T) {
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 	}
 	upstreamPort.Chan() <- pkt
-	upstreamPort.SetDoneUntil(1)
+	upstreamPort.SetDone(1)
 
 	// Process cycle
 	err := processor.ProcessCycle(0)
@@ -631,8 +631,8 @@ func TestCycleProcessorWithCustomHooks(t *testing.T) {
 	}
 }
 
-// TestCycleProcessorWaitsForUpstreamDoneUntil tests that processor waits for upstream DoneUntil.
-func TestCycleProcessorWaitsForUpstreamDoneUntil(t *testing.T) {
+// TestCycleProcessorWaitsForUpstreamDone tests that processor waits for upstream Done.
+func TestCycleProcessorWaitsForUpstreamDone(t *testing.T) {
 	t.Parallel()
 
 	upstreamPort := NewCyclePort(8)
@@ -640,11 +640,11 @@ func TestCycleProcessorWaitsForUpstreamDoneUntil(t *testing.T) {
 
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, nil)
 
-	// Initially DoneUntil is -1, so cycle 0 should wait
+	// Initially Done is -1, so cycle 0 should wait
 	done := make(chan bool, 1)
 
 	go func() {
-		// This should wait until upstream sets DoneUntil >= 0
+		// This should wait until upstream sets Done >= 0
 		err := processor.ProcessCycle(0)
 		if err != nil {
 			t.Errorf("ProcessCycle failed: %v", err)
@@ -655,8 +655,8 @@ func TestCycleProcessorWaitsForUpstreamDoneUntil(t *testing.T) {
 	// Give it a moment to start waiting
 	time.Sleep(10 * time.Millisecond)
 
-	// Set DoneUntil, should unblock
-	upstreamPort.SetDoneUntil(0)
+	// Set Done, should unblock
+	upstreamPort.SetDone(-1)
 	downstreamPort.UpdateReady(0, true)
 
 	// Send a packet
@@ -671,7 +671,7 @@ func TestCycleProcessorWaitsForUpstreamDoneUntil(t *testing.T) {
 	case <-done:
 		// Success
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("ProcessCycle did not complete after setting DoneUntil")
+		t.Fatal("ProcessCycle did not complete after setting Done")
 	}
 }
 
@@ -696,7 +696,7 @@ func TestCycleProcessorReceivesAllPackets(t *testing.T) {
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 
 	// Set initial state
-	upstreamPort.SetDoneUntil(5)
+	upstreamPort.SetDone(5)
 	downstreamPort.SetReadyUntil(5)
 	downstreamPort.UpdateReady(5, true)
 
@@ -704,14 +704,14 @@ func TestCycleProcessorReceivesAllPackets(t *testing.T) {
 	const numPackets = 5
 	for i := 0; i < numPackets; i++ {
 		pkt := PacketWithCycle{
-			Cycle:  uint64(5),
+			Cycle:  5,
 			Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: packet.Packet{}.Payload + string(rune('0'+i))},
 		}
 		// Create unique payload
 		pkt.Packet.Payload = fmt.Sprintf("packet-%d", i)
 		upstreamPort.Chan() <- pkt
 	}
-	upstreamPort.SetDoneUntil(6)
+	upstreamPort.SetDone(6)
 
 	// Process cycle 5 - should receive and process all packets
 	err := processor.ProcessCycle(5)
@@ -788,7 +788,7 @@ func TestCycleProcessorHandlesMultipleCyclesInChannel(t *testing.T) {
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, proc)
 
 	// Set initial state - allow processing cycles 5, 6, 7
-	upstreamPort.SetDoneUntil(7)
+	upstreamPort.SetDone(7)
 	downstreamPort.SetReadyUntil(7)
 	for cycle := 5; cycle <= 7; cycle++ {
 		downstreamPort.UpdateReady(cycle, true)
@@ -863,7 +863,7 @@ func TestCycleProcessorUpdateReadyAfterProcessCycle(t *testing.T) {
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, nil)
 
 	// Set initial state
-	upstreamPort.SetDoneUntil(0)
+	upstreamPort.SetDone(-1)
 	// DO NOT manually call UpdateReady(1, true) - ProcessCycle should do it automatically
 
 	// Process cycle 0
@@ -899,7 +899,7 @@ func TestCycleProcessorUpdateReadyAfterProcessCycle(t *testing.T) {
 	}
 
 	// Process cycle 1
-	upstreamPort.SetDoneUntil(1)
+	upstreamPort.SetDone(1)
 	err = processor.ProcessCycle(1)
 	if err != nil {
 		t.Fatalf("ProcessCycle failed: %v", err)
@@ -932,7 +932,7 @@ func TestCycleProcessorUpdateReadyWithoutUpdateReadyBlocks(t *testing.T) {
 	upstreamPort := NewCyclePort(8)
 
 	// Set initial state
-	upstreamPort.SetDoneUntil(0)
+	upstreamPort.SetDone(-1)
 	// DO NOT call UpdateReady(1, true)
 	// This simulates the buggy behavior where ProcessCycle doesn't call UpdateReady
 

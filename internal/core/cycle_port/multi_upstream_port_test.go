@@ -40,8 +40,8 @@ func TestNewMultiUpstreamPortEmptyList(t *testing.T) {
 	NewMultiUpstreamPort([]CyclePort{})
 }
 
-// TestMultiUpstreamPortGetDoneUntil tests GetDoneUntil returns minimum value.
-func TestMultiUpstreamPortGetDoneUntil(t *testing.T) {
+// TestMultiUpstreamPortGetDone tests GetDone returns minimum value.
+func TestMultiUpstreamPortGetDone(t *testing.T) {
 	t.Parallel()
 
 	upstreamPort1 := NewCyclePort(8)
@@ -52,29 +52,29 @@ func TestMultiUpstreamPortGetDoneUntil(t *testing.T) {
 	defer multi.Close()
 
 	// Initial value should be -1
-	if multi.GetDoneUntil() != -1 {
-		t.Fatalf("expected initial DoneUntil -1, got %d", multi.GetDoneUntil())
+	if multi.GetDone() != -1 {
+		t.Fatalf("expected initial Done -1, got %d", multi.GetDone())
 	}
 
 	// Set different values
-	upstreamPort1.SetDoneUntil(5)
-	upstreamPort2.SetDoneUntil(3)
-	upstreamPort3.SetDoneUntil(7)
+	upstreamPort1.SetDone(5)
+	upstreamPort2.SetDone(3)
+	upstreamPort3.SetDone(7)
 
 	// Should return minimum (3)
-	if multi.GetDoneUntil() != 3 {
-		t.Fatalf("expected DoneUntil 3 (minimum), got %d", multi.GetDoneUntil())
+	if multi.GetDone() != 3 {
+		t.Fatalf("expected Done 3 (minimum), got %d", multi.GetDone())
 	}
 
 	// Update to new minimum
-	upstreamPort2.SetDoneUntil(10)
-	if multi.GetDoneUntil() != 5 {
-		t.Fatalf("expected DoneUntil 5 (new minimum), got %d", multi.GetDoneUntil())
+	upstreamPort2.SetDone(10)
+	if multi.GetDone() != 5 {
+		t.Fatalf("expected Done 5 (new minimum), got %d", multi.GetDone())
 	}
 }
 
-// TestMultiUpstreamPortWaitForDoneUntil tests waiting for all upstream ports.
-func TestMultiUpstreamPortWaitForDoneUntil(t *testing.T) {
+// TestMultiUpstreamPortWaitForDone tests waiting for all upstream ports.
+func TestMultiUpstreamPortWaitForDone(t *testing.T) {
 	t.Parallel()
 
 	upstreamPort1 := NewCyclePort(8)
@@ -85,14 +85,14 @@ func TestMultiUpstreamPortWaitForDoneUntil(t *testing.T) {
 	defer multi.Close()
 
 	// Set all to cycle 5
-	upstreamPort1.SetDoneUntil(5)
-	upstreamPort2.SetDoneUntil(5)
-	upstreamPort3.SetDoneUntil(5)
+	upstreamPort1.SetDone(5)
+	upstreamPort2.SetDone(5)
+	upstreamPort3.SetDone(5)
 
 	// Should return immediately
 	done := make(chan struct{})
 	go func() {
-		multi.WaitForDoneUntil(5)
+		multi.WaitForDone(5)
 		close(done)
 	}()
 
@@ -100,35 +100,35 @@ func TestMultiUpstreamPortWaitForDoneUntil(t *testing.T) {
 	case <-done:
 		// Success
 	case <-time.After(1 * time.Second):
-		t.Fatal("WaitForDoneUntil should return immediately when all upstream are ready")
+		t.Fatal("WaitForDone should return immediately when all upstream are ready")
 	}
 
 	// Test blocking: one upstream is behind
-	upstreamPort1.SetDoneUntil(10)
-	upstreamPort2.SetDoneUntil(10)
-	upstreamPort3.SetDoneUntil(8) // Behind
+	upstreamPort1.SetDone(10)
+	upstreamPort2.SetDone(10)
+	upstreamPort3.SetDone(8) // Behind
 
 	done2 := make(chan struct{})
 	go func() {
-		multi.WaitForDoneUntil(10)
+		multi.WaitForDone(10)
 		close(done2)
 	}()
 
 	// Should block because port3 is at 8
 	select {
 	case <-done2:
-		t.Fatal("WaitForDoneUntil should block when one upstream is behind")
+		t.Fatal("WaitForDone should block when one upstream is behind")
 	case <-time.After(100 * time.Millisecond):
 		// Expected: still blocking
 	}
 
 	// Update port3 to 10, should unblock
-	upstreamPort3.SetDoneUntil(10)
+	upstreamPort3.SetDone(10)
 	select {
 	case <-done2:
 		// Success
 	case <-time.After(1 * time.Second):
-		t.Fatal("WaitForDoneUntil should unblock when all upstream reach target")
+		t.Fatal("WaitForDone should unblock when all upstream reach target")
 	}
 }
 
@@ -296,9 +296,9 @@ func TestMultiUpstreamPortWithCycleProcessor(t *testing.T) {
 
 	processor := NewCycleProcessor(multi, downstreamPort, nil)
 
-	// Set initial DoneUntil for upstream ports
-	upstreamPort1.SetDoneUntil(0)
-	upstreamPort2.SetDoneUntil(0)
+	// Set initial Done for upstream ports
+	upstreamPort1.SetDone(-1)
+	upstreamPort2.SetDone(-1)
 
 	// Set downstream ready for cycle 0
 	downstreamPort.UpdateReady(0, true)
@@ -319,9 +319,9 @@ func TestMultiUpstreamPortWithCycleProcessor(t *testing.T) {
 	// Give some time for packets to be forwarded to mergedChan
 	time.Sleep(10 * time.Millisecond)
 
-	// Set DoneUntil after sending
-	upstreamPort1.SetDoneUntil(1)
-	upstreamPort2.SetDoneUntil(1)
+	// Set Done after sending
+	upstreamPort1.SetDone(1)
+	upstreamPort2.SetDone(1)
 
 	// Process cycle 0
 	err := processor.ProcessCycle(0)
@@ -351,9 +351,9 @@ func TestMultiUpstreamPortWithCycleProcessor(t *testing.T) {
 		t.Fatal("not all packets were received by downstream")
 	}
 
-	// Verify downstream DoneUntil was updated
-	if downstreamPort.GetDoneUntil() < 1 {
-		t.Fatalf("expected downstream DoneUntil >= 1, got %d", downstreamPort.GetDoneUntil())
+	// Verify downstream Done was updated
+	if downstreamPort.GetDone() < 1 {
+		t.Fatalf("expected downstream Done >= 1, got %d", downstreamPort.GetDone())
 	}
 }
 
@@ -377,7 +377,7 @@ func TestMultiUpstreamPortConcurrent(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
 				pkt := PacketWithCycle{
-					Cycle:  uint64(j),
+					Cycle:  j,
 					Packet: packet.Packet{SourceID: id, TargetID: 10, Payload: "pkt"},
 				}
 				p.Chan() <- pkt
@@ -400,13 +400,13 @@ func TestMultiUpstreamPortConcurrent(t *testing.T) {
 		}
 	}()
 
-	// Concurrently update DoneUntil
+	// Concurrently update Done
 	wg.Add(3)
 	for i, port := range []CyclePort{upstreamPort1, upstreamPort2, upstreamPort3} {
 		go func(p CyclePort, id int) {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
-				p.SetDoneUntil(j + 1)
+				p.SetDone(j)
 				time.Sleep(time.Millisecond)
 			}
 		}(port, i)
@@ -457,14 +457,14 @@ func TestMultiUpstreamPortUpstreamOperationsPanic(t *testing.T) {
 	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2})
 	defer multi.Close()
 
-	// Test SetDoneUntil panics
+	// Test SetDone panics
 	func() {
 		defer func() {
 			if r := recover(); r == nil {
-				t.Fatal("expected SetDoneUntil to panic")
+				t.Fatal("expected SetDone to panic")
 			}
 		}()
-		multi.SetDoneUntil(5)
+		multi.SetDone(5)
 	}()
 
 	// Test Chan panics

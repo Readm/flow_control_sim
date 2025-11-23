@@ -106,8 +106,8 @@ func TestNodeWithSingleFlow(t *testing.T) {
 		Payload:  "test",
 	}
 
-	// Initialize upstream DoneUntil for flow0 (no upstream, so set to 0)
-	flow0.InPort().SetDoneUntil(0)
+	// Initialize upstream Done for flow0 (no upstream, so set to 0)
+	flow0.InPort().SetDone(-1)
 
 	// Initialize downstream ready state
 	if inPortImpl, ok := inPort.(*cycle_port.CyclePortImpl); ok {
@@ -118,13 +118,13 @@ func TestNodeWithSingleFlow(t *testing.T) {
 	// Send packet through port
 	env := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt}
 	outPort.Chan() <- env
-	outPort.SetDoneUntil(1)
+	outPort.SetDone(1)
 
 	// Process cycles
 	flow0.ProcessCycle(0)
 	link.ProcessCycle(0)
 	link.ProcessCycle(1)
-	flow0.InPort().SetDoneUntil(1)
+	flow0.InPort().SetDone(1)
 	flow0.ProcessCycle(1)
 
 	// Verify packet was processed
@@ -152,8 +152,8 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 
 		links[i] = link.NewLink(0, flow.ID(), outPort, inPort, 1, 1)
 
-		// Initialize upstream DoneUntil for flow (no upstream, so set to 0)
-		flow.InPort().SetDoneUntil(0)
+		// Initialize upstream Done for flow (no upstream, so set to 0)
+		flow.InPort().SetDone(-1)
 
 		// Initialize downstream ready state
 		if inPortImpl, ok := inPort.(*cycle_port.CyclePortImpl); ok {
@@ -168,7 +168,7 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 		}
 		env := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt}
 		outPort.Chan() <- env
-		outPort.SetDoneUntil(1)
+		outPort.SetDone(1)
 	}
 
 	// Process cycles
@@ -203,8 +203,8 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 
 		links[i] = link.NewLink(0, flow.ID(), outPort, inPort, 1, 1)
 
-		// Initialize upstream DoneUntil for flow (no upstream, so set to 0)
-		flow.InPort().SetDoneUntil(0)
+		// Initialize upstream Done for flow (no upstream, so set to 0)
+		flow.InPort().SetDone(-1)
 
 		// Initialize downstream ready state
 		if inPortImpl, ok := inPort.(*cycle_port.CyclePortImpl); ok {
@@ -219,7 +219,7 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 		}
 		env := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt}
 		outPort.Chan() <- env
-		outPort.SetDoneUntil(1)
+		outPort.SetDone(1)
 	}
 
 	// Process cycles
@@ -269,8 +269,8 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 		return -1
 	})
 
-	// Initialize upstream DoneUntil for flow (no upstream, so set to 0)
-	flow0.InPort().SetDoneUntil(0)
+	// Initialize upstream Done for flow (no upstream, so set to 0)
+	flow0.InPort().SetDone(-1)
 
 	// Initialize downstream ready state
 	if inPortImpl, ok := inPort.(*cycle_port.CyclePortImpl); ok {
@@ -284,12 +284,12 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 			TargetID: 1,
 			Payload:  fmt.Sprintf("test-%d", cycle),
 		}
-		env := cycle_port.PacketWithCycle{Cycle: uint64(cycle), Packet: pkt}
+		env := cycle_port.PacketWithCycle{Cycle: cycle, Packet: pkt}
 		outPort.Chan() <- env
-		outPort.SetDoneUntil(cycle + 1)
+		outPort.SetDone(cycle)
 
 		// Process Flow cycle (sends packet to outPort)
-		flow0.InPort().SetDoneUntil(cycle)
+		flow0.InPort().SetDone(cycle)
 		flow0.ProcessCycle(cycle)
 
 		// Process Link cycle (receives from outPort)
@@ -299,7 +299,7 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 		link.ProcessCycle(cycle + 1)
 
 		// Process Flow next cycle (receives and processes packet)
-		flow0.InPort().SetDoneUntil(cycle + 1)
+		flow0.InPort().SetDone(cycle)
 		flow0.ProcessCycle(cycle + 1)
 	}
 
@@ -324,9 +324,9 @@ func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
 	targetInPort := targetFlow.InPort()
 	link := link.NewLink(1, 2, outPort, targetInPort, 1, 10)
 
-	// Initialize upstream DoneUntil for flows
-	f.InPort().SetDoneUntil(0)
-	targetFlow.InPort().SetDoneUntil(0)
+	// Initialize upstream Done for flows
+	f.InPort().SetDone(-1)
+	targetFlow.InPort().SetDone(-1)
 
 	// Initialize downstream ready state
 	outPort.SetReadyUntil(10)

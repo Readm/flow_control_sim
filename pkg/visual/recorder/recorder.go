@@ -183,20 +183,20 @@ func buildEdges(links []*link.Link, currentCycle uint64) []frame.Edge {
 		// Build stages in order from target to source
 		// Stage 0 is closest to target (arriving soon), Stage latency-1 is closest to source (just sent)
 		stages := make([]frame.PipelineStage, latency)
-		for stageIdx := uint64(0); stageIdx < latency; stageIdx++ {
+		for stageIdx := 0; stageIdx < latency; stageIdx++ {
 			// Calculate which slot corresponds to this stage
 			// Stage 0 (closest to target): packets arriving in 1 cycle → slot (currentCycle + 1) % slotCount
 			// Stage 1: packets arriving in 2 cycles → slot (currentCycle + 2) % slotCount
 			// ...
 			// Stage latency-1 (closest to source): packets arriving in latency cycles → slot (currentCycle + latency) % slotCount
 			// So: slotIdx = (currentCycle + stageIdx + 1) % slotCount
-			slotIdx := (currentCycle + stageIdx + 1) % slotCount
+			slotIdx := int((currentCycle + uint64(stageIdx) + 1) % uint64(slotCount))
 			packetCount := 0
-			if slotIdx < uint64(len(occupancy)) {
+			if slotIdx < len(occupancy) {
 				packetCount = occupancy[slotIdx]
 			}
 			stages[stageIdx] = frame.PipelineStage{
-				StageIndex:  int(stageIdx),
+				StageIndex:  stageIdx,
 				PacketCount: packetCount,
 			}
 		}

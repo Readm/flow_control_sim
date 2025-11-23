@@ -15,6 +15,6 @@ type Packet struct {
 // PacketWithCycle associates a packet with the cycle in which it becomes visible to
 // the destination flow. This is the element transmitted through link channels.
 type PacketWithCycle struct {
-	Cycle  uint64
+	Cycle  int
 	Packet Packet
 }

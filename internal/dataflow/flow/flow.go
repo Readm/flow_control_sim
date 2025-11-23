@@ -47,7 +47,7 @@ func (f *FlowPacketProcessor) ProcessPackets(
 	cycle int,
 	checkReady func(int) bool,
 	sendPacket func(cycle_port.PacketWithCycle),
-	setDoneUntil func(int),
+	setDone func(int),
 	updateUpstreamReady func(cycle int, ready bool),
 ) {
 	// Collect all incoming packets
@@ -95,7 +95,7 @@ process:
 		outPort := f.flow.outPorts[portIndex]
 		pktCycle := cycle
 		env := cycle_port.PacketWithCycle{
-			Cycle:  uint64(pktCycle),
+			Cycle:  pktCycle,
 			Packet: pkt,
 		}
 
@@ -112,11 +112,11 @@ process:
 	// Update pending packets
 	f.pendingPackets = newPendingPackets
 
-	// Set DoneUntil for all output ports
+	// Set Done for all output ports
 	for _, outPort := range f.flow.outPorts {
-		currentDoneUntil := outPort.GetDoneUntil()
-		if currentDoneUntil < cycle+1 {
-			outPort.SetDoneUntil(cycle + 1)
+		currentDone := outPort.GetDone()
+		if currentDone < cycle {
+			outPort.SetDone(cycle)
 		}
 	}
 

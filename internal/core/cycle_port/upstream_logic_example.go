@@ -27,13 +27,13 @@ func UpstreamSendWithCycleIncrement(port CyclePort, originalCycle int, pkt packe
 		if port.Ready(currentCycle) {
 			// Ready! Send the packet with incremented cycle
 			packetWithCycle := PacketWithCycle{
-				Cycle:  uint64(currentCycle),
+				Cycle:  currentCycle,
 				Packet: pkt,
 			}
 			port.Chan() <- packetWithCycle
 
-			// Set DoneUntil after sending
-			port.SetDoneUntil(currentCycle + 1)
+			// Set Done after sending
+			port.SetDone(currentCycle)
 
 			// cycleIncrement now equals the number of non-ready cycles skipped
 			// originalCycle + cycleIncrement == currentCycle
@@ -56,7 +56,7 @@ func UpstreamSendWithCycleIncrement(port CyclePort, originalCycle int, pkt packe
 //
 // func (upstream *UpstreamComponent) SendPacket(cycle int, pkt packet.Packet) {
 //     // Original logic: just send
-//     // packetWithCycle := PacketWithCycle{Cycle: uint64(cycle), Packet: pkt}
+//     // packetWithCycle := PacketWithCycle{Cycle: cycle, Packet: pkt}
 //     // downstreamPort.Chan() <- packetWithCycle
 //
 //     // New logic: handle non-ready cycles by incrementing

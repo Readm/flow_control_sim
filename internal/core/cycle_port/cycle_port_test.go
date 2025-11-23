@@ -9,21 +9,21 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// TestSetDoneUntilAtomic tests that SetDoneUntil uses atomic operations correctly.
-func TestSetDoneUntilAtomic(t *testing.T) {
+// TestSetDoneAtomic tests that SetDone uses atomic operations correctly.
+func TestSetDoneAtomic(t *testing.T) {
 	t.Parallel()
 
 	port := NewCyclePort(8)
 
 	// Test initial value
-	if port.GetDoneUntil() != -1 {
-		t.Fatalf("expected initial DoneUntil -1, got %d", port.GetDoneUntil())
+	if port.GetDone() != -1 {
+		t.Fatalf("expected initial Done -1, got %d", port.GetDone())
 	}
 
 	// Test setting value
-	port.SetDoneUntil(5)
-	if port.GetDoneUntil() != 5 {
-		t.Fatalf("expected DoneUntil 5, got %d", port.GetDoneUntil())
+	port.SetDone(5)
+	if port.GetDone() != 5 {
+		t.Fatalf("expected Done 5, got %d", port.GetDone())
 	}
 
 	// Test concurrent updates
@@ -34,16 +34,16 @@ func TestSetDoneUntilAtomic(t *testing.T) {
 	for i := 0; i < iterations; i++ {
 		go func(val int) {
 			defer wg.Done()
-			port.SetDoneUntil(val)
+			port.SetDone(val)
 		}(i)
 	}
 
 	wg.Wait()
 
 	// Final value should be one of the set values
-	final := port.GetDoneUntil()
+	final := port.GetDone()
 	if final < 0 || final >= iterations {
-		t.Fatalf("expected DoneUntil in range [0, %d), got %d", iterations, final)
+		t.Fatalf("expected Done in range [0, %d), got %d", iterations, final)
 	}
 }
 
@@ -278,20 +278,20 @@ func TestZeroCycleLatency(t *testing.T) {
 	// Simulate Flow0 -> Link (latency 0) -> Flow1
 	linkPort := NewCyclePort(8)
 
-	// Cycle 0: Flow0 sets DoneUntil 1
-	linkPort.SetDoneUntil(1)
+	// Cycle 0: Flow0 sets Done 1
+	linkPort.SetDone(1)
 
-	// Link can finish cycle 0, sets DoneUntil for Flow1
-	// Link's current cycle is 0, latency is 0, so DoneUntil = 0 + 0 + 1 = 1
+	// Link can finish cycle 0, sets Done for Flow1
+	// Link's current cycle is 0, latency is 0, so Done = 0 + 0 + 1 = 1
 	// (This would be set by Link to Flow1's port, but we're testing the mechanism)
 
 	// Flow1 checks if it can finish cycle 0
-	// It needs upstream DoneUntil >= 0
-	if linkPort.GetDoneUntil() < 0 {
-		t.Fatal("Flow1 cannot start cycle 0: upstream DoneUntil < 0")
+	// It needs upstream Done >= 0
+	if linkPort.GetDone() < 0 {
+		t.Fatal("Flow1 cannot start cycle 0: upstream Done < 0")
 	}
 
-	// Cycle 1: Flow0 sends packet and sets DoneUntil 2
+	// Cycle 1: Flow0 sends packet and sets Done 2
 	pkt := PacketWithCycle{
 		Cycle:  1,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "cycle1"},
@@ -308,12 +308,12 @@ func TestZeroCycleLatency(t *testing.T) {
 	// Send packet
 	linkPort.Chan() <- pkt
 
-	// Link processes and sets DoneUntil for Flow1
-	linkPort.SetDoneUntil(2)
+	// Link processes and sets Done for Flow1
+	linkPort.SetDone(2)
 
 	// Flow1 can finish cycle 1
-	if linkPort.GetDoneUntil() < 1 {
-		t.Fatal("Flow1 cannot start cycle 1: upstream DoneUntil < 1")
+	if linkPort.GetDone() < 1 {
+		t.Fatal("Flow1 cannot start cycle 1: upstream Done < 1")
 	}
 
 	// Receive packet
@@ -342,7 +342,7 @@ func TestConcurrentPushPop(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < numPackets; i++ {
 			pkt := PacketWithCycle{
-				Cycle:  uint64(i),
+				Cycle:  i,
 				Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"},
 			}
 			port.Chan() <- pkt
@@ -401,8 +401,8 @@ func TestChainThreeFlows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Initialize: Flow0 sets initial DoneUntil
-	port01.SetDoneUntil(0)
+	// Initialize: Flow0 sets initial Done
+	port01.SetDone(-1)
 
 	// Flow0: sends packets to Flow1
 	go func() {
@@ -422,13 +422,13 @@ func TestChainThreeFlows(t *testing.T) {
 
 			// Send packet
 			pkt := PacketWithCycle{
-				Cycle:  uint64(cycle),
+				Cycle:  cycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "flow0"},
 			}
 			port01.Chan() <- pkt
 
-			// Set DoneUntil after sending
-			port01.SetDoneUntil(cycle + 1)
+			// Set Done after sending
+			port01.SetDone(cycle)
 
 			flow0Mu.Lock()
 			flow0Cycles = append(flow0Cycles, uint64(cycle))
@@ -443,9 +443,9 @@ func TestChainThreeFlows(t *testing.T) {
 	go func() {
 		defer func() { flow1Done <- true }()
 		for cycle := 0; cycle < numCycles; cycle++ {
-			// Check upstream (Flow0) DoneUntil >= cycle
-			// For cycle 0, DoneUntil should be >= 0 (initialized to 0)
-			for port01.GetDoneUntil() < cycle {
+			// Check upstream (Flow0) Done >= cycle
+			// For cycle 0, Done should be >= 0 (initialized to 0)
+			for port01.GetDone() < cycle {
 				select {
 				case <-ctx.Done():
 					return
@@ -462,7 +462,7 @@ func TestChainThreeFlows(t *testing.T) {
 			// Receive packet from Flow0
 			select {
 			case pkt := <-port01.ReceiveChan():
-				if pkt.Cycle != uint64(cycle) {
+				if pkt.Cycle != cycle {
 					// May receive out of order, but should eventually get all
 					t.Logf("Flow1: received cycle %d, expected %d", pkt.Cycle, cycle)
 				}
@@ -472,7 +472,7 @@ func TestChainThreeFlows(t *testing.T) {
 
 				// Prepare Flow2: update ready status
 				if cycle == 0 {
-					port12.SetDoneUntil(0)
+					port12.SetDone(-1)
 					port12.UpdateReady(0, true)
 				} else {
 					port12.UpdateReady(cycle, true)
@@ -486,13 +486,13 @@ func TestChainThreeFlows(t *testing.T) {
 
 				// Forward to Flow2
 				forwardPkt := PacketWithCycle{
-					Cycle:  uint64(cycle),
+					Cycle:  cycle,
 					Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "flow1"},
 				}
 				port12.Chan() <- forwardPkt
 
-				// Set DoneUntil
-				port12.SetDoneUntil(cycle + 1)
+				// Set Done
+				port12.SetDone(cycle)
 
 			case <-ctx.Done():
 				return
@@ -511,8 +511,8 @@ func TestChainThreeFlows(t *testing.T) {
 	go func() {
 		defer func() { flow2Done <- true }()
 		for cycle := 0; cycle < numCycles; cycle++ {
-			// Check upstream (Flow1) DoneUntil >= cycle
-			for port12.GetDoneUntil() < cycle {
+			// Check upstream (Flow1) Done >= cycle
+			for port12.GetDone() < cycle {
 				select {
 				case <-ctx.Done():
 					return
@@ -529,7 +529,7 @@ func TestChainThreeFlows(t *testing.T) {
 			// Receive packet from Flow1
 			select {
 			case pkt := <-port12.ReceiveChan():
-				if pkt.Cycle != uint64(cycle) {
+				if pkt.Cycle != cycle {
 					t.Logf("Flow2: received cycle %d, expected %d", pkt.Cycle, cycle)
 				}
 
@@ -636,13 +636,13 @@ func TestChainWithBackpressure(t *testing.T) {
 
 			select {
 			case port01.Chan() <- PacketWithCycle{
-				Cycle:  uint64(cycle),
+				Cycle:  cycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 			}:
 				mu.Lock()
 				flow0Sent++
 				mu.Unlock()
-				port01.SetDoneUntil(cycle + 1)
+				port01.SetDone(cycle)
 			case <-ctx.Done():
 				return
 			}
@@ -655,7 +655,7 @@ func TestChainWithBackpressure(t *testing.T) {
 	go func() {
 		for cycle := 0; cycle < numCycles; cycle++ {
 			// Wait for upstream
-			for port01.GetDoneUntil() < cycle {
+			for port01.GetDone() < cycle {
 				select {
 				case <-ctx.Done():
 					return
@@ -673,13 +673,13 @@ func TestChainWithBackpressure(t *testing.T) {
 				if port12.Ready(cycle) {
 					select {
 					case port12.Chan() <- PacketWithCycle{
-						Cycle:  uint64(cycle),
+						Cycle:  cycle,
 						Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"},
 					}:
 						mu.Lock()
 						flow1Sent++
 						mu.Unlock()
-						port12.SetDoneUntil(cycle + 1)
+						port12.SetDone(cycle)
 						port01.UpdateReady(cycle, true)
 					case <-ctx.Done():
 						return
@@ -694,7 +694,7 @@ func TestChainWithBackpressure(t *testing.T) {
 	// Flow2: receives (slow receiver to create backpressure)
 	go func() {
 		for cycle := 0; cycle < numCycles; cycle++ {
-			for port12.GetDoneUntil() < cycle {
+			for port12.GetDone() < cycle {
 				select {
 				case <-ctx.Done():
 					return
@@ -755,10 +755,10 @@ func TestChainParallelComputation(t *testing.T) {
 		for cycle := 0; cycle < numCycles; cycle++ {
 			port01.UpdateReady(cycle, true) // No backpressure
 			port01.Chan() <- PacketWithCycle{
-				Cycle:  uint64(cycle),
+				Cycle:  cycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 			}
-			port01.SetDoneUntil(cycle + 1)
+			port01.SetDone(cycle)
 		}
 		flow0End = time.Now()
 	}()
@@ -766,7 +766,7 @@ func TestChainParallelComputation(t *testing.T) {
 	// Flow1: fast processor
 	go func() {
 		for cycle := 0; cycle < numCycles; cycle++ {
-			for port01.GetDoneUntil() < cycle {
+			for port01.GetDone() < cycle {
 				select {
 				case <-ctx.Done():
 					return
@@ -779,10 +779,10 @@ func TestChainParallelComputation(t *testing.T) {
 			case <-port01.ReceiveChan():
 				port12.UpdateReady(cycle, true) // No backpressure
 				port12.Chan() <- PacketWithCycle{
-					Cycle:  uint64(cycle),
+					Cycle:  cycle,
 					Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"},
 				}
-				port12.SetDoneUntil(cycle + 1)
+				port12.SetDone(cycle)
 				port01.UpdateReady(cycle, true)
 			case <-ctx.Done():
 				return
@@ -794,7 +794,7 @@ func TestChainParallelComputation(t *testing.T) {
 	// Flow2: fast receiver
 	go func() {
 		for cycle := 0; cycle < numCycles; cycle++ {
-			for port12.GetDoneUntil() < cycle {
+			for port12.GetDone() < cycle {
 				select {
 				case <-ctx.Done():
 					return
@@ -905,11 +905,11 @@ func TestUpstreamDelaysWhenDownstreamNotReady(t *testing.T) {
 		if ready {
 			// Ready, send the packet
 			pkt := PacketWithCycle{
-				Cycle:  uint64(currentCycle),
+				Cycle:  currentCycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 			}
 			port.Chan() <- pkt
-			port.SetDoneUntil(currentCycle + 1)
+			port.SetDone(currentCycle)
 			break
 		} else {
 			// Not ready, increment cycle and retry
@@ -932,7 +932,7 @@ func TestUpstreamDelaysWhenDownstreamNotReady(t *testing.T) {
 	expectedCycleIncrement := currentCycle - originalCycle
 	receivedMu.Unlock()
 
-	if receivedPkt.Cycle != uint64(currentCycle) {
+	if receivedPkt.Cycle != currentCycle {
 		t.Errorf("expected packet cycle %d, got %d (incremented by %d non-ready cycles)",
 			currentCycle, receivedPkt.Cycle, expectedCycleIncrement)
 	}
@@ -1010,11 +1010,11 @@ func TestUpstreamHandlesMultipleNonReadyCycles(t *testing.T) {
 		if ready {
 			// Ready, send the packet
 			pkt := PacketWithCycle{
-				Cycle:  uint64(currentCycle),
+				Cycle:  currentCycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "multi-test"},
 			}
 			port.Chan() <- pkt
-			port.SetDoneUntil(currentCycle + 1)
+			port.SetDone(currentCycle)
 			break
 		} else {
 			// Not ready, increment cycle and retry
@@ -1036,7 +1036,7 @@ func TestUpstreamHandlesMultipleNonReadyCycles(t *testing.T) {
 	cycleIncrement := currentCycle - originalCycle
 	receivedMu.Unlock()
 
-	if receivedPkt.Cycle != uint64(currentCycle) {
+	if receivedPkt.Cycle != currentCycle {
 		t.Errorf("expected packet cycle %d, got %d", currentCycle, receivedPkt.Cycle)
 	}
 
@@ -1115,11 +1115,11 @@ func TestUpstreamCycleIncrementMatchesNonReadyCount(t *testing.T) {
 		if ready {
 			// Ready, send the packet
 			pkt := PacketWithCycle{
-				Cycle:  uint64(currentCycle),
+				Cycle:  currentCycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "exact-test"},
 			}
 			port.Chan() <- pkt
-			port.SetDoneUntil(currentCycle + 1)
+			port.SetDone(currentCycle)
 			break
 		} else {
 			// Not ready, increment cycle
@@ -1142,7 +1142,7 @@ func TestUpstreamCycleIncrementMatchesNonReadyCount(t *testing.T) {
 
 	// Verify: cycle should be incremented by exactly the number of non-ready cycles
 	expectedFinalCycle := originalCycle + len(nonReadyCycles)
-	if receivedPkt.Cycle != uint64(expectedFinalCycle) {
+	if receivedPkt.Cycle != expectedFinalCycle {
 		t.Errorf("expected packet cycle %d (original %d + %d non-ready), got %d",
 			expectedFinalCycle, originalCycle, len(nonReadyCycles), receivedPkt.Cycle)
 	}

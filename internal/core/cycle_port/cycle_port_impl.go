@@ -9,16 +9,18 @@ import (
 // It provides bidirectional synchronization between upstream and downstream components.
 // A single CyclePortImpl instance can be used by both upstream (sender) and downstream (receiver).
 type CyclePortImpl struct {
-	// doneUntil is the cycle until which upstream has completed processing.
+	// done is the cycle until which upstream has completed processing.
 	// Updated by upstream using atomic operations.
-	// DoneUntil N means upstream has completed cycle N-1 and all packets for cycle N-1 have been sent.
-	// Downstream uses WaitForDoneUntil to block until this value reaches a target cycle.
-	doneUntil int64
+	// Done N means upstream has completed cycle N and all previous cycles, and all packets for cycle N have been sent.
+	// Downstream uses WaitForDone to block until this value reaches a target cycle.
+	// Using int64 for atomic operations, but represents int values.
+	done int64
 
 	// readyUntil is the cycle until which downstream can execute ahead (fast path).
 	// If cycle < readyUntil, Ready(cycle) returns true immediately without checking readyMap.
 	// Updated atomically when UpdateReady sets a cycle to ready and that cycle >= readyUntil.
 	// This provides an optimization to avoid map lookups for cycles that are guaranteed to be ready.
+	// Using int64 for atomic operations, but represents int values.
 	readyUntil int64
 
 	// readyMap stores ready status for specific cycles that are not covered by readyUntil.
@@ -40,11 +42,11 @@ type CyclePortImpl struct {
 	// Used by waitForReady to block goroutines until UpdateReady is called.
 	cond *sync.Cond
 
-	// doneUntilMu protects doneUntilCond and allows waiting for DoneUntil changes.
-	doneUntilMu sync.Mutex
-	// doneUntilCond is a condition variable for waiting on DoneUntil changes.
-	// Used by WaitForDoneUntil to block goroutines until SetDoneUntil is called.
-	doneUntilCond *sync.Cond
+	// doneMu protects doneCond and allows waiting for Done changes.
+	doneMu sync.Mutex
+	// doneCond is a condition variable for waiting on Done changes.
+	// Used by WaitForDone to block goroutines until SetDone is called.
+	doneCond *sync.Cond
 }
 
 // NewCyclePort creates a new CyclePort with the specified channel buffer size.
@@ -53,37 +55,37 @@ func NewCyclePort(bufferSize int) *CyclePortImpl {
 		bufferSize = 8
 	}
 	return &CyclePortImpl{
-		doneUntil:  -1,
+		done:       -1,
 		readyUntil: -1,
 		readyMap:   make(map[int]bool),
 		packetChan: make(chan PacketWithCycle, bufferSize),
 	}
 }
 
-// SetDoneUntil updates DoneUntil using atomic store.
-// Called by upstream to notify downstream that it has completed processing up to cycle N-1.
-// DoneUntil N means:
-//   - Upstream has completed cycle N-1
-//   - All packets for cycle N-1 have been sent
+// SetDone updates Done using atomic store.
+// Called by upstream to notify downstream that it has completed processing up to cycle N.
+// Done N means:
+//   - Upstream has completed cycle N and all previous cycles
+//   - All packets for cycle N have been sent
 //
-// This wakes up all goroutines waiting in WaitForDoneUntil for DoneUntil to reach a certain value.
-func (p *CyclePortImpl) SetDoneUntil(cycle int) {
-	atomic.StoreInt64(&p.doneUntil, int64(cycle))
+// This wakes up all goroutines waiting in WaitForDone for Done to reach a certain value.
+func (p *CyclePortImpl) SetDone(cycle int) {
+	atomic.StoreInt64(&p.done, int64(cycle))
 
-	// Wake up all goroutines waiting for DoneUntil changes
-	p.doneUntilMu.Lock()
-	if p.doneUntilCond != nil {
-		p.doneUntilCond.Broadcast()
+	// Wake up all goroutines waiting for Done changes
+	p.doneMu.Lock()
+	if p.doneCond != nil {
+		p.doneCond.Broadcast()
 	}
-	p.doneUntilMu.Unlock()
+	p.doneMu.Unlock()
 }
 
-// GetDoneUntil returns the current DoneUntil value set by upstream.
+// GetDone returns the current Done value set by upstream.
 // Can be called by both upstream and downstream to check progress.
 // This is useful for upstream to verify its own progress, or for downstream
 // to check upstream completion status without blocking.
-func (p *CyclePortImpl) GetDoneUntil() int {
-	return int(atomic.LoadInt64(&p.doneUntil))
+func (p *CyclePortImpl) GetDone() int {
+	return int(atomic.LoadInt64(&p.done))
 }
 
 // Chan returns a write-only channel for upstream to push packets to downstream.
@@ -240,31 +242,31 @@ func (p *CyclePortImpl) GetReadyUntil() int {
 	return int(atomic.LoadInt64(&p.readyUntil))
 }
 
-// WaitForDoneUntil blocks the calling goroutine until upstream's DoneUntil >= targetCycle.
+// WaitForDone blocks the calling goroutine until upstream's Done >= targetCycle.
 // Called by downstream at the start of cycle N to ensure upstream has completed cycle N-1.
 // This uses condition variable to avoid busy waiting - the goroutine will block until
-// upstream calls SetDoneUntil with a value >= targetCycle.
-// Returns immediately if DoneUntil >= targetCycle (no blocking needed).
-func (p *CyclePortImpl) WaitForDoneUntil(targetCycle int) {
+// upstream calls SetDone with a value >= targetCycle.
+// Returns immediately if Done >= targetCycle (no blocking needed).
+func (p *CyclePortImpl) WaitForDone(targetCycle int) {
 	// Fast path: check if already satisfied
-	if p.GetDoneUntil() >= targetCycle {
+	if p.GetDone() >= targetCycle {
 		return
 	}
 
-	p.doneUntilMu.Lock()
-	defer p.doneUntilMu.Unlock()
+	p.doneMu.Lock()
+	defer p.doneMu.Unlock()
 
 	// Initialize condition variable if needed
-	if p.doneUntilCond == nil {
-		p.doneUntilCond = sync.NewCond(&p.doneUntilMu)
+	if p.doneCond == nil {
+		p.doneCond = sync.NewCond(&p.doneMu)
 	}
 
 	// Wait until condition is satisfied
-	for p.GetDoneUntil() < targetCycle {
+	for p.GetDone() < targetCycle {
 		// Wait() will:
-		// 1. Unlock doneUntilMu
+		// 1. Unlock doneMu
 		// 2. Block the goroutine
-		// 3. When Broadcast() is called in SetDoneUntil, re-lock doneUntilMu and continue
-		p.doneUntilCond.Wait()
+		// 3. When Broadcast() is called in SetDone, re-lock doneMu and continue
+		p.doneCond.Wait()
 	}
 }

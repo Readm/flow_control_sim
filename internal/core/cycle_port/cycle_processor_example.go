@@ -20,9 +20,9 @@ func NewFIFOFlowProcessor(flowID int) *FIFOFlowProcessor {
 }
 
 // Override ProcessPackets to add custom processing
-func (f *FIFOFlowProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+func (f *FIFOFlowProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDone func(int), updateUpstreamReady func(cycle int, ready bool)) {
 	// Use default processing logic
-	f.DefaultProcessor.ProcessPackets(receiveChan, cycle, checkReady, sendPacket, setDoneUntil, updateUpstreamReady)
+	f.DefaultProcessor.ProcessPackets(receiveChan, cycle, checkReady, sendPacket, setDone, updateUpstreamReady)
 
 	// Add custom logging
 	log.Printf("Flow %d: Completed processing cycle %d", f.flowID, cycle)
@@ -46,7 +46,7 @@ func NewPriorityFlowProcessor(flowID, priority int) *PriorityFlowProcessor {
 }
 
 // Override ProcessPackets to implement priority logic
-func (p *PriorityFlowProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDoneUntil func(int), updateUpstreamReady func(cycle int, ready bool)) {
+func (p *PriorityFlowProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cycle int, checkReady func(int) bool, sendPacket func(PacketWithCycle), setDone func(int), updateUpstreamReady func(cycle int, ready bool)) {
 	// Collect all packets first
 	allPackets := make([]PacketWithCycle, 0)
 
@@ -68,7 +68,7 @@ func (p *PriorityFlowProcessor) ProcessPackets(receiveChan <-chan PacketWithCycl
 process:
 	// Priority-based processing: high priority packets first
 	// For simplicity, use default logic
-	p.DefaultProcessor.ProcessPackets(receiveChan, cycle, checkReady, sendPacket, setDoneUntil, updateUpstreamReady)
+	p.DefaultProcessor.ProcessPackets(receiveChan, cycle, checkReady, sendPacket, setDone, updateUpstreamReady)
 }
 
 // Example usage:

@@ -22,9 +22,9 @@ func TestPendingPacketsIsolation(t *testing.T) {
 	processor2 := NewCycleProcessor(upstreamPort2, downstreamPort2, proc2)
 
 	// Set initial state for both
-	upstreamPort1.SetDoneUntil(0)
+	upstreamPort1.SetDone(-1)
 	downstreamPort1.UpdateReady(0, true)
-	upstreamPort2.SetDoneUntil(0)
+	upstreamPort2.SetDone(-1)
 	downstreamPort2.UpdateReady(0, false) // processor2's downstream is not ready
 
 	// Send a packet to processor1
@@ -33,7 +33,7 @@ func TestPendingPacketsIsolation(t *testing.T) {
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "processor1"},
 	}
 	upstreamPort1.Chan() <- pkt1
-	upstreamPort1.SetDoneUntil(1)
+	upstreamPort1.SetDone(1)
 
 	// Send a packet to processor2
 	pkt2 := PacketWithCycle{
@@ -41,7 +41,7 @@ func TestPendingPacketsIsolation(t *testing.T) {
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "processor2"},
 	}
 	upstreamPort2.Chan() <- pkt2
-	upstreamPort2.SetDoneUntil(1)
+	upstreamPort2.SetDone(1)
 
 	// Process cycle 0 for both
 	err1 := processor1.ProcessCycle(0)
@@ -102,9 +102,9 @@ func TestPendingPacketsSharing(t *testing.T) {
 	processor2 := NewCycleProcessor(upstreamPort2, downstreamPort2, sharedProc) // Same processor instance
 
 	// Set initial state
-	upstreamPort1.SetDoneUntil(0)
+	upstreamPort1.SetDone(-1)
 	downstreamPort1.UpdateReady(0, false) // Not ready
-	upstreamPort2.SetDoneUntil(0)
+	upstreamPort2.SetDone(-1)
 	downstreamPort2.UpdateReady(0, false) // Not ready
 
 	// Send packets to both processors
@@ -113,14 +113,14 @@ func TestPendingPacketsSharing(t *testing.T) {
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "processor1"},
 	}
 	upstreamPort1.Chan() <- pkt1
-	upstreamPort1.SetDoneUntil(1)
+	upstreamPort1.SetDone(1)
 
 	pkt2 := PacketWithCycle{
 		Cycle:  0,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "processor2"},
 	}
 	upstreamPort2.Chan() <- pkt2
-	upstreamPort2.SetDoneUntil(1)
+	upstreamPort2.SetDone(1)
 
 	// Process cycle 0 for both
 	err1 := processor1.ProcessCycle(0)

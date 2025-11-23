@@ -18,13 +18,13 @@ type CyclePort interface {
 	// ===== Upstream Operations =====
 	// These methods are called by the upstream component (the sender).
 
-	// SetDoneUntil is called by upstream to notify downstream that it has completed processing up to cycle N-1.
-	// DoneUntil N means:
-	//   - Upstream has completed cycle N-1
-	//   - All packets for cycle N-1 have been sent
+	// SetDone is called by upstream to notify downstream that it has completed processing up to cycle N.
+	// Done N means:
+	//   - Upstream has completed cycle N and all previous cycles
+	//   - All packets for cycle N have been sent
 	// This uses atomic store for thread-safe updates.
-	// Downstream can use WaitForDoneUntil to block until this value reaches a target cycle.
-	SetDoneUntil(cycle int)
+	// Downstream can use WaitForDone to block until this value reaches a target cycle.
+	SetDone(cycle int)
 
 	// Chan returns a write-only channel for upstream to push packets to downstream.
 	// Upstream sends (Packet, Cycle) pairs through this channel.
@@ -47,11 +47,11 @@ type CyclePort interface {
 	// This method never blocks and is useful for assertions and checking configuration status.
 	ReadyNonBlocking(cycle int) (ready bool, configured bool)
 
-	// GetDoneUntil returns the current DoneUntil value set by upstream.
+	// GetDone returns the current Done value set by upstream.
 	// Can be called by both upstream and downstream to check progress.
 	// This is useful for upstream to verify its own progress, or for downstream
 	// to check upstream completion status without blocking.
-	GetDoneUntil() int
+	GetDone() int
 
 	// ===== Downstream Operations =====
 	// These methods are called by the downstream component (the receiver).
@@ -61,10 +61,10 @@ type CyclePort interface {
 	// Downstream reads (Packet, Cycle) pairs from this channel.
 	ReceiveChan() <-chan PacketWithCycle
 
-	// WaitForDoneUntil blocks the calling goroutine until upstream's DoneUntil >= targetCycle.
+	// WaitForDone blocks the calling goroutine until upstream's Done >= targetCycle.
 	// Called by downstream at the start of cycle N to ensure upstream has completed cycle N-1.
 	// This uses condition variable to avoid busy waiting - the goroutine will block until
-	// upstream calls SetDoneUntil with a value >= targetCycle.
-	// Returns immediately if DoneUntil >= targetCycle (no blocking needed).
-	WaitForDoneUntil(targetCycle int)
+	// upstream calls SetDone with a value >= targetCycle.
+	// Returns immediately if Done >= targetCycle (no blocking needed).
+	WaitForDone(targetCycle int)
 }

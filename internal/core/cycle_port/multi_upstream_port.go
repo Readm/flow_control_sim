@@ -19,9 +19,9 @@ type MultiUpstreamPort struct {
 	wg sync.WaitGroup
 
 	// Synchronization state
-	mu            sync.Mutex
-	cond          *sync.Cond
-	safeDoneUntil []int64 // Index corresponds to upstreamPorts. Protected by mu.
+	mu       sync.Mutex
+	cond     *sync.Cond
+	safeDone []int64 // Index corresponds to upstreamPorts. Protected by mu.
 
 	// Internal communication
 	upstreamDone []int64         // Atomic access
@@ -39,15 +39,15 @@ func NewMultiUpstreamPort(upstreamPorts []CyclePort) *MultiUpstreamPort {
 		upstreamPorts: upstreamPorts,
 		mergedChan:    make(chan PacketWithCycle, 8*count), // Larger buffer for aggregation
 		stopChan:      make(chan struct{}),
-		safeDoneUntil: make([]int64, count),
+		safeDone:      make([]int64, count),
 		upstreamDone:  make([]int64, count),
 		notifyChans:   make([]chan struct{}, count),
 	}
 	multi.cond = sync.NewCond(&multi.mu)
 
 	// Initialize states
-	for i := range multi.safeDoneUntil {
-		multi.safeDoneUntil[i] = -1
+	for i := range multi.safeDone {
+		multi.safeDone[i] = -1
 		multi.upstreamDone[i] = -1
 		multi.notifyChans[i] = make(chan struct{}, 1)
 	}
@@ -62,13 +62,13 @@ func NewMultiUpstreamPort(upstreamPorts []CyclePort) *MultiUpstreamPort {
 	return multi
 }
 
-// watcher monitors the upstream port's DoneUntil and notifies the forwarder.
+// watcher monitors the upstream port's Done and notifies the forwarder.
 func (m *MultiUpstreamPort) watcher(index int, port CyclePort) {
 	defer m.wg.Done()
 
-	// We start checking from cycle 0.
-	// If DoneUntil is already advanced, WaitForDoneUntil will return immediately.
-	currentTarget := 0
+	// We start checking from cycle -1 (initial state).
+	// If Done is already advanced, WaitForDone will return immediately.
+	currentTarget := -1
 
 	for {
 		select {
@@ -78,7 +78,7 @@ func (m *MultiUpstreamPort) watcher(index int, port CyclePort) {
 		}
 
 		// Block until upstream completes currentTarget
-		port.WaitForDoneUntil(currentTarget)
+		port.WaitForDone(currentTarget)
 
 		// Update atomic state
 		atomic.StoreInt64(&m.upstreamDone[index], int64(currentTarget))
@@ -94,13 +94,13 @@ func (m *MultiUpstreamPort) watcher(index int, port CyclePort) {
 		currentTarget++
 
 		// Optimization: if upstream is far ahead, we might want to jump?
-		// But WaitForDoneUntil is efficient if already satisfied.
+		// But WaitForDone is efficient if already satisfied.
 		// However, simple incrementing works correctly.
 		// To avoid busy looping if upstream is very far ahead, we rely on the fact that
-		// port.WaitForDoneUntil is usually fast.
-		// If we want to skip, we could check GetDoneUntil occasionally.
+		// port.WaitForDone is usually fast.
+		// If we want to skip, we could check GetDone occasionally.
 		if currentTarget%10 == 0 {
-			actual := port.GetDoneUntil()
+			actual := port.GetDone()
 			if actual > currentTarget {
 				currentTarget = actual
 			}
@@ -108,7 +108,7 @@ func (m *MultiUpstreamPort) watcher(index int, port CyclePort) {
 	}
 }
 
-// forwarder drains the upstream channel and updates safeDoneUntil.
+// forwarder drains the upstream channel and updates safeDone.
 func (m *MultiUpstreamPort) forwarder(index int, port CyclePort) {
 	defer m.wg.Done()
 
@@ -126,12 +126,11 @@ func (m *MultiUpstreamPort) forwarder(index int, port CyclePort) {
 			// We have processed a packet for this cycle.
 			// This implies cycle-1 is definitely done.
 			// And we are making progress on cycle.
-			// We can conservatively update safeDoneUntil to cycle.
-			// Wait, safeDoneUntil N means "Cycle N-1 is complete".
+			// We can conservatively update safeDone to cycle-1.
 			// If we see packet for Cycle C, it means Cycle C is NOT complete (packets are flowing).
 			// But Cycle C-1 IS complete.
-			// So we can update to C.
-			m.updateSafeDone(index, int64(pkt.Cycle))
+			// So we can update to C-1.
+			m.updateSafeDone(index, int64(pkt.Cycle)-1)
 			continue
 		case <-m.stopChan:
 			return
@@ -146,7 +145,7 @@ func (m *MultiUpstreamPort) forwarder(index int, port CyclePort) {
 				return
 			}
 			m.mergedChan <- pkt
-			m.updateSafeDone(index, int64(pkt.Cycle))
+			m.updateSafeDone(index, int64(pkt.Cycle)-1)
 
 		case <-notifyChan:
 			// Upstream reported progress.
@@ -158,7 +157,7 @@ func (m *MultiUpstreamPort) forwarder(index int, port CyclePort) {
 						return
 					}
 					m.mergedChan <- pkt
-					m.updateSafeDone(index, int64(pkt.Cycle))
+					m.updateSafeDone(index, int64(pkt.Cycle)-1)
 				default:
 					// Channel empty. Now safe to sync with upstreamDone.
 					ud := atomic.LoadInt64(&m.upstreamDone[index])
@@ -174,12 +173,12 @@ func (m *MultiUpstreamPort) forwarder(index int, port CyclePort) {
 	}
 }
 
-// updateSafeDone updates safeDoneUntil and broadcasts if changed.
+// updateSafeDone updates safeDone and broadcasts if changed.
 // It only increases the value.
 func (m *MultiUpstreamPort) updateSafeDone(index int, val int64) {
 	m.mu.Lock()
-	if val > m.safeDoneUntil[index] {
-		m.safeDoneUntil[index] = val
+	if val > m.safeDone[index] {
+		m.safeDone[index] = val
 		m.cond.Broadcast()
 	}
 	m.mu.Unlock()
@@ -200,8 +199,8 @@ func (m *MultiUpstreamPort) Close() {
 // ===== Upstream Operations =====
 // These methods should NOT be called on MultiUpstreamPort.
 
-func (m *MultiUpstreamPort) SetDoneUntil(cycle int) {
-	panic("MultiUpstreamPort.SetDoneUntil should not be called.")
+func (m *MultiUpstreamPort) SetDone(cycle int) {
+	panic("MultiUpstreamPort.SetDone should not be called.")
 }
 
 func (m *MultiUpstreamPort) Chan() chan<- PacketWithCycle {
@@ -235,18 +234,18 @@ func (m *MultiUpstreamPort) ReadyNonBlocking(cycle int) (ready bool, configured 
 	return allReady, allConfigured
 }
 
-// GetDoneUntil returns the minimum safe DoneUntil value from all upstream ports.
-func (m *MultiUpstreamPort) GetDoneUntil() int {
+// GetDone returns the minimum safe Done value from all upstream ports.
+func (m *MultiUpstreamPort) GetDone() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if len(m.safeDoneUntil) == 0 {
+	if len(m.safeDone) == 0 {
 		return -1
 	}
-	minDone := m.safeDoneUntil[0]
-	for i := 1; i < len(m.safeDoneUntil); i++ {
-		if m.safeDoneUntil[i] < minDone {
-			minDone = m.safeDoneUntil[i]
+	minDone := m.safeDone[0]
+	for i := 1; i < len(m.safeDone); i++ {
+		if m.safeDone[i] < minDone {
+			minDone = m.safeDone[i]
 		}
 	}
 	return int(minDone)
@@ -259,15 +258,15 @@ func (m *MultiUpstreamPort) ReceiveChan() <-chan PacketWithCycle {
 	return m.mergedChan
 }
 
-// WaitForDoneUntil blocks until all ports have safeDoneUntil >= targetCycle.
-func (m *MultiUpstreamPort) WaitForDoneUntil(targetCycle int) {
+// WaitForDone blocks until all ports have safeDone >= targetCycle.
+func (m *MultiUpstreamPort) WaitForDone(targetCycle int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for {
 		// Check condition
 		allSatisfied := true
-		for _, done := range m.safeDoneUntil {
+		for _, done := range m.safeDone {
 			if done < int64(targetCycle) {
 				allSatisfied = false
 				break
@@ -306,18 +305,18 @@ func NewSyncAggregator(upstreamPorts []CyclePort, sharedChan chan PacketWithCycl
 	}
 }
 
-func (s *SyncAggregator) SetDoneUntil(cycle int) {
-	panic("SyncAggregator.SetDoneUntil should not be called")
+func (s *SyncAggregator) SetDone(cycle int) {
+	panic("SyncAggregator.SetDone should not be called")
 }
 
-func (s *SyncAggregator) GetDoneUntil() int {
-	// Return min doneUntil
+func (s *SyncAggregator) GetDone() int {
+	// Return min done
 	if len(s.upstreamPorts) == 0 {
 		return -1
 	}
-	min := s.upstreamPorts[0].GetDoneUntil()
+	min := s.upstreamPorts[0].GetDone()
 	for i := 1; i < len(s.upstreamPorts); i++ {
-		val := s.upstreamPorts[i].GetDoneUntil()
+		val := s.upstreamPorts[i].GetDone()
 		if val < min {
 			min = val
 		}
@@ -361,9 +360,9 @@ func (s *SyncAggregator) ReadyNonBlocking(cycle int) (ready bool, configured boo
 	return allReady, allConfigured
 }
 
-func (s *SyncAggregator) WaitForDoneUntil(targetCycle int) {
+func (s *SyncAggregator) WaitForDone(targetCycle int) {
 	for _, port := range s.upstreamPorts {
-		port.WaitForDoneUntil(targetCycle)
+		port.WaitForDone(targetCycle)
 	}
 }
 
