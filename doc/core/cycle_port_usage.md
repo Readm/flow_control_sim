@@ -1,8 +1,8 @@
-# CyclePort 使用指南
+# AheadPort 使用指南
 
 ## 核心优势
 
-**写代码时不需要区分单上游还是多上游！** 所有操作都通过 `CyclePort` 接口完成，聚合器自动处理多上游场景。
+**写代码时不需要区分单上游还是多上游！** 所有操作都通过 `AheadPort` 接口完成，聚合器自动处理多上游场景。
 
 ## 使用方式
 
@@ -10,7 +10,7 @@
 
 ```go
 // 创建单个端口
-flow0OutPort := cycle_port.NewCyclePort(8)
+flow0OutPort := ahead_port.NewAheadPort(8)
 flow0.AddOutPort(flow0OutPort)
 
 // 创建 Link（直接使用端口）
@@ -26,7 +26,7 @@ flow0OutPort.Ready(cycle)
 
 ```go
 // 创建共享端口组（工厂函数）
-upstreams, aggregator := cycle_port.NewSharedPortGroup(3, 8)
+upstreams, aggregator := ahead_port.NewSharedPortGroup(3, 8)
 flow0.AddOutPort(upstreams[0])
 flow1.AddOutPort(upstreams[1])
 flow2.AddOutPort(upstreams[2])
@@ -54,7 +54,7 @@ outPort.Ready(cycle)         // 检查就绪
 
 ### 2. 下游（Link）接口统一
 
-Link 通过 `CyclePort` 接口操作，不需要区分单/多上游：
+Link 通过 `AheadPort` 接口操作，不需要区分单/多上游：
 
 ```go
 upstreamPort.WaitForDone(cycle)      // 等待完成
@@ -108,7 +108,7 @@ Flow2 ──> upstreams[2] ──┘
 
 ## 使用建议
 
-- **单个上游 Flow** → `NewCyclePort(8)`
+- **单个上游 Flow** → `NewAheadPort(8)`
 - **多个上游 Flow** → `NewSharedPortGroup(count, 8)`
 
 两种方式对 Link 来说接口完全一致，聚合器自动处理多上游的同步和聚合。

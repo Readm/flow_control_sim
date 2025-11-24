@@ -1,4 +1,4 @@
-package cycle_port
+package ahead_port
 
 import (
 	"sync"
@@ -8,20 +8,20 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// TestNewMultiUpstreamPort tests creating a new MultiUpstreamPort.
-func TestNewMultiUpstreamPort(t *testing.T) {
+// TestNewFaninPort tests creating a new FaninPort.
+func TestNewFaninPort(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort1 := NewCyclePort(8)
-	upstreamPort2 := NewCyclePort(8)
+	upstreamPort1 := NewAheadPort(8)
+	upstreamPort2 := NewAheadPort(8)
 	sharedChan := make(chan PacketWithCycle, 8)
 	upstreamPort1.SetChannel(sharedChan)
 	upstreamPort2.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2}, sharedChan)
+	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2}, sharedChan)
 
 	if multi == nil {
-		t.Fatal("NewMultiUpstreamPort returned nil")
+		t.Fatal("NewFaninPort returned nil")
 	}
 
 	if len(multi.upstreamPorts) != 2 {
@@ -29,33 +29,33 @@ func TestNewMultiUpstreamPort(t *testing.T) {
 	}
 }
 
-// TestNewMultiUpstreamPortEmptyList tests that creating with empty list panics.
-func TestNewMultiUpstreamPortEmptyList(t *testing.T) {
+// TestNewFaninPortEmptyList tests that creating with empty list panics.
+func TestNewFaninPortEmptyList(t *testing.T) {
 	t.Parallel()
 
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatal("expected panic when creating MultiUpstreamPort with empty list")
+			t.Fatal("expected panic when creating FaninPort with empty list")
 		}
 	}()
 
 	sharedChan := make(chan PacketWithCycle, 8)
-	NewMultiUpstreamPort([]CyclePort{}, sharedChan)
+	NewFaninPort([]AheadPort{}, sharedChan)
 }
 
-// TestMultiUpstreamPortGetDone tests GetDone returns minimum value.
-func TestMultiUpstreamPortGetDone(t *testing.T) {
+// TestFaninPortGetDone tests GetDone returns minimum value.
+func TestFaninPortGetDone(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort1 := NewCyclePort(8)
-	upstreamPort2 := NewCyclePort(8)
-	upstreamPort3 := NewCyclePort(8)
+	upstreamPort1 := NewAheadPort(8)
+	upstreamPort2 := NewAheadPort(8)
+	upstreamPort3 := NewAheadPort(8)
 	sharedChan := make(chan PacketWithCycle, 8)
 	upstreamPort1.SetChannel(sharedChan)
 	upstreamPort2.SetChannel(sharedChan)
 	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
+	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	// Initial value should be -1
 	if multi.GetDone() != -1 {
@@ -79,19 +79,19 @@ func TestMultiUpstreamPortGetDone(t *testing.T) {
 	}
 }
 
-// TestMultiUpstreamPortWaitForDone tests waiting for all upstream ports.
-func TestMultiUpstreamPortWaitForDone(t *testing.T) {
+// TestFaninPortWaitForDone tests waiting for all upstream ports.
+func TestFaninPortWaitForDone(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort1 := NewCyclePort(8)
-	upstreamPort2 := NewCyclePort(8)
-	upstreamPort3 := NewCyclePort(8)
+	upstreamPort1 := NewAheadPort(8)
+	upstreamPort2 := NewAheadPort(8)
+	upstreamPort3 := NewAheadPort(8)
 	sharedChan := make(chan PacketWithCycle, 8)
 	upstreamPort1.SetChannel(sharedChan)
 	upstreamPort2.SetChannel(sharedChan)
 	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
+	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	// Set all to cycle 5
 	upstreamPort1.SetDone(5)
@@ -141,19 +141,19 @@ func TestMultiUpstreamPortWaitForDone(t *testing.T) {
 	}
 }
 
-// TestMultiUpstreamPortReceiveChan tests receiving packets from multiple upstream ports.
-func TestMultiUpstreamPortReceiveChan(t *testing.T) {
+// TestFaninPortReceiveChan tests receiving packets from multiple upstream ports.
+func TestFaninPortReceiveChan(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort1 := NewCyclePort(8)
-	upstreamPort2 := NewCyclePort(8)
-	upstreamPort3 := NewCyclePort(8)
+	upstreamPort1 := NewAheadPort(8)
+	upstreamPort2 := NewAheadPort(8)
+	upstreamPort3 := NewAheadPort(8)
 	sharedChan := make(chan PacketWithCycle, 8)
 	upstreamPort1.SetChannel(sharedChan)
 	upstreamPort2.SetChannel(sharedChan)
 	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
+	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	// Send packets from different upstream ports
 	packets := []PacketWithCycle{
@@ -196,19 +196,19 @@ func TestMultiUpstreamPortReceiveChan(t *testing.T) {
 	}
 }
 
-// TestMultiUpstreamPortUpdateReady tests updating ready status for all upstream ports.
-func TestMultiUpstreamPortUpdateReady(t *testing.T) {
+// TestFaninPortUpdateReady tests updating ready status for all upstream ports.
+func TestFaninPortUpdateReady(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort1 := NewCyclePort(8)
-	upstreamPort2 := NewCyclePort(8)
-	upstreamPort3 := NewCyclePort(8)
+	upstreamPort1 := NewAheadPort(8)
+	upstreamPort2 := NewAheadPort(8)
+	upstreamPort3 := NewAheadPort(8)
 	sharedChan := make(chan PacketWithCycle, 8)
 	upstreamPort1.SetChannel(sharedChan)
 	upstreamPort2.SetChannel(sharedChan)
 	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
+	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	// Update ready for cycle 5
 	multi.UpdateReady(5, true)
@@ -244,19 +244,19 @@ func TestMultiUpstreamPortUpdateReady(t *testing.T) {
 	}
 }
 
-// TestMultiUpstreamPortReadyNonBlocking tests ReadyNonBlocking for all upstream ports.
-func TestMultiUpstreamPortReadyNonBlocking(t *testing.T) {
+// TestFaninPortReadyNonBlocking tests ReadyNonBlocking for all upstream ports.
+func TestFaninPortReadyNonBlocking(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort1 := NewCyclePort(8)
-	upstreamPort2 := NewCyclePort(8)
-	upstreamPort3 := NewCyclePort(8)
+	upstreamPort1 := NewAheadPort(8)
+	upstreamPort2 := NewAheadPort(8)
+	upstreamPort3 := NewAheadPort(8)
 	sharedChan := make(chan PacketWithCycle, 8)
 	upstreamPort1.SetChannel(sharedChan)
 	upstreamPort2.SetChannel(sharedChan)
 	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
+	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	// Initially, cycle 5 is not configured
 	ready, configured := multi.ReadyNonBlocking(5)
@@ -301,18 +301,18 @@ func TestMultiUpstreamPortReadyNonBlocking(t *testing.T) {
 	}
 }
 
-// TestMultiUpstreamPortWithCycleProcessor tests integration with CycleProcessor.
-func TestMultiUpstreamPortWithCycleProcessor(t *testing.T) {
+// TestFaninPortWithCycleProcessor tests integration with CycleProcessor.
+func TestFaninPortWithCycleProcessor(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort1 := NewCyclePort(8)
-	upstreamPort2 := NewCyclePort(8)
-	downstreamPort := NewCyclePort(8)
+	upstreamPort1 := NewAheadPort(8)
+	upstreamPort2 := NewAheadPort(8)
+	downstreamPort := NewAheadPort(8)
 	sharedChan := make(chan PacketWithCycle, 8)
 	upstreamPort1.SetChannel(sharedChan)
 	upstreamPort2.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2}, sharedChan)
+	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2}, sharedChan)
 
 	processor := NewCycleProcessor(multi, downstreamPort, nil)
 
@@ -377,26 +377,26 @@ func TestMultiUpstreamPortWithCycleProcessor(t *testing.T) {
 	}
 }
 
-// TestMultiUpstreamPortConcurrent tests concurrent operations.
-func TestMultiUpstreamPortConcurrent(t *testing.T) {
+// TestFaninPortConcurrent tests concurrent operations.
+func TestFaninPortConcurrent(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort1 := NewCyclePort(8)
-	upstreamPort2 := NewCyclePort(8)
-	upstreamPort3 := NewCyclePort(8)
+	upstreamPort1 := NewAheadPort(8)
+	upstreamPort2 := NewAheadPort(8)
+	upstreamPort3 := NewAheadPort(8)
 	sharedChan := make(chan PacketWithCycle, 8)
 	upstreamPort1.SetChannel(sharedChan)
 	upstreamPort2.SetChannel(sharedChan)
 	upstreamPort3.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
+	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2, upstreamPort3}, sharedChan)
 
 	var wg sync.WaitGroup
 
 	// Concurrently send packets
 	wg.Add(3)
-	for i, port := range []CyclePort{upstreamPort1, upstreamPort2, upstreamPort3} {
-		go func(p CyclePort, id int) {
+	for i, port := range []AheadPort{upstreamPort1, upstreamPort2, upstreamPort3} {
+		go func(p AheadPort, id int) {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
 				pkt := PacketWithCycle{
@@ -425,8 +425,8 @@ func TestMultiUpstreamPortConcurrent(t *testing.T) {
 
 	// Concurrently update Done
 	wg.Add(3)
-	for i, port := range []CyclePort{upstreamPort1, upstreamPort2, upstreamPort3} {
-		go func(p CyclePort, id int) {
+	for i, port := range []AheadPort{upstreamPort1, upstreamPort2, upstreamPort3} {
+		go func(p AheadPort, id int) {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
 				p.SetDone(j)
@@ -443,17 +443,17 @@ func TestMultiUpstreamPortConcurrent(t *testing.T) {
 	}
 }
 
-// TestMultiUpstreamPortClose tests that closing shared channel properly cleans up resources.
-func TestMultiUpstreamPortClose(t *testing.T) {
+// TestFaninPortClose tests that closing shared channel properly cleans up resources.
+func TestFaninPortClose(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort1 := NewCyclePort(8)
-	upstreamPort2 := NewCyclePort(8)
+	upstreamPort1 := NewAheadPort(8)
+	upstreamPort2 := NewAheadPort(8)
 	sharedChan := make(chan PacketWithCycle, 8)
 	upstreamPort1.SetChannel(sharedChan)
 	upstreamPort2.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2}, sharedChan)
+	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2}, sharedChan)
 
 	// Send some packets
 	upstreamPort1.Chan() <- PacketWithCycle{
@@ -473,17 +473,17 @@ func TestMultiUpstreamPortClose(t *testing.T) {
 	}
 }
 
-// TestMultiUpstreamPortUpstreamOperationsPanic tests that upstream operations panic.
-func TestMultiUpstreamPortUpstreamOperationsPanic(t *testing.T) {
+// TestFaninPortUpstreamOperationsPanic tests that upstream operations panic.
+func TestFaninPortUpstreamOperationsPanic(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort1 := NewCyclePort(8)
-	upstreamPort2 := NewCyclePort(8)
+	upstreamPort1 := NewAheadPort(8)
+	upstreamPort2 := NewAheadPort(8)
 	sharedChan := make(chan PacketWithCycle, 8)
 	upstreamPort1.SetChannel(sharedChan)
 	upstreamPort2.SetChannel(sharedChan)
 
-	multi := NewMultiUpstreamPort([]CyclePort{upstreamPort1, upstreamPort2}, sharedChan)
+	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2}, sharedChan)
 
 	// Test SetDone panics
 	func() {

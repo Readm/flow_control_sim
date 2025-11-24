@@ -16,7 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/Readm/flow_sim/internal/config"
-	"github.com/Readm/flow_sim/internal/core/cycle_port"
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
@@ -151,8 +151,8 @@ func createManagerBuilder() controller.ManagerBuilder {
 		nodes := []node.Node{node0, node1}
 
 		// Create output ports for flows
-		flow0OutPort := cycle_port.NewCyclePort(mailboxSize)
-		flow1OutPort := cycle_port.NewCyclePort(mailboxSize)
+		flow0OutPort := ahead_port.NewAheadPort(mailboxSize)
+		flow1OutPort := ahead_port.NewAheadPort(mailboxSize)
 
 		// Connect flows to output ports
 		node0.Flows()[0].AddOutPort(flow0OutPort)

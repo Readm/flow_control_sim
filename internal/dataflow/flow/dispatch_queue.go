@@ -15,7 +15,7 @@ func NewDispatchQueue(link interface{}, capacity int) *DispatchQueue {
 // RouterHook is a function type that determines which output port a packet should be routed to.
 // Parameters:
 //   - pkt: the packet to route
-//   - outPorts: all available output CyclePorts
+//   - outPorts: all available output AheadPorts
 //   - topology: network topology information (optional, can be nil)
 //
 // Returns:

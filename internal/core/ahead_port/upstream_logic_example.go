@@ -1,4 +1,4 @@
-package cycle_port
+package ahead_port
 
 import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
@@ -17,7 +17,7 @@ import (
 //
 // 4. Send the packet with the incremented cycle
 // 5. The cycle increment equals the number of consecutive non-ready cycles
-func UpstreamSendWithCycleIncrement(port CyclePort, originalCycle int, pkt packet.Packet) {
+func UpstreamSendWithCycleIncrement(port AheadPort, originalCycle int, pkt packet.Packet) {
 	currentCycle := originalCycle
 	cycleIncrement := 0
 

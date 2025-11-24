@@ -93,7 +93,7 @@ func newTestBuilder(t *testing.T, tickDelay time.Duration) controller.ManagerBui
 				processed: 0,
 			}
 			nodes = append(nodes, n)
-			// Note: Links are not created in test builder as they require CyclePort setup
+			// Note: Links are not created in test builder as they require AheadPort setup
 			// This test doesn't actually use links, so empty edges is fine
 			edges[n.ID()] = []*link.Link{}
 		}

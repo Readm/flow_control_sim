@@ -3,7 +3,7 @@ package link
 import (
 	"testing"
 
-	"github.com/Readm/flow_sim/internal/core/cycle_port"
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/dataflow/flow"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
@@ -17,12 +17,12 @@ func TestLinkBasicFunctionality(t *testing.T) {
 		}
 	})
 
-	// Create Flow with CyclePort
+	// Create Flow with AheadPort
 	flow0 := flow.NewFIFO(0, 8)
 	flow1 := flow.NewFIFO(1, 8)
 
 	// Create ports
-	flow0OutPort := cycle_port.NewCyclePort(8)
+	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
 	// Connect Flow0 output to Link upstream
@@ -35,7 +35,7 @@ func TestLinkBasicFunctionality(t *testing.T) {
 	flow0.InPort().SetDone(-1)
 
 	// Initialize downstream ready state for flow1 (allows Link to send packets)
-	if flow1InPortImpl, ok := flow1InPort.(*cycle_port.CyclePortImpl); ok {
+	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
 
@@ -45,7 +45,7 @@ func TestLinkBasicFunctionality(t *testing.T) {
 		TargetID: 1,
 		Payload:  "test",
 	}
-	env := cycle_port.PacketWithCycle{
+	env := ahead_port.PacketWithCycle{
 		Cycle:  0,
 		Packet: pkt,
 	}
@@ -83,7 +83,7 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	flow0 := flow.NewFIFO(0, 8)
 	flow1 := flow.NewFIFO(1, 8)
 
-	flow0OutPort := cycle_port.NewCyclePort(8)
+	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
 	flow0.AddOutPort(flow0OutPort)
@@ -94,7 +94,7 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	flow0.InPort().SetDone(-1)
 
 	// Initialize downstream ready state for flow1 (allows Link to send packets)
-	if flow1InPortImpl, ok := flow1InPort.(*cycle_port.CyclePortImpl); ok {
+	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
 
@@ -105,8 +105,8 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	// For latency=3, targetCycle for pkt1 = 0+3=3, targetCycle for pkt2 = 0+3=3 (both sent at cycle 0)
 	// New implementation requires cycle >= targetCycle to process packets
 	// Bandwidth=2, so both packets can fit in slot
-	env1 := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt1}
-	env2 := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt2}
+	env1 := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt1}
+	env2 := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt2}
 	flow0OutPort.Chan() <- env1
 	flow0OutPort.Chan() <- env2
 
@@ -144,7 +144,7 @@ func TestLinkBandwidthLimit(t *testing.T) {
 	flow0 := flow.NewFIFO(0, 8)
 	flow1 := flow.NewFIFO(1, 8)
 
-	flow0OutPort := cycle_port.NewCyclePort(8)
+	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
 	flow0.AddOutPort(flow0OutPort)
@@ -162,13 +162,13 @@ func TestLinkBandwidthLimit(t *testing.T) {
 	// New implementation requires cycle >= targetCycle(2) to process packets
 	// Bandwidth=2, so only 2 packets can fit in slot
 	// Note: Sending 3 packets would cause panic when slot is full
-	env1 := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt1}
-	env2 := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt2}
+	env1 := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt1}
+	env2 := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt2}
 	flow0OutPort.Chan() <- env1
 	flow0OutPort.Chan() <- env2
 
 	// Initialize downstream ready state for flow1
-	if flow1InPortImpl, ok := flow1InPort.(*cycle_port.CyclePortImpl); ok {
+	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
 		flow1InPortImpl.SetReadyUntil(10) // Allow processing up to cycle 10
 	}
 
@@ -214,7 +214,7 @@ func TestLinkMultipleUpstream(t *testing.T) {
 	flow3 := flow.NewFIFO(3, 8)
 
 	// Create shared port group for upstreams
-	upstreams, aggregator := cycle_port.NewSharedPortGroup(3, 8)
+	upstreams, aggregator := ahead_port.NewSharedPortGroup(3, 8)
 	flow0OutPort := upstreams[0]
 	flow1OutPort := upstreams[1]
 	flow2OutPort := upstreams[2]
@@ -242,7 +242,7 @@ func TestLinkMultipleUpstream(t *testing.T) {
 	flow2.Emit(pkt2)
 
 	// Initialize downstream ready state for flow3 (allows Link to send packets)
-	if flow3InPortImpl, ok := flow3InPort.(*cycle_port.CyclePortImpl); ok {
+	if flow3InPortImpl, ok := flow3InPort.(*ahead_port.SinglePort); ok {
 		flow3InPortImpl.SetReadyUntil(10)
 	}
 
@@ -250,16 +250,16 @@ func TestLinkMultipleUpstream(t *testing.T) {
 	// Flow's outPorts need to be ready, which is managed by Link's updateUpstreamReady
 	// But we need to ensure Flow can send packets, so we set outPorts' ReadyUntil
 	// Since they share the same aggregator, setting via aggregator propagates?
-	// No, SetReadyUntil is on CyclePortImpl.
-	// Link updates aggregator. Aggregator updates all CyclePortImpls via UpdateReady.
+	// No, SetReadyUntil is on SinglePort.
+	// Link updates aggregator. Aggregator updates all SinglePorts via UpdateReady.
 	// But here we manually set it for initialization.
-	if impl, ok := flow0OutPort.(*cycle_port.CyclePortImpl); ok {
+	if impl, ok := flow0OutPort.(*ahead_port.SinglePort); ok {
 		impl.SetReadyUntil(10)
 	}
-	if impl, ok := flow1OutPort.(*cycle_port.CyclePortImpl); ok {
+	if impl, ok := flow1OutPort.(*ahead_port.SinglePort); ok {
 		impl.SetReadyUntil(10)
 	}
-	if impl, ok := flow2OutPort.(*cycle_port.CyclePortImpl); ok {
+	if impl, ok := flow2OutPort.(*ahead_port.SinglePort); ok {
 		impl.SetReadyUntil(10)
 	}
 

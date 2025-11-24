@@ -1,4 +1,4 @@
-package cycle_port
+package ahead_port
 
 import (
 	"fmt"
@@ -266,8 +266,8 @@ processPackets:
 func TestCycleProcessorBasicFlow(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewCyclePort(8)
-	downstreamPort := NewCyclePort(8)
+	upstreamPort := NewAheadPort(8)
+	downstreamPort := NewAheadPort(8)
 
 	// Track hook calls
 	var hookCalls struct {
@@ -332,8 +332,8 @@ func TestCycleProcessorBasicFlow(t *testing.T) {
 func TestCycleProcessorCycleIncrement(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewCyclePort(8)
-	downstreamPort := NewCyclePort(8)
+	upstreamPort := NewAheadPort(8)
+	downstreamPort := NewAheadPort(8)
 
 	// Set downstream cycles 5, 6, 7 as not ready, 8 as ready
 	// Important: readyUntil represents cycles that downstream can execute ahead.
@@ -490,8 +490,8 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewCyclePort(8)
-	downstreamPort := NewCyclePort(8)
+	upstreamPort := NewAheadPort(8)
+	downstreamPort := NewAheadPort(8)
 
 	// Set cycles 10-14 as not ready, 15 as ready
 	// Set readyUntil to 9 so cycles 10+ will check readyMap (not fast path)
@@ -595,8 +595,8 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 func TestCycleProcessorWithCustomHooks(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewCyclePort(8)
-	downstreamPort := NewCyclePort(8)
+	upstreamPort := NewAheadPort(8)
+	downstreamPort := NewAheadPort(8)
 
 	// Use DefaultProcessor
 	proc := &DefaultProcessor{}
@@ -635,8 +635,8 @@ func TestCycleProcessorWithCustomHooks(t *testing.T) {
 func TestCycleProcessorWaitsForUpstreamDone(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewCyclePort(8)
-	downstreamPort := NewCyclePort(8)
+	upstreamPort := NewAheadPort(8)
+	downstreamPort := NewAheadPort(8)
 
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, nil)
 
@@ -679,8 +679,8 @@ func TestCycleProcessorWaitsForUpstreamDone(t *testing.T) {
 func TestCycleProcessorReceivesAllPackets(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewCyclePort(10)
-	downstreamPort := NewCyclePort(10)
+	upstreamPort := NewAheadPort(10)
+	downstreamPort := NewAheadPort(10)
 
 	// Track received packets
 	var receivedPackets []PacketWithCycle
@@ -773,8 +773,8 @@ func TestCycleProcessorReceivesAllPackets(t *testing.T) {
 func TestCycleProcessorHandlesMultipleCyclesInChannel(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewCyclePort(10)
-	downstreamPort := NewCyclePort(10)
+	upstreamPort := NewAheadPort(10)
+	downstreamPort := NewAheadPort(10)
 
 	var receivedPackets []PacketWithCycle
 	var mu sync.Mutex
@@ -857,8 +857,8 @@ func TestCycleProcessorHandlesMultipleCyclesInChannel(t *testing.T) {
 func TestCycleProcessorUpdateReadyAfterProcessCycle(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewCyclePort(8)
-	downstreamPort := NewCyclePort(8)
+	upstreamPort := NewAheadPort(8)
+	downstreamPort := NewAheadPort(8)
 
 	processor := NewCycleProcessor(upstreamPort, downstreamPort, nil)
 
@@ -929,7 +929,7 @@ func TestCycleProcessorUpdateReadyAfterProcessCycle(t *testing.T) {
 func TestCycleProcessorUpdateReadyWithoutUpdateReadyBlocks(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewCyclePort(8)
+	upstreamPort := NewAheadPort(8)
 
 	// Set initial state
 	upstreamPort.SetDone(-1)

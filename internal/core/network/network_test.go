@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Readm/flow_sim/internal/core/cycle_port"
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/dataflow/flow"
@@ -33,22 +33,22 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 	nodeB := newFlowNode(1, 0, mailboxSize, tracker, nodeWork, cycles)
 
 	// Create output ports for flows
-	flowAOutPort := cycle_port.NewCyclePort(mailboxSize)
-	flowBOutPort := cycle_port.NewCyclePort(mailboxSize)
+	flowAOutPort := ahead_port.NewAheadPort(mailboxSize)
+	flowBOutPort := ahead_port.NewAheadPort(mailboxSize)
 
 	// Connect flows to output ports
 	nodeA.Flows()[0].AddOutPort(flowAOutPort)
 	nodeB.Flows()[0].AddOutPort(flowBOutPort)
 
-	// Create links with CyclePort
+	// Create links with AheadPort
 	linkAB := link.NewLink(nodeA.ID(), nodeB.ID(), flowAOutPort, nodeB.Flows()[0].InPort(), linkCycles, 1)
 	linkBA := link.NewLink(nodeB.ID(), nodeA.ID(), flowBOutPort, nodeA.Flows()[0].InPort(), linkCycles, 1)
 
 	// Initialize downstream ready state
-	if flowAInPortImpl, ok := nodeA.Flows()[0].InPort().(*cycle_port.CyclePortImpl); ok {
+	if flowAInPortImpl, ok := nodeA.Flows()[0].InPort().(*ahead_port.SinglePort); ok {
 		flowAInPortImpl.SetReadyUntil(int(cycles) + 10)
 	}
-	if flowBInPortImpl, ok := nodeB.Flows()[0].InPort().(*cycle_port.CyclePortImpl); ok {
+	if flowBInPortImpl, ok := nodeB.Flows()[0].InPort().(*ahead_port.SinglePort); ok {
 		flowBInPortImpl.SetReadyUntil(int(cycles) + 10)
 	}
 	flowAOutPort.SetReadyUntil(int(cycles) + 10)

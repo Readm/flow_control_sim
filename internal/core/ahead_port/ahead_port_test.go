@@ -1,4 +1,4 @@
-package cycle_port
+package ahead_port
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 func TestSetDoneAtomic(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(8)
+	port := NewAheadPort(8)
 
 	// Test initial value
 	if port.GetDone() != -1 {
@@ -51,7 +51,7 @@ func TestSetDoneAtomic(t *testing.T) {
 func TestChanDirection(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(8)
+	port := NewAheadPort(8)
 
 	// Get write-only channel
 	writeChan := port.Chan()
@@ -87,7 +87,7 @@ func TestChanDirection(t *testing.T) {
 func TestReadyFastPath(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(8)
+	port := NewAheadPort(8)
 	port.SetReadyUntil(10)
 
 	// Cycle 5 < readyUntil 10, should return true immediately
@@ -108,7 +108,7 @@ func TestReadyFastPath(t *testing.T) {
 func TestReadyWithReadyMap(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(8)
+	port := NewAheadPort(8)
 	port.SetReadyUntil(5)
 
 	// Set ready status for cycle 10
@@ -157,7 +157,7 @@ func TestReadyWithReadyMap(t *testing.T) {
 func TestReadyBlocking(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(8)
+	port := NewAheadPort(8)
 	port.SetReadyUntil(5)
 
 	// Test blocking behavior
@@ -196,7 +196,7 @@ func TestReadyBlocking(t *testing.T) {
 func TestUpdateReadyWakesWaiters(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(8)
+	port := NewAheadPort(8)
 	port.SetReadyUntil(5)
 
 	const cycle = 20
@@ -243,7 +243,7 @@ func TestUpdateReadyWakesWaiters(t *testing.T) {
 func TestRemoveReadyBefore(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(8)
+	port := NewAheadPort(8)
 
 	// Add some entries
 	port.UpdateReady(5, true)
@@ -276,7 +276,7 @@ func TestZeroCycleLatency(t *testing.T) {
 	t.Parallel()
 
 	// Simulate Flow0 -> Link (latency 0) -> Flow1
-	linkPort := NewCyclePort(8)
+	linkPort := NewAheadPort(8)
 
 	// Cycle 0: Flow0 sets Done 1
 	linkPort.SetDone(1)
@@ -331,7 +331,7 @@ func TestZeroCycleLatency(t *testing.T) {
 func TestConcurrentPushPop(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(100)
+	port := NewAheadPort(100)
 	const numPackets = 50
 
 	var wg sync.WaitGroup
@@ -378,8 +378,8 @@ func TestChainThreeFlows(t *testing.T) {
 	t.Parallel()
 
 	// Create ports for the chain: Flow0 -> Flow1 -> Flow2
-	port01 := NewCyclePort(8) // Flow0 -> Flow1
-	port12 := NewCyclePort(8) // Flow1 -> Flow2
+	port01 := NewAheadPort(8) // Flow0 -> Flow1
+	port12 := NewAheadPort(8) // Flow1 -> Flow2
 
 	const numCycles = 10
 
@@ -596,8 +596,8 @@ func TestChainThreeFlows(t *testing.T) {
 func TestChainWithBackpressure(t *testing.T) {
 	t.Parallel()
 
-	port01 := NewCyclePort(2) // Small buffer to trigger backpressure
-	port12 := NewCyclePort(2)
+	port01 := NewAheadPort(2) // Small buffer to trigger backpressure
+	port12 := NewAheadPort(2)
 
 	const numCycles = 5
 
@@ -732,8 +732,8 @@ func TestChainWithBackpressure(t *testing.T) {
 func TestChainParallelComputation(t *testing.T) {
 	t.Parallel()
 
-	port01 := NewCyclePort(100) // Large buffer, no backpressure
-	port12 := NewCyclePort(100)
+	port01 := NewAheadPort(100) // Large buffer, no backpressure
+	port12 := NewAheadPort(100)
 
 	const numCycles = 20
 
@@ -839,7 +839,7 @@ func TestChainParallelComputation(t *testing.T) {
 func TestUpstreamDelaysWhenDownstreamNotReady(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(8)
+	port := NewAheadPort(8)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -950,7 +950,7 @@ func TestUpstreamDelaysWhenDownstreamNotReady(t *testing.T) {
 func TestUpstreamHandlesMultipleNonReadyCycles(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(8)
+	port := NewAheadPort(8)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1054,7 +1054,7 @@ func TestUpstreamHandlesMultipleNonReadyCycles(t *testing.T) {
 func TestUpstreamCycleIncrementMatchesNonReadyCount(t *testing.T) {
 	t.Parallel()
 
-	port := NewCyclePort(8)
+	port := NewAheadPort(8)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -1,4 +1,4 @@
-package cycle_port
+package ahead_port
 
 import (
 	"fmt"
@@ -21,15 +21,15 @@ type PacketProcessor interface {
 
 // CycleProcessor provides the base workflow for processing cycles.
 type CycleProcessor struct {
-	upstreamPort   CyclePort       // Port for receiving packets from upstream
-	downstreamPort CyclePort       // Port for sending packets to downstream
+	upstreamPort   AheadPort       // Port for receiving packets from upstream
+	downstreamPort AheadPort       // Port for sending packets to downstream
 	processor      PacketProcessor // Processor for handling packets
 }
 
 // NewCycleProcessor creates a new cycle processor with the given ports and processor.
-// Both ports must implement CyclePort interface.
+// Both ports must implement AheadPort interface.
 // If processor is nil, DefaultProcessor will be used.
-func NewCycleProcessor(upstreamPort CyclePort, downstreamPort CyclePort, processor PacketProcessor) *CycleProcessor {
+func NewCycleProcessor(upstreamPort AheadPort, downstreamPort AheadPort, processor PacketProcessor) *CycleProcessor {
 	if processor == nil {
 		processor = &DefaultProcessor{}
 	}
@@ -55,12 +55,12 @@ func (cp *CycleProcessor) ProcessCycle(cycle int) error {
 	// Prepare updateUpstreamReady function
 	// UpdateReady is an internal implementation detail, accessed via type assertion
 	var updateUpstreamReady func(cycle int, ready bool)
-	if upstreamPort, ok := cp.upstreamPort.(*CyclePortImpl); ok {
+	if upstreamPort, ok := cp.upstreamPort.(*SinglePort); ok {
 		updateUpstreamReady = upstreamPort.UpdateReady
-	} else if multiUpstream, ok := cp.upstreamPort.(*MultiUpstreamPort); ok {
-		updateUpstreamReady = multiUpstream.UpdateReady
+	} else if faninPort, ok := cp.upstreamPort.(*FaninPort); ok {
+		updateUpstreamReady = faninPort.UpdateReady
 	} else {
-		// If upstreamPort is not a *CyclePortImpl or *MultiUpstreamPort (e.g., a mock), provide a no-op function
+		// If upstreamPort is not a *SinglePort or *FaninPort (e.g., a mock), provide a no-op function
 		updateUpstreamReady = func(cycle int, ready bool) {}
 	}
 
@@ -89,13 +89,13 @@ func (cp *CycleProcessor) ProcessCycle(cycle int) error {
 	// Assert that cycle+1 has been configured in upstream port
 	// Either readyMap contains cycle+1, or readyUntil > cycle+1
 	// This ensures that upstream can check Ready(cycle+1) without blocking
-	if upstreamPort, ok := cp.upstreamPort.(*CyclePortImpl); ok {
+	if upstreamPort, ok := cp.upstreamPort.(*SinglePort); ok {
 		_, configured := upstreamPort.ReadyNonBlocking(cycle + 1)
 		if !configured {
 			panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 		}
-	} else if multiUpstream, ok := cp.upstreamPort.(*MultiUpstreamPort); ok {
-		_, configured := multiUpstream.ReadyNonBlocking(cycle + 1)
+	} else if faninPort, ok := cp.upstreamPort.(*FaninPort); ok {
+		_, configured := faninPort.ReadyNonBlocking(cycle + 1)
 		if !configured {
 			panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in all upstream ports. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 		}

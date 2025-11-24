@@ -1,4 +1,4 @@
-package cycle_port
+package ahead_port
 
 import (
 	"log"
@@ -75,8 +75,8 @@ process:
 
 // func ExampleUsage() {
 //     // Create ports
-//     upstreamPort := NewCyclePort(8)
-//     downstreamPort := NewCyclePort(8)
+//     upstreamPort := NewAheadPort(8)
+//     downstreamPort := NewAheadPort(8)
 //
 //     // Create processor for FIFO flow
 //     proc := NewFIFOFlowProcessor(1)

@@ -1,15 +1,15 @@
 
-# CyclePort 同步
+# AheadPort 同步
 
 Flow 和 Link 之间的交互都使用同一个接口
 ```go
-// CyclePort is a bidirectional interface for cycle-based synchronous communication between Flow and Link components.
-// A single CyclePort instance provides both upstream and downstream operations:
+// AheadPort is a bidirectional interface for cycle-based synchronous communication between Flow and Link components.
+// A single AheadPort instance provides both upstream and downstream operations:
 // - Upstream component (e.g., Flow0) uses upstream operations to send packets and check downstream readiness.
 // - Downstream component (e.g., Flow1) uses downstream operations to receive packets and wait for upstream completion.
 // This bidirectional design allows the same port to be used from both perspectives, enabling flexible
 // composition of Flow and Link components in a dataflow graph.
-type CyclePort interface {
+type AheadPort interface {
 	// ===== Upstream Operations =====
 	// These methods are called by the upstream component (the sender).
 
@@ -67,7 +67,7 @@ type CyclePort interface {
 
 Flow -> Link 和 Link -> Flow 都是一样的逻辑。下面，我们按方向称为上游和下游。
 
-**注意**：`CyclePort` 接口通常与 `CycleProcessor` 和 `PacketProcessor` 配合使用。`CycleProcessor` 提供了标准的 cycle 处理流程，而 `PacketProcessor` 定义了包处理策略。详见 `architecture_relationship.md`。
+**注意**：`AheadPort` 接口通常与 `CycleProcessor` 和 `PacketProcessor` 配合使用。`CycleProcessor` 提供了标准的 cycle 处理流程，而 `PacketProcessor` 定义了包处理策略。详见 `architecture_relationship.md`。
 
 ## CycleProcessor 处理流程
 
@@ -82,7 +82,7 @@ flowchart TB
     subgraph CP["CycleProcessor.ProcessCycle(cycle)"]
         START(["开始 ProcessCycle(cycle)"])
         WAIT["1. WaitForDoneUntil(cycle)<br/>等待上游 DoneUntil >= cycle"]
-        PREPARE["2. 准备 updateUpstreamReady 函数<br/>通过类型断言获取 CyclePortImpl.UpdateReady"]
+        PREPARE["2. 准备 updateUpstreamReady 函数<br/>通过类型断言获取 SinglePort.UpdateReady"]
         CALL_PROC["3. 调用 processor.ProcessPackets()<br/>传入: receiveChan, cycle, checkReady,<br/>sendPacket, setDoneUntil, updateUpstreamReady"]
         SET_DONE["4. SetDoneUntil(cycle+1)<br/>如果当前值 < cycle+1<br/>确保单调递增"]
         ASSERT["5. 断言 cycle+1 已配置<br/>ReadyNonBlocking(cycle+1) 必须返回 configured=true"]
@@ -168,7 +168,7 @@ flowchart TB
    - 最后通知上游下一个 cycle 已就绪
 
 3. **Ready(cycle) 内部逻辑**（黄色区域）：
-   - 展示 `CyclePort.Ready()` 方法的内部实现
+   - 展示 `AheadPort.Ready()` 方法的内部实现
    - 快速路径：如果 `cycle < readyUntil`，立即返回 true
    - 否则查询 `readyMap`，如果不存在则阻塞等待
 

@@ -4,16 +4,16 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Readm/flow_sim/internal/core/cycle_port"
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 )
 
 // LinkCycleProcessor is a custom cycle processor for Link that waits for Done(cycle-latency)
 // instead of Done(cycle-1). This allows Link to process packets earlier, taking advantage
 // of the latency buffer.
 type LinkCycleProcessor struct {
-	upstreamPort   cycle_port.CyclePort
-	downstreamPort cycle_port.CyclePort
-	processor      cycle_port.PacketProcessor
+	upstreamPort   ahead_port.AheadPort
+	downstreamPort ahead_port.AheadPort
+	processor      ahead_port.PacketProcessor
 	latency        int
 }
 
@@ -70,19 +70,19 @@ func (lcp *LinkCycleProcessor) ProcessCycle(cycle int) error {
 }
 
 // sendPacket sends a packet to downstream.
-func (lcp *LinkCycleProcessor) sendPacket(pkt cycle_port.PacketWithCycle) {
+func (lcp *LinkCycleProcessor) sendPacket(pkt ahead_port.PacketWithCycle) {
 	lcp.downstreamPort.Chan() <- pkt
 }
 
-// Link represents a directed edge in the topology using CyclePort.
-// Link receives packets from an upstream CyclePort (which can be a single port or an aggregator)
+// Link represents a directed edge in the topology using AheadPort.
+// Link receives packets from an upstream AheadPort (which can be a single port or an aggregator)
 // and forwards them to a single downstream Flow.
 // It implements latency and bandwidth constraints.
 type Link struct {
 	sourceID          int
 	targetID          int
-	upstreamPort      cycle_port.CyclePort // Single upstream port (may be an aggregator)
-	downstreamPort    cycle_port.CyclePort // Single downstream port to target Flow
+	upstreamPort      ahead_port.AheadPort // Single upstream port (may be an aggregator)
+	downstreamPort    ahead_port.AheadPort // Single downstream port to target Flow
 	processor         *LinkCycleProcessor
 	packetProc        *LinkPacketProcessor
 	latency           int
@@ -94,28 +94,28 @@ type Link struct {
 // It handles latency (delaying packets) and bandwidth constraints.
 type LinkPacketProcessor struct {
 	link           *Link
-	pendingPackets []cycle_port.PacketWithCycle
+	pendingPackets []ahead_port.PacketWithCycle
 	// Slots for delayed delivery (ring buffer)
-	slots [][]cycle_port.PacketWithCycle
+	slots [][]ahead_port.PacketWithCycle
 }
 
 // NewLinkPacketProcessor creates a new LinkPacketProcessor.
 func NewLinkPacketProcessor(link *Link) *LinkPacketProcessor {
 	slotCount := link.latency
-	slots := make([][]cycle_port.PacketWithCycle, slotCount)
+	slots := make([][]ahead_port.PacketWithCycle, slotCount)
 	return &LinkPacketProcessor{
 		link:           link,
 		slots:          slots,
-		pendingPackets: make([]cycle_port.PacketWithCycle, 0),
+		pendingPackets: make([]ahead_port.PacketWithCycle, 0),
 	}
 }
 
 // ProcessPackets processes packets for Link: receive from upstream, apply latency, and send to downstream.
 func (l *LinkPacketProcessor) ProcessPackets(
-	receiveChan <-chan cycle_port.PacketWithCycle,
+	receiveChan <-chan ahead_port.PacketWithCycle,
 	cycle int,
 	checkReady func(int) bool,
-	sendPacket func(cycle_port.PacketWithCycle),
+	sendPacket func(ahead_port.PacketWithCycle),
 	setDone func(int),
 	updateUpstreamReady func(cycle int, ready bool),
 ) {
@@ -128,10 +128,10 @@ func (l *LinkPacketProcessor) ProcessPackets(
 		updateUpstreamReady(cycle+1, checkReady(cycle+1))
 	}()
 
-	newPendingPackets := make([]cycle_port.PacketWithCycle, 0)
+	newPendingPackets := make([]ahead_port.PacketWithCycle, 0)
 
 	// Helper to add packet to slot
-	addToSlot := func(pkt cycle_port.PacketWithCycle, targetCycle int) {
+	addToSlot := func(pkt ahead_port.PacketWithCycle, targetCycle int) {
 		// Calculate target slot index with backpressure adjustment.
 		// Design guarantee: totalBackpressure will never exceed targetCycle (in practice)
 		targetSlotIndex := (targetCycle - l.link.totalBackpressure) % len(l.slots)
@@ -164,7 +164,7 @@ func (l *LinkPacketProcessor) ProcessPackets(
 			targetCycle := sourceCycle + l.link.latency
 
 			// Create packet with target cycle
-			delayedPkt := cycle_port.PacketWithCycle{
+			delayedPkt := ahead_port.PacketWithCycle{
 				Cycle:  targetCycle,
 				Packet: pkt.Packet,
 			}
@@ -210,11 +210,11 @@ doneProcessing:
 // NewLink creates a link with the specified upstream port and downstream port.
 // - sourceID: ID of the source node
 // - targetID: ID of the target node
-// - upstreamPort: CyclePort from source Flows (can be a single port or an aggregator)
-// - downstreamPort: CyclePort to target Flow (single)
+// - upstreamPort: AheadPort from source Flows (can be a single port or an aggregator)
+// - downstreamPort: AheadPort to target Flow (single)
 // - latency: number of cycles for packet delivery (defaults to 1 if 0)
 // - bandwidth: maximum packets per cycle (defaults to 1 if 0)
-func NewLink(sourceID int, targetID int, upstreamPort cycle_port.CyclePort, downstreamPort cycle_port.CyclePort, latency int, bandwidth int) *Link {
+func NewLink(sourceID int, targetID int, upstreamPort ahead_port.AheadPort, downstreamPort ahead_port.AheadPort, latency int, bandwidth int) *Link {
 	if latency < 0 {
 		panic("latency must not be negative")
 	}
@@ -275,12 +275,12 @@ func (l *Link) ProcessCycle(cycle int) error {
 }
 
 // UpstreamPort returns the upstream port.
-func (l *Link) UpstreamPort() cycle_port.CyclePort {
+func (l *Link) UpstreamPort() ahead_port.AheadPort {
 	return l.upstreamPort
 }
 
 // DownstreamPort returns the downstream port.
-func (l *Link) DownstreamPort() cycle_port.CyclePort {
+func (l *Link) DownstreamPort() ahead_port.AheadPort {
 	return l.downstreamPort
 }
 

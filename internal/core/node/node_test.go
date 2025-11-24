@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Readm/flow_sim/internal/core/cycle_port"
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/dataflow/flow"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
@@ -95,7 +95,7 @@ func TestNodeWithSingleFlow(t *testing.T) {
 
 	// Create a link and send a packet using new interface
 	flow0 := node.Flows()[0]
-	outPort := cycle_port.NewCyclePort(8)
+	outPort := ahead_port.NewAheadPort(8)
 	flow0.AddOutPort(outPort)
 	inPort := flow0.InPort()
 
@@ -110,13 +110,13 @@ func TestNodeWithSingleFlow(t *testing.T) {
 	flow0.InPort().SetDone(-1)
 
 	// Initialize downstream ready state
-	if inPortImpl, ok := inPort.(*cycle_port.CyclePortImpl); ok {
+	if inPortImpl, ok := inPort.(*ahead_port.SinglePort); ok {
 		inPortImpl.SetReadyUntil(10)
 	}
 	outPort.SetReadyUntil(10)
 
 	// Send packet through port
-	env := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt}
+	env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
 	outPort.Chan() <- env
 	outPort.SetDone(1)
 
@@ -146,7 +146,7 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 	links := make([]*link.Link, 3)
 	for i := 0; i < 3; i++ {
 		flow := node.Flows()[i]
-		outPort := cycle_port.NewCyclePort(8)
+		outPort := ahead_port.NewAheadPort(8)
 		flow.AddOutPort(outPort)
 		inPort := flow.InPort()
 
@@ -156,7 +156,7 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 		flow.InPort().SetDone(-1)
 
 		// Initialize downstream ready state
-		if inPortImpl, ok := inPort.(*cycle_port.CyclePortImpl); ok {
+		if inPortImpl, ok := inPort.(*ahead_port.SinglePort); ok {
 			inPortImpl.SetReadyUntil(10)
 		}
 
@@ -166,7 +166,7 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 			TargetID: 1,
 			Payload:  "test",
 		}
-		env := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt}
+		env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
 		outPort.Chan() <- env
 		outPort.SetDone(1)
 	}
@@ -197,7 +197,7 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 	links := make([]*link.Link, 3)
 	for i := 0; i < 3; i++ {
 		flow := node.Flows()[i]
-		outPort := cycle_port.NewCyclePort(8)
+		outPort := ahead_port.NewAheadPort(8)
 		flow.AddOutPort(outPort)
 		inPort := flow.InPort()
 
@@ -207,7 +207,7 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 		flow.InPort().SetDone(-1)
 
 		// Initialize downstream ready state
-		if inPortImpl, ok := inPort.(*cycle_port.CyclePortImpl); ok {
+		if inPortImpl, ok := inPort.(*ahead_port.SinglePort); ok {
 			inPortImpl.SetReadyUntil(10)
 		}
 
@@ -217,7 +217,7 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 			TargetID: 1,
 			Payload:  "test",
 		}
-		env := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt}
+		env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
 		outPort.Chan() <- env
 		outPort.SetDone(1)
 	}
@@ -252,7 +252,7 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 
 	node := newMultiFlowNode(1, 2, false, 8, 0, 0)
 	flow0 := node.Flows()[0]
-	outPort := cycle_port.NewCyclePort(8)
+	outPort := ahead_port.NewAheadPort(8)
 	flow0.AddOutPort(outPort)
 	inPort := flow0.InPort()
 
@@ -273,7 +273,7 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 	flow0.InPort().SetDone(-1)
 
 	// Initialize downstream ready state
-	if inPortImpl, ok := inPort.(*cycle_port.CyclePortImpl); ok {
+	if inPortImpl, ok := inPort.(*ahead_port.SinglePort); ok {
 		inPortImpl.SetReadyUntil(10)
 	}
 
@@ -284,7 +284,7 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 			TargetID: 1,
 			Payload:  fmt.Sprintf("test-%d", cycle),
 		}
-		env := cycle_port.PacketWithCycle{Cycle: cycle, Packet: pkt}
+		env := ahead_port.PacketWithCycle{Cycle: cycle, Packet: pkt}
 		outPort.Chan() <- env
 		outPort.SetDone(cycle)
 
@@ -319,7 +319,7 @@ func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
 	f := flow.NewFIFO(1, 8)
 
 	// Create output port and link
-	outPort := cycle_port.NewCyclePort(8)
+	outPort := ahead_port.NewAheadPort(8)
 	f.AddOutPort(outPort)
 	targetInPort := targetFlow.InPort()
 	link := link.NewLink(1, 2, outPort, targetInPort, 1, 10)
@@ -330,7 +330,7 @@ func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
 
 	// Initialize downstream ready state
 	outPort.SetReadyUntil(10)
-	if targetInPortImpl, ok := targetInPort.(*cycle_port.CyclePortImpl); ok {
+	if targetInPortImpl, ok := targetInPort.(*ahead_port.SinglePort); ok {
 		targetInPortImpl.SetReadyUntil(10)
 	}
 

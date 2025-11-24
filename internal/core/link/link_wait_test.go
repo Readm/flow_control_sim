@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Readm/flow_sim/internal/core/cycle_port"
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/dataflow/flow"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
@@ -18,7 +18,7 @@ func TestLinkWaitLogic(t *testing.T) {
 	flow0 := flow.NewFIFO(0, 8)
 	flow1 := flow.NewFIFO(1, 8)
 
-	flow0OutPort := cycle_port.NewCyclePort(8)
+	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
 	flow0.AddOutPort(flow0OutPort)
@@ -31,13 +31,13 @@ func TestLinkWaitLogic(t *testing.T) {
 	flow0.InPort().SetDone(-1)
 
 	// Initialize downstream ready state
-	if flow1InPortImpl, ok := flow1InPort.(*cycle_port.CyclePortImpl); ok {
+	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
 
 	// Send packet at cycle 0
 	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
-	env := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt}
+	env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
 	flow0OutPort.Chan() <- env
 
 	// Process flow0 to send the packet
@@ -99,7 +99,7 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 	flow0 := flow.NewFIFO(0, 8)
 	flow1 := flow.NewFIFO(1, 8)
 
-	flow0OutPort := cycle_port.NewCyclePort(8)
+	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
 	flow0.AddOutPort(flow0OutPort)
@@ -109,7 +109,7 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 
 	// Initialize
 	flow0.InPort().SetDone(-1)
-	if flow1InPortImpl, ok := flow1InPort.(*cycle_port.CyclePortImpl); ok {
+	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
 
@@ -141,7 +141,7 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	flow0 := flow.NewFIFO(0, 8)
 	flow1 := flow.NewFIFO(1, 8)
 
-	flow0OutPort := cycle_port.NewCyclePort(8)
+	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
 	flow0.AddOutPort(flow0OutPort)
@@ -152,13 +152,13 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 
 	// Initialize
 	flow0.InPort().SetDone(-1)
-	if flow1InPortImpl, ok := flow1InPort.(*cycle_port.CyclePortImpl); ok {
+	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
 
 	// Send packet at cycle 0
 	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
-	env := cycle_port.PacketWithCycle{Cycle: 0, Packet: pkt}
+	env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
 	flow0OutPort.Chan() <- env
 
 	// Process flow0

@@ -9,26 +9,26 @@ config:
 ---
 flowchart TB
     subgraph Interfaces["接口层 (Interfaces)"]
-        CyclePort["CyclePort<br/>Cycle 同步端口接口"]
+        AheadPort["AheadPort<br/>Cycle 同步端口接口"]
         PacketProcessor["PacketProcessor<br/>包处理策略接口"]
     end
     
     subgraph Implementations["实现层 (Implementations)"]
-        CyclePortImpl["CyclePortImpl<br/>实现 CyclePort<br/>提供同步机制"]
+        SinglePort["SinglePort<br/>实现 AheadPort<br/>提供同步机制"]
         DefaultProcessor["DefaultProcessor<br/>实现 PacketProcessor<br/>FIFO 策略"]
         FIFOFlowProcessor["FIFOFlowProcessor<br/>实现 PacketProcessor<br/>嵌入 DefaultProcessor"]
         PriorityFlowProcessor["PriorityFlowProcessor<br/>实现 PacketProcessor<br/>嵌入 DefaultProcessor"]
     end
     
     subgraph Coordinator["协调层 (Coordinator)"]
-        CycleProcessor["CycleProcessor<br/>协调 CyclePort 和 Processor"]
+        CycleProcessor["CycleProcessor<br/>协调 AheadPort 和 Processor"]
     end
     
     subgraph Types["类型别名"]
         PacketWithCycle["PacketWithCycle<br/>= packet.PacketWithCycle"]
     end
     
-    CyclePort -->|实现| CyclePortImpl
+    AheadPort -->|实现| SinglePort
     PacketProcessor -->|实现| DefaultProcessor
     PacketProcessor -->|实现| FIFOFlowProcessor
     PacketProcessor -->|实现| PriorityFlowProcessor
@@ -36,13 +36,13 @@ flowchart TB
     DefaultProcessor -.->|嵌入| FIFOFlowProcessor
     DefaultProcessor -.->|嵌入| PriorityFlowProcessor
     
-    CycleProcessor -->|持有| CyclePort
+    CycleProcessor -->|持有| AheadPort
     CycleProcessor -->|持有| PacketProcessor
     CycleProcessor -->|使用| PacketWithCycle
     
-    style CyclePort fill:#E6F3FF
+    style AheadPort fill:#E6F3FF
     style PacketProcessor fill:#E6F3FF
-    style CyclePortImpl fill:#FFF4E6
+    style SinglePort fill:#FFF4E6
     style DefaultProcessor fill:#FFF4E6
     style CycleProcessor fill:#FFE6E6
     style PacketWithCycle fill:#E6FFE6
@@ -54,11 +54,11 @@ flowchart TB
 
 ### 1. 接口层
 
-#### CyclePort (接口)
+#### AheadPort (接口)
 - **职责**: 定义基于 cycle 的双向同步通信协议
 - **方法**:
-  - 上游操作: `SetDoneUntil()`, `Chan()`, `Ready()`, `ReadyNonBlocking()`, `GetDoneUntil()`
-  - 下游操作: `ReceiveChan()`, `WaitForDoneUntil()`
+  - 上游操作: `SetDone()`, `Chan()`, `Ready()`, `ReadyNonBlocking()`, `GetDone()`
+  - 下游操作: `ReceiveChan()`, `WaitForDone()`
 
 #### PacketProcessor (接口)
 - **职责**: 定义包处理策略
@@ -67,8 +67,8 @@ flowchart TB
 
 ### 2. 实现层
 
-#### CyclePortImpl (结构体)
-- **实现**: `CyclePort` 接口
+#### SinglePort (结构体)
+- **实现**: `AheadPort` 接口
 - **职责**: 提供基于 cycle 的同步通信的具体实现
   - 管理 `doneUntil`（上游完成状态）
   - 管理 `readyUntil` 和 `readyMap`（下游就绪状态）
@@ -93,10 +93,10 @@ flowchart TB
 ### 3. 协调层
 
 #### CycleProcessor (结构体)
-- **职责**: 协调 CyclePort 和 Processor
+- **职责**: 协调 AheadPort 和 Processor
 - **持有**:
-  - `upstreamPort CyclePort` - 上游端口
-  - `downstreamPort CyclePort` - 下游端口
+  - `upstreamPort AheadPort` - 上游端口
+  - `downstreamPort AheadPort` - 下游端口
   - `processor PacketProcessor` - 包处理器
 - **方法**: `ProcessCycle(cycle int)` - 执行一个 cycle 的处理流程
 
@@ -113,9 +113,9 @@ flowchart TB
 ### 创建和使用示例
 
 ```go
-// 1. 创建端口（实现 CyclePort）
-upstreamPort := NewCyclePort(8)      // 返回 *CyclePortImpl，实现 CyclePort
-downstreamPort := NewCyclePort(8)    // 返回 *CyclePortImpl，实现 CyclePort
+// 1. 创建端口（实现 AheadPort）
+upstreamPort := NewAheadPort(8)      // 返回 *SinglePort，实现 AheadPort
+downstreamPort := NewAheadPort(8)    // 返回 *SinglePort，实现 AheadPort
 
 // 2. 创建处理器（实现 PacketProcessor，可选）
 processor := &DefaultProcessor{}  // 或 nil（使用默认）
@@ -133,10 +133,10 @@ for cycle := 0; cycle < 10; cycle++ {
 
 ```
 上游组件
-    ↓ SetDoneUntil, Chan(), Ready()
-CyclePort (接口)
+    ↓ SetDone, Chan(), Ready()
+AheadPort (接口)
     ↓ 实现
-CyclePortImpl (结构体)
+SinglePort (结构体)
     ↓ packetChan
 CycleProcessor
     ↓ ReceiveChan(), ProcessPackets()
@@ -144,9 +144,9 @@ PacketProcessor (接口)
     ↓ 实现
 DefaultProcessor (结构体)
     ↓ sendPacket()
-CyclePort (接口)
+AheadPort (接口)
     ↓ 实现
-CyclePortImpl (结构体)
+SinglePort (结构体)
     ↓ packetChan
 下游组件
 ```
@@ -156,12 +156,12 @@ CyclePortImpl (结构体)
 ## 总结
 
 ### 架构优点
-1. 职责分离清晰：`CyclePortImpl` 负责同步机制，`PacketProcessor` 负责处理策略
+1. 职责分离清晰：`SinglePort` 负责同步机制，`PacketProcessor` 负责处理策略
 2. 支持组合模式：`Processor` 可以嵌入 `DefaultProcessor` 复用逻辑和状态
 3. 接口设计合理：解耦、可测试、可扩展
 
 ### 命名规范
-- `CyclePort` (接口) + `CyclePortImpl` (实现) - 关系清晰
+- `AheadPort` (接口) + `SinglePort` (实现) - 关系清晰
 - `PacketProcessor` (接口) + `DefaultProcessor` (实现) - 关系清晰
 - `PacketWithCycle` - 表示带 cycle 信息的包
 
