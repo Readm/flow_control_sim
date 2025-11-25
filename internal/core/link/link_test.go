@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
-	"github.com/Readm/flow_sim/internal/dataflow/flow"
+	"github.com/Readm/flow_sim/internal/core/pipeline"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -18,8 +18,8 @@ func TestLinkBasicFunctionality(t *testing.T) {
 	})
 
 	// Create Flow with AheadPort
-	flow0 := flow.NewFIFO(0, 8)
-	flow1 := flow.NewFIFO(1, 8)
+	flow0 := pipeline.NewFIFO(0, 8)
+	flow1 := pipeline.NewFIFO(1, 8)
 
 	// Create ports
 	flow0OutPort := ahead_port.NewAheadPort(8)
@@ -80,8 +80,8 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 		}
 	})
 
-	flow0 := flow.NewFIFO(0, 8)
-	flow1 := flow.NewFIFO(1, 8)
+	flow0 := pipeline.NewFIFO(0, 8)
+	flow1 := pipeline.NewFIFO(1, 8)
 
 	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
@@ -141,8 +141,8 @@ func TestLinkBandwidthLimit(t *testing.T) {
 		}
 	})
 
-	flow0 := flow.NewFIFO(0, 8)
-	flow1 := flow.NewFIFO(1, 8)
+	flow0 := pipeline.NewFIFO(0, 8)
+	flow1 := pipeline.NewFIFO(1, 8)
 
 	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
@@ -208,10 +208,10 @@ func TestLinkMultipleUpstream(t *testing.T) {
 		}
 	})
 
-	flow0 := flow.NewFIFO(0, 8)
-	flow1 := flow.NewFIFO(1, 8)
-	flow2 := flow.NewFIFO(2, 8)
-	flow3 := flow.NewFIFO(3, 8)
+	flow0 := pipeline.NewFIFO(0, 8)
+	flow1 := pipeline.NewFIFO(1, 8)
+	flow2 := pipeline.NewFIFO(2, 8)
+	flow3 := pipeline.NewFIFO(3, 8)
 
 	// Create shared port group for upstreams
 	upstreams, aggregator := ahead_port.NewSharedPortGroup(3, 8)

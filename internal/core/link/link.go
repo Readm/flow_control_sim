@@ -76,13 +76,13 @@ func (lcp *LinkCycleProcessor) sendPacket(pkt ahead_port.PacketWithCycle) {
 
 // Link represents a directed edge in the topology using AheadPort.
 // Link receives packets from an upstream AheadPort (which can be a single port or an aggregator)
-// and forwards them to a single downstream Flow.
+// and forwards them to a single downstream Pipeline.
 // It implements latency and bandwidth constraints.
 type Link struct {
 	sourceID          int
 	targetID          int
 	upstreamPort      ahead_port.AheadPort // Single upstream port (may be an aggregator)
-	downstreamPort    ahead_port.AheadPort // Single downstream port to target Flow
+	downstreamPort    ahead_port.AheadPort // Single downstream port to target Pipeline
 	processor         *LinkCycleProcessor
 	packetProc        *LinkPacketProcessor
 	latency           int
@@ -211,7 +211,7 @@ doneProcessing:
 // - sourceID: ID of the source node
 // - targetID: ID of the target node
 // - upstreamPort: AheadPort from source Flows (can be a single port or an aggregator)
-// - downstreamPort: AheadPort to target Flow (single)
+// - downstreamPort: AheadPort to target Pipeline (single)
 // - latency: number of cycles for packet delivery (defaults to 1 if 0)
 // - bandwidth: maximum packets per cycle (defaults to 1 if 0)
 func NewLink(sourceID int, targetID int, upstreamPort ahead_port.AheadPort, downstreamPort ahead_port.AheadPort, latency int, bandwidth int) *Link {

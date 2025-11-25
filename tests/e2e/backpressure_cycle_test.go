@@ -10,7 +10,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
-	"github.com/Readm/flow_sim/internal/dataflow/flow"
+	"github.com/Readm/flow_sim/internal/core/pipeline"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 	"github.com/Readm/flow_sim/pkg/visual/frame"
 	"github.com/Readm/flow_sim/pkg/visual/recorder"
@@ -81,15 +81,14 @@ func checkFrameNoBackpressure(t *testing.T, fr *frame.Frame, cycle int) {
 	// Log frame details for debugging
 	t.Logf("cycle %d: frame has %d nodes, %d edges", cycle, len(fr.Nodes), len(fr.Edges))
 	for _, node := range fr.Nodes {
-		t.Logf("  node %d: InQueueBP=%v, OutQueueBP=%v, DownstreamBP=%v, queues=%+v", 
+		t.Logf("  node %d: InQueueBP=%v, OutQueueBP=%v, DownstreamBP=%v, queues=%+v",
 			node.ID, node.InQueueBackpressure, node.OutQueueBackpressure, node.DownstreamBackpressure, node.Queues)
 	}
 	for _, edge := range fr.Edges {
-		t.Logf("  edge %d->%d: Backpressured=%v, pipeline=%+v", 
+		t.Logf("  edge %d->%d: Backpressured=%v, pipeline=%+v",
 			edge.Source, edge.Target, edge.Backpressured, edge.PipelineStages)
 	}
 }
-
 
 func createTestNetwork(t *testing.T, ctx context.Context) (*network.Manager, <-chan *frame.Frame) {
 	t.Helper()
@@ -148,12 +147,12 @@ func createTestNetwork(t *testing.T, ctx context.Context) (*network.Manager, <-c
 type testFlowNode struct {
 	id          int
 	peerID      int
-	flow        flow.Flow
+	flow        pipeline.Pipeline
 	totalCycles uint64
 }
 
 func newTestFlowNode(id, peerID int, totalCycles uint64, mailboxSize int) *testFlowNode {
-	f := flow.NewFIFO(id, mailboxSize, 0, 0)
+	f := pipeline.NewFIFO(id, mailboxSize)
 	return &testFlowNode{
 		id:          id,
 		peerID:      peerID,
@@ -166,12 +165,12 @@ func (n *testFlowNode) ID() int {
 	return n.id
 }
 
-func (n *testFlowNode) Flows() []flow.Flow {
-	return []flow.Flow{n.flow}
+func (n *testFlowNode) Flows() []pipeline.Pipeline {
+	return []pipeline.Pipeline{n.flow}
 }
 
 func (n *testFlowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
-	if err := n.flow.Tick(ctx, cycle); err != nil {
+	if err := n.flow.ProcessCycle(int(cycle)); err != nil {
 		return err
 	}
 	// Emit packet only if cycle+1 < totalCycles
@@ -184,4 +183,3 @@ func (n *testFlowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) 
 	}
 	return nil
 }
-

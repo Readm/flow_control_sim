@@ -10,7 +10,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/node"
-	"github.com/Readm/flow_sim/internal/dataflow/flow"
+	"github.com/Readm/flow_sim/internal/core/pipeline"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -109,14 +109,14 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 type flowNode struct {
 	id          int
 	peerID      int
-	flow        flow.Flow
+	flow        pipeline.Pipeline
 	tracker     *concurrencyTracker
 	workload    time.Duration
 	totalCycles uint64
 }
 
 func newFlowNode(id, peerID int, mailboxSize int, tracker *concurrencyTracker, workload time.Duration, totalCycles uint64) *flowNode {
-	f := flow.NewFIFO(id, mailboxSize)
+	f := pipeline.NewFIFO(id, mailboxSize)
 	// Add router hook to prevent infinite loops (consume if TargetID == id)
 	f.SetRouterHook(func(pkt packet.Packet, outPorts []interface{}, topology interface{}) int {
 		if pkt.TargetID == id {
@@ -141,8 +141,8 @@ func (n *flowNode) ID() int {
 	return n.id
 }
 
-func (n *flowNode) Flows() []flow.Flow {
-	return []flow.Flow{n.flow}
+func (n *flowNode) Flows() []pipeline.Pipeline {
+	return []pipeline.Pipeline{n.flow}
 }
 
 func (n *flowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {

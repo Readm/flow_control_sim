@@ -1,4 +1,4 @@
-package flow
+package pipeline
 
 import "github.com/Readm/flow_sim/internal/dataflow/packet"
 

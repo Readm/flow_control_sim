@@ -8,12 +8,12 @@ import (
 // It is an alias for packet.PacketWithCycle.
 type PacketWithCycle = packet.PacketWithCycle
 
-// AheadPort is a bidirectional interface for cycle-based synchronous communication between Flow and Link components.
+// AheadPort is a bidirectional interface for cycle-based synchronous communication between Pipeline and Link components.
 // A single AheadPort instance provides both upstream and downstream operations:
 // - Upstream component (e.g., Flow0) uses upstream operations to send packets and check downstream readiness.
 // - Downstream component (e.g., Flow1) uses downstream operations to receive packets and wait for upstream completion.
 // This bidirectional design allows the same port to be used from both perspectives, enabling flexible
-// composition of Flow and Link components in a dataflow graph.
+// composition of Pipeline and Link components in a dataflow graph.
 type AheadPort interface {
 	// ===== Upstream Operations =====
 	// These methods are called by the upstream component (the sender).

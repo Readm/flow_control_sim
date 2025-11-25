@@ -6,7 +6,7 @@ import (
 
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/node"
-	"github.com/Readm/flow_sim/internal/dataflow/flow"
+	"github.com/Readm/flow_sim/internal/core/pipeline"
 	"github.com/Readm/flow_sim/pkg/visual/frame"
 )
 
@@ -224,7 +224,7 @@ func countInFlight(links []*link.Link) int {
 	return total
 }
 
-func processedCount(f flow.Flow) int {
+func processedCount(f pipeline.Pipeline) int {
 	if f == nil {
 		return 0
 	}
@@ -234,7 +234,7 @@ func processedCount(f flow.Flow) int {
 // getInQueueLength returns the length of the in_queue (mailbox channel).
 // Note: We can't directly access len() of a send-only channel, so we return 0.
 // The frontend should use IsInQueueFull() to determine if it's full.
-func getInQueueLength(f flow.Flow) int {
+func getInQueueLength(f pipeline.Pipeline) int {
 	// For now, we can't get the length without breaking encapsulation
 	// This would require adding a method to Flow interface
 	return 0
@@ -243,7 +243,7 @@ func getInQueueLength(f flow.Flow) int {
 // getInQueueCapacity returns the capacity of the in_queue.
 // Note: We can't directly access cap() of a send-only channel, so we return -1.
 // The frontend should use IsInQueueFull() to determine if it's full.
-func getInQueueCapacity(f flow.Flow) int {
+func getInQueueCapacity(f pipeline.Pipeline) int {
 	// For now, we can't get the capacity without breaking encapsulation
 	// This would require adding a method to Flow interface
 	return -1

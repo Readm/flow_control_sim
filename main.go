@@ -20,7 +20,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
-	"github.com/Readm/flow_sim/internal/dataflow/flow"
+	"github.com/Readm/flow_sim/internal/core/pipeline"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 	"github.com/Readm/flow_sim/pkg/controller"
 	"github.com/Readm/flow_sim/pkg/visual/frame"
@@ -84,12 +84,12 @@ func main() {
 type flowNode struct {
 	id          int
 	peerID      int
-	flow        flow.Flow
+	flow        pipeline.Pipeline
 	totalCycles uint64
 }
 
 func newFlowNode(id, peerID int, totalCycles uint64) *flowNode {
-	f := flow.NewFIFO(id, mailboxSize)
+	f := pipeline.NewFIFO(id, mailboxSize)
 	// Add router hook to prevent infinite loops (consume if TargetID == id)
 	f.SetRouterHook(func(pkt packet.Packet, outPorts []interface{}, topology interface{}) int {
 		if pkt.TargetID == id {
@@ -112,8 +112,8 @@ func (n *flowNode) ID() int {
 	return n.id
 }
 
-func (n *flowNode) Flows() []flow.Flow {
-	return []flow.Flow{n.flow}
+func (n *flowNode) Flows() []pipeline.Pipeline {
+	return []pipeline.Pipeline{n.flow}
 }
 
 func (n *flowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {

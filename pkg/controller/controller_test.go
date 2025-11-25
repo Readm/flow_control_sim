@@ -10,7 +10,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
-	"github.com/Readm/flow_sim/internal/dataflow/flow"
+	"github.com/Readm/flow_sim/internal/core/pipeline"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 	"github.com/Readm/flow_sim/pkg/controller"
 )
@@ -58,7 +58,7 @@ func TestControllerRunRespectsContext(t *testing.T) {
 
 func TestControllerRunRequiresCycles(t *testing.T) {
 	ctrl := controller.New(func(cfg config.EntityConfig) (*network.Manager, uint64, error) {
-		f := flow.NewFIFO(1, 2)
+		f := pipeline.NewFIFO(1, 2)
 		n := &mockNode{id: 1, delay: time.Millisecond, flow: f}
 		mgr, err := network.NewManager([]node.Node{n}, map[int][]*link.Link{
 			n.ID(): nil,
@@ -85,7 +85,7 @@ func newTestBuilder(t *testing.T, tickDelay time.Duration) controller.ManagerBui
 		edges := make(map[int][]*link.Link)
 
 		for _, nodeCfg := range cfg.Nodes {
-			f := flow.NewFIFO(nodeCfg.ID, 8)
+			f := pipeline.NewFIFO(nodeCfg.ID, 8)
 			n := &mockNode{
 				id:        nodeCfg.ID,
 				delay:     tickDelay,
@@ -110,7 +110,7 @@ func newTestBuilder(t *testing.T, tickDelay time.Duration) controller.ManagerBui
 type mockNode struct {
 	id        int
 	delay     time.Duration
-	flow      flow.Flow
+	flow      pipeline.Pipeline
 	processed int
 }
 
@@ -118,8 +118,8 @@ func (m *mockNode) ID() int {
 	return m.id
 }
 
-func (m *mockNode) Flows() []flow.Flow {
-	return []flow.Flow{m.flow}
+func (m *mockNode) Flows() []pipeline.Pipeline {
+	return []pipeline.Pipeline{m.flow}
 }
 
 func (m *mockNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {

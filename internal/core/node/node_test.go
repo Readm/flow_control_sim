@@ -9,21 +9,21 @@ import (
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/link"
-	"github.com/Readm/flow_sim/internal/dataflow/flow"
+	"github.com/Readm/flow_sim/internal/core/pipeline"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
 // multiFlowNode implements Node with multiple flows that can execute serially or in parallel.
 type multiFlowNode struct {
 	id       int
-	flows    []flow.Flow
+	flows    []pipeline.Pipeline
 	parallel bool
 }
 
 func newMultiFlowNode(id int, flowCount int, parallel bool, mailboxSize int, inQueueCapacity int, outQueueCapacity int) *multiFlowNode {
-	flows := make([]flow.Flow, flowCount)
+	flows := make([]pipeline.Pipeline, flowCount)
 	for i := 0; i < flowCount; i++ {
-		flows[i] = flow.NewFIFO(id, mailboxSize)
+		flows[i] = pipeline.NewFIFO(id, mailboxSize)
 	}
 	return &multiFlowNode{
 		id:       id,
@@ -36,7 +36,7 @@ func (n *multiFlowNode) ID() int {
 	return n.id
 }
 
-func (n *multiFlowNode) Flows() []flow.Flow {
+func (n *multiFlowNode) Flows() []pipeline.Pipeline {
 	return n.flows
 }
 
@@ -46,7 +46,7 @@ func (n *multiFlowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration)
 		errCh := make(chan error, len(n.flows))
 		for _, f := range n.flows {
 			wg.Add(1)
-			go func(fl flow.Flow) {
+			go func(fl pipeline.Pipeline) {
 				defer wg.Done()
 				if err := fl.ProcessCycle(int(cycle)); err != nil {
 					select {
@@ -315,8 +315,8 @@ func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
 	t.Parallel()
 
 	// Create flows with output ports and link
-	targetFlow := flow.NewFIFO(2, 8)
-	f := flow.NewFIFO(1, 8)
+	targetFlow := pipeline.NewFIFO(2, 8)
+	f := pipeline.NewFIFO(1, 8)
 
 	// Create output port and link
 	outPort := ahead_port.NewAheadPort(8)

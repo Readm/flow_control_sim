@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
-	"github.com/Readm/flow_sim/internal/dataflow/flow"
+	"github.com/Readm/flow_sim/internal/core/pipeline"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -15,8 +15,8 @@ import (
 func TestLinkWaitLogic(t *testing.T) {
 	t.Parallel()
 
-	flow0 := flow.NewFIFO(0, 8)
-	flow1 := flow.NewFIFO(1, 8)
+	flow0 := pipeline.NewFIFO(0, 8)
+	flow1 := pipeline.NewFIFO(1, 8)
 
 	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
@@ -96,8 +96,8 @@ func TestLinkWaitLogic(t *testing.T) {
 func TestLinkWaitLogicBoundary(t *testing.T) {
 	t.Parallel()
 
-	flow0 := flow.NewFIFO(0, 8)
-	flow1 := flow.NewFIFO(1, 8)
+	flow0 := pipeline.NewFIFO(0, 8)
+	flow1 := pipeline.NewFIFO(1, 8)
 
 	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
@@ -138,8 +138,8 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	t.Parallel()
 
-	flow0 := flow.NewFIFO(0, 8)
-	flow1 := flow.NewFIFO(1, 8)
+	flow0 := pipeline.NewFIFO(0, 8)
+	flow1 := pipeline.NewFIFO(1, 8)
 
 	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()

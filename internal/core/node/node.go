@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/Readm/flow_sim/internal/dataflow/flow"
+	"github.com/Readm/flow_sim/internal/core/pipeline"
 )
 
 // Node describes the minimum contract the Network scheduler relies on. Higher
@@ -12,6 +12,6 @@ import (
 // implementation without changing this interface.
 type Node interface {
 	ID() int
-	Flows() []flow.Flow
+	Flows() []pipeline.Pipeline
 	Tick(ctx context.Context, cycle uint64, linkDelay time.Duration) error
 }
