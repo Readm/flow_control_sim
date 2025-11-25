@@ -49,7 +49,7 @@ func TestLinkBasicFunctionality(t *testing.T) {
 		Cycle:  0,
 		Packet: pkt,
 	}
-	flow0OutPort.Chan() <- env
+	flow0OutPort.SendChan() <- env
 
 	// Process cycles - framework will automatically manage Done
 	// Note: New implementation requires cycle >= targetCycle to process packets
@@ -107,8 +107,8 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	// Bandwidth=2, so both packets can fit in slot
 	env1 := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt1}
 	env2 := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt2}
-	flow0OutPort.Chan() <- env1
-	flow0OutPort.Chan() <- env2
+	flow0OutPort.SendChan() <- env1
+	flow0OutPort.SendChan() <- env2
 
 	// Process cycles - need to advance to cycle >= 3 to process packets (targetCycle = 0+3=3)
 	// IMPORTANT: We must NOT call link.ProcessCycle when cycle < targetCycle, as it will panic
@@ -164,8 +164,8 @@ func TestLinkBandwidthLimit(t *testing.T) {
 	// Note: Sending 3 packets would cause panic when slot is full
 	env1 := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt1}
 	env2 := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt2}
-	flow0OutPort.Chan() <- env1
-	flow0OutPort.Chan() <- env2
+	flow0OutPort.SendChan() <- env1
+	flow0OutPort.SendChan() <- env2
 
 	// Initialize downstream ready state for flow1
 	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {

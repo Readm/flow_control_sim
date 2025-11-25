@@ -30,7 +30,7 @@ func UpstreamSendWithCycleIncrement(port AheadPort, originalCycle int, pkt packe
 				Cycle:  currentCycle,
 				Packet: pkt,
 			}
-			port.Chan() <- packetWithCycle
+			port.SendChan() <- packetWithCycle
 
 			// Set Done after sending
 			port.SetDone(currentCycle)
@@ -57,7 +57,7 @@ func UpstreamSendWithCycleIncrement(port AheadPort, originalCycle int, pkt packe
 // func (upstream *UpstreamComponent) SendPacket(cycle int, pkt packet.Packet) {
 //     // Original logic: just send
 //     // packetWithCycle := PacketWithCycle{Cycle: cycle, Packet: pkt}
-//     // downstreamPort.Chan() <- packetWithCycle
+//     // downstreamPort.SendChan() <- packetWithCycle
 //
 //     // New logic: handle non-ready cycles by incrementing
 //     UpstreamSendWithCycleIncrement(downstreamPort, cycle, pkt)

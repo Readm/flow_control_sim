@@ -26,10 +26,10 @@ type AheadPort interface {
 	// Downstream can use WaitForDone to block until this value reaches a target cycle.
 	SetDone(cycle int)
 
-	// Chan returns a write-only channel for upstream to push packets to downstream.
+	// SendChan returns a write-only channel for upstream to push packets to downstream.
 	// Upstream sends (Packet, Cycle) pairs through this channel.
 	// The same channel is accessible to downstream via ReceiveChan().
-	Chan() chan<- PacketWithCycle
+	SendChan() chan<- PacketWithCycle
 
 	// Ready checks if downstream is ready to process the given cycle.
 	// Called by upstream before sending a packet for a specific cycle.
@@ -57,7 +57,7 @@ type AheadPort interface {
 	// These methods are called by the downstream component (the receiver).
 
 	// ReceiveChan returns a read-only channel for downstream to receive packets from upstream.
-	// This is the same underlying channel as Chan(), but from downstream's perspective.
+	// This is the same underlying channel as SendChan(), but from downstream's perspective.
 	// Downstream reads (Packet, Cycle) pairs from this channel.
 	ReceiveChan() <-chan PacketWithCycle
 

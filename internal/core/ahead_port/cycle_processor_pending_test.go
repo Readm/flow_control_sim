@@ -32,7 +32,7 @@ func TestPendingPacketsIsolation(t *testing.T) {
 		Cycle:  0,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "processor1"},
 	}
-	upstreamPort1.Chan() <- pkt1
+	upstreamPort1.SendChan() <- pkt1
 	upstreamPort1.SetDone(1)
 
 	// Send a packet to processor2
@@ -40,7 +40,7 @@ func TestPendingPacketsIsolation(t *testing.T) {
 		Cycle:  0,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "processor2"},
 	}
-	upstreamPort2.Chan() <- pkt2
+	upstreamPort2.SendChan() <- pkt2
 	upstreamPort2.SetDone(1)
 
 	// Process cycle 0 for both
@@ -112,14 +112,14 @@ func TestPendingPacketsSharing(t *testing.T) {
 		Cycle:  0,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "processor1"},
 	}
-	upstreamPort1.Chan() <- pkt1
+	upstreamPort1.SendChan() <- pkt1
 	upstreamPort1.SetDone(1)
 
 	pkt2 := PacketWithCycle{
 		Cycle:  0,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "processor2"},
 	}
-	upstreamPort2.Chan() <- pkt2
+	upstreamPort2.SendChan() <- pkt2
 	upstreamPort2.SetDone(1)
 
 	// Process cycle 0 for both

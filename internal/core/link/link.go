@@ -71,7 +71,7 @@ func (lcp *LinkCycleProcessor) ProcessCycle(cycle int) error {
 
 // sendPacket sends a packet to downstream.
 func (lcp *LinkCycleProcessor) sendPacket(pkt ahead_port.PacketWithCycle) {
-	lcp.downstreamPort.Chan() <- pkt
+	lcp.downstreamPort.SendChan() <- pkt
 }
 
 // Link represents a directed edge in the topology using AheadPort.

@@ -40,7 +40,7 @@ func (m *FaninPort) GetDone() int {
 	return min
 }
 
-func (m *FaninPort) Chan() chan<- PacketWithCycle {
+func (m *FaninPort) SendChan() chan<- PacketWithCycle {
 	panic("FaninPort.Chan should not be called")
 }
 

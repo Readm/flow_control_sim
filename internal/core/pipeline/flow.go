@@ -122,7 +122,7 @@ process:
 		// Check if downstream is ready for this cycle
 		if outPort.Ready(pktCycle) {
 			// Ready: send immediately
-			outPort.Chan() <- env
+			outPort.SendChan() <- env
 		} else {
 			// Not ready: keep in pending
 			newPendingPackets = append(newPendingPackets, env)

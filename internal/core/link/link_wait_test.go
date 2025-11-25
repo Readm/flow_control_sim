@@ -38,7 +38,7 @@ func TestLinkWaitLogic(t *testing.T) {
 	// Send packet at cycle 0
 	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
 	env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
-	flow0OutPort.Chan() <- env
+	flow0OutPort.SendChan() <- env
 
 	// Process flow0 to send the packet
 	flow0.ProcessCycle(0)
@@ -159,7 +159,7 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	// Send packet at cycle 0
 	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
 	env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
-	flow0OutPort.Chan() <- env
+	flow0OutPort.SendChan() <- env
 
 	// Process flow0
 	flow0.ProcessCycle(0)

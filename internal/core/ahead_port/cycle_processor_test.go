@@ -295,7 +295,7 @@ func TestCycleProcessorBasicFlow(t *testing.T) {
 		Cycle:  0,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 	}
-	upstreamPort.Chan() <- pkt
+	upstreamPort.SendChan() <- pkt
 	upstreamPort.SetDone(1)
 
 	// Process cycle 0
@@ -414,7 +414,7 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 		Cycle:  5,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 	}
-	upstreamPort.Chan() <- pkt
+	upstreamPort.SendChan() <- pkt
 	upstreamPort.SetDone(6)
 
 	// Process cycle 5 - cycle 5 is not ready, so packet should be saved to pendingPackets
@@ -518,7 +518,7 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 		Cycle:  10,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 	}
-	upstreamPort.Chan() <- pkt
+	upstreamPort.SendChan() <- pkt
 	upstreamPort.SetDone(11)
 
 	// Process cycle 10 - cycle 10 is not ready, packet should be saved to pendingPackets
@@ -610,7 +610,7 @@ func TestCycleProcessorWithCustomHooks(t *testing.T) {
 		Cycle:  0,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 	}
-	upstreamPort.Chan() <- pkt
+	upstreamPort.SendChan() <- pkt
 	upstreamPort.SetDone(1)
 
 	// Process cycle
@@ -664,7 +664,7 @@ func TestCycleProcessorWaitsForUpstreamDone(t *testing.T) {
 		Cycle:  0,
 		Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 	}
-	upstreamPort.Chan() <- pkt
+	upstreamPort.SendChan() <- pkt
 
 	// Wait for completion
 	select {
@@ -709,7 +709,7 @@ func TestCycleProcessorReceivesAllPackets(t *testing.T) {
 		}
 		// Create unique payload
 		pkt.Packet.Payload = fmt.Sprintf("packet-%d", i)
-		upstreamPort.Chan() <- pkt
+		upstreamPort.SendChan() <- pkt
 	}
 	upstreamPort.SetDone(6)
 
@@ -802,7 +802,7 @@ func TestCycleProcessorHandlesMultipleCyclesInChannel(t *testing.T) {
 	}
 
 	for _, pkt := range packets {
-		upstreamPort.Chan() <- pkt
+		upstreamPort.SendChan() <- pkt
 	}
 
 	// Process cycle 5 - should receive all packets (even though they have different cycles)

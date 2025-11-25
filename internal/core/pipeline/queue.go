@@ -128,8 +128,8 @@ func (qp *QueuePort) GetDone() int {
 	return int(atomic.LoadInt64(&qp.done))
 }
 
-// Chan returns a write-only channel for upstream to push packets.
-func (qp *QueuePort) Chan() chan<- ahead_port.PacketWithCycle {
+// SendChan returns a write-only channel for upstream to push packets.
+func (qp *QueuePort) SendChan() chan<- ahead_port.PacketWithCycle {
 	return qp.packetChan
 }
 
@@ -304,7 +304,7 @@ func (qcp *QueueCycleProcessor) sendPacket(pkt ahead_port.PacketWithCycle) {
 	if downstreamPort == nil {
 		downstreamPort = qcp.queuePort
 	}
-	downstreamPort.Chan() <- pkt
+	downstreamPort.SendChan() <- pkt
 }
 
 // ProcessPackets implements PacketProcessor interface for QueuePort.
@@ -325,10 +325,7 @@ func (qpp *QueuePacketProcessor) ProcessPackets(
 			slot := qp.findFreeSlot()
 			if slot >= 0 {
 				qp.arrayMu.Lock()
-				qp.slots[slot] = PacketWithCycle{
-					Cycle:  pkt.Cycle,
-					Packet: pkt.Packet,
-				}
+				qp.slots[slot] = PacketWithCycle(pkt)
 				qp.freeBitmap[slot] = false
 				qp.blockReasons[slot] = 0 // Initialize block_reason to 0
 				qp.arrayMu.Unlock()
@@ -343,10 +340,7 @@ process:
 	pickedPackets := qp.Pick()
 	for _, pkt := range pickedPackets {
 		if checkReady(pkt.Cycle) {
-			sendPacket(ahead_port.PacketWithCycle{
-				Cycle:  pkt.Cycle,
-				Packet: pkt.Packet,
-			})
+			sendPacket(ahead_port.PacketWithCycle(pkt))
 		} else {
 			// Not ready, put back to array
 			slot := qp.findFreeSlot()

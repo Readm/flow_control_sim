@@ -47,16 +47,16 @@ func TestSetDoneAtomic(t *testing.T) {
 	}
 }
 
-// TestChanDirection tests that Chan() returns write-only channel for upstream to push.
+// TestChanDirection tests that SendChan() returns write-only channel for upstream to push.
 func TestChanDirection(t *testing.T) {
 	t.Parallel()
 
 	port := NewAheadPort(8)
 
 	// Get write-only channel
-	writeChan := port.Chan()
+	writeChan := port.SendChan()
 	if writeChan == nil {
-		t.Fatal("Chan() returned nil")
+		t.Fatal("SendChan() returned nil")
 	}
 
 	// Test that we can write to it
@@ -306,7 +306,7 @@ func TestZeroCycleLatency(t *testing.T) {
 	}
 
 	// Send packet
-	linkPort.Chan() <- pkt
+		linkPort.SendChan() <- pkt
 
 	// Link processes and sets Done for Flow1
 	linkPort.SetDone(2)
@@ -345,7 +345,7 @@ func TestConcurrentPushPop(t *testing.T) {
 				Cycle:  i,
 				Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"},
 			}
-			port.Chan() <- pkt
+			port.SendChan() <- pkt
 		}
 	}()
 
@@ -425,7 +425,7 @@ func TestChainThreeFlows(t *testing.T) {
 				Cycle:  cycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "flow0"},
 			}
-			port01.Chan() <- pkt
+			port01.SendChan() <- pkt
 
 			// Set Done after sending
 			port01.SetDone(cycle)
@@ -489,7 +489,7 @@ func TestChainThreeFlows(t *testing.T) {
 					Cycle:  cycle,
 					Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "flow1"},
 				}
-				port12.Chan() <- forwardPkt
+				port12.SendChan() <- forwardPkt
 
 				// Set Done
 				port12.SetDone(cycle)
@@ -635,7 +635,7 @@ func TestChainWithBackpressure(t *testing.T) {
 			}
 
 			select {
-			case port01.Chan() <- PacketWithCycle{
+			case port01.SendChan() <- PacketWithCycle{
 				Cycle:  cycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 			}:
@@ -672,7 +672,7 @@ func TestChainWithBackpressure(t *testing.T) {
 				// Forward to Flow2
 				if port12.Ready(cycle) {
 					select {
-					case port12.Chan() <- PacketWithCycle{
+					case port12.SendChan() <- PacketWithCycle{
 						Cycle:  cycle,
 						Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"},
 					}:
@@ -754,7 +754,7 @@ func TestChainParallelComputation(t *testing.T) {
 
 		for cycle := 0; cycle < numCycles; cycle++ {
 			port01.UpdateReady(cycle, true) // No backpressure
-			port01.Chan() <- PacketWithCycle{
+			port01.SendChan() <- PacketWithCycle{
 				Cycle:  cycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 			}
@@ -778,7 +778,7 @@ func TestChainParallelComputation(t *testing.T) {
 			select {
 			case <-port01.ReceiveChan():
 				port12.UpdateReady(cycle, true) // No backpressure
-				port12.Chan() <- PacketWithCycle{
+				port12.SendChan() <- PacketWithCycle{
 					Cycle:  cycle,
 					Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"},
 				}
@@ -908,7 +908,7 @@ func TestUpstreamDelaysWhenDownstreamNotReady(t *testing.T) {
 				Cycle:  currentCycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"},
 			}
-			port.Chan() <- pkt
+			port.SendChan() <- pkt
 			port.SetDone(currentCycle)
 			break
 		} else {
@@ -1013,7 +1013,7 @@ func TestUpstreamHandlesMultipleNonReadyCycles(t *testing.T) {
 				Cycle:  currentCycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "multi-test"},
 			}
-			port.Chan() <- pkt
+			port.SendChan() <- pkt
 			port.SetDone(currentCycle)
 			break
 		} else {
@@ -1118,7 +1118,7 @@ func TestUpstreamCycleIncrementMatchesNonReadyCount(t *testing.T) {
 				Cycle:  currentCycle,
 				Packet: packet.Packet{SourceID: 0, TargetID: 1, Payload: "exact-test"},
 			}
-			port.Chan() <- pkt
+			port.SendChan() <- pkt
 			port.SetDone(currentCycle)
 			break
 		} else {

@@ -117,7 +117,7 @@ func TestNodeWithSingleFlow(t *testing.T) {
 
 	// Send packet through port
 	env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
-	outPort.Chan() <- env
+	outPort.SendChan() <- env
 	outPort.SetDone(1)
 
 	// Process cycles
@@ -167,7 +167,7 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 			Payload:  "test",
 		}
 		env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
-		outPort.Chan() <- env
+		outPort.SendChan() <- env
 		outPort.SetDone(1)
 	}
 
@@ -218,7 +218,7 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 			Payload:  "test",
 		}
 		env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
-		outPort.Chan() <- env
+		outPort.SendChan() <- env
 		outPort.SetDone(1)
 	}
 
@@ -285,7 +285,7 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 			Payload:  fmt.Sprintf("test-%d", cycle),
 		}
 		env := ahead_port.PacketWithCycle{Cycle: cycle, Packet: pkt}
-		outPort.Chan() <- env
+		outPort.SendChan() <- env
 		outPort.SetDone(cycle)
 
 		// Process Flow cycle (sends packet to outPort)

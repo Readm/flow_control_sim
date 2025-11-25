@@ -107,7 +107,7 @@ func (cp *CycleProcessor) ProcessCycle(cycle int) error {
 // sendPacket sends a packet to downstream.
 // The packet's cycle should already be set correctly before calling this method.
 func (cp *CycleProcessor) sendPacket(pkt PacketWithCycle) {
-	cp.downstreamPort.Chan() <- pkt
+	cp.downstreamPort.SendChan() <- pkt
 }
 
 // DefaultProcessor provides default implementation for packet processing.

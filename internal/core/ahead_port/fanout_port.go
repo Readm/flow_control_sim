@@ -80,8 +80,8 @@ func (f *FanoutPort) GetDone() int {
 
 // Chan returns the write-only channel from upstream port.
 // Upstream sends packets through this channel, and FanoutPort routes them to downstream ports.
-func (f *FanoutPort) Chan() chan<- PacketWithCycle {
-	return f.upstreamPort.Chan()
+func (f *FanoutPort) SendChan() chan<- PacketWithCycle {
+	return f.upstreamPort.SendChan()
 }
 
 // ReceiveChan should not be called on FanoutPort.
@@ -232,7 +232,7 @@ func (f *FanoutPort) RoutePacket(pkt PacketWithCycle) {
 	if selectedIndex >= 0 && selectedIndex < len(f.downstreamPorts) {
 		// Double-check that selected downstream is ready
 		if readyStatus[selectedIndex] {
-			f.downstreamPorts[selectedIndex].Chan() <- pkt
+			f.downstreamPorts[selectedIndex].SendChan() <- pkt
 		}
 		// If not ready, packet is effectively discarded (router should have checked)
 	}

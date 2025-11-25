@@ -165,11 +165,11 @@ func TestFaninPortReceiveChan(t *testing.T) {
 	}
 
 	// Send packets from different ports
-	upstreamPort1.Chan() <- packets[0]
-	upstreamPort2.Chan() <- packets[1]
-	upstreamPort3.Chan() <- packets[2]
-	upstreamPort1.Chan() <- packets[3]
-	upstreamPort2.Chan() <- packets[4]
+	upstreamPort1.SendChan() <- packets[0]
+	upstreamPort2.SendChan() <- packets[1]
+	upstreamPort3.SendChan() <- packets[2]
+	upstreamPort1.SendChan() <- packets[3]
+	upstreamPort2.SendChan() <- packets[4]
 
 	// Receive all packets from merged channel
 	received := make([]PacketWithCycle, 0, len(packets))
@@ -333,8 +333,8 @@ func TestFaninPortWithCycleProcessor(t *testing.T) {
 		Packet: packet.Packet{SourceID: 2, TargetID: 10, Payload: "pkt2"},
 	}
 
-	upstreamPort1.Chan() <- pkt1
-	upstreamPort2.Chan() <- pkt2
+	upstreamPort1.SendChan() <- pkt1
+	upstreamPort2.SendChan() <- pkt2
 
 	// Give some time for packets to be forwarded to mergedChan
 	time.Sleep(10 * time.Millisecond)
@@ -403,7 +403,7 @@ func TestFaninPortConcurrent(t *testing.T) {
 					Cycle:  j,
 					Packet: packet.Packet{SourceID: id, TargetID: 10, Payload: "pkt"},
 				}
-				p.Chan() <- pkt
+				p.SendChan() <- pkt
 			}
 		}(port, i)
 	}
@@ -456,7 +456,7 @@ func TestFaninPortClose(t *testing.T) {
 	multi := NewFaninPort([]AheadPort{upstreamPort1, upstreamPort2}, sharedChan)
 
 	// Send some packets
-	upstreamPort1.Chan() <- PacketWithCycle{
+	upstreamPort1.SendChan() <- PacketWithCycle{
 		Cycle:  0,
 		Packet: packet.Packet{SourceID: 1, TargetID: 10, Payload: "pkt"},
 	}
@@ -502,7 +502,7 @@ func TestFaninPortUpstreamOperationsPanic(t *testing.T) {
 				t.Fatal("expected Chan to panic")
 			}
 		}()
-		_ = multi.Chan()
+		_ = multi.SendChan()
 	}()
 
 	// Test Ready panics

@@ -146,7 +146,7 @@ func TestChanReceiveChan(t *testing.T) {
 
 	qp := NewQueuePort(10, 1, 1, 1)
 
-	// Test sending through Chan()
+	// Test sending through SendChan()
 	pkt := ahead_port.PacketWithCycle{
 		Cycle: 0,
 		Packet: packet.Packet{
@@ -158,10 +158,10 @@ func TestChanReceiveChan(t *testing.T) {
 
 	// Send packet
 	select {
-	case qp.Chan() <- pkt:
+	case qp.SendChan() <- pkt:
 		// Expected
 	case <-time.After(100 * time.Millisecond):
-		t.Fatal("Chan() should accept packets")
+		t.Fatal("SendChan() should accept packets")
 	}
 
 	// Receive packet
@@ -464,7 +464,7 @@ func TestProcessCycle(t *testing.T) {
 		Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"},
 	}
 	select {
-	case upstreamPort.Chan() <- pkt:
+	case upstreamPort.SendChan() <- pkt:
 	case <-ctx.Done():
 		t.Fatal("timeout sending packet")
 	}
@@ -524,7 +524,7 @@ func TestProcessPackets(t *testing.T) {
 			Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"},
 		}
 		select {
-		case upstreamPort.Chan() <- pkt:
+		case upstreamPort.SendChan() <- pkt:
 		case <-ctx.Done():
 			t.Fatalf("timeout sending packet %d", i)
 		}
@@ -654,7 +654,7 @@ func TestConcurrentOperations(t *testing.T) {
 				Packet: packet.Packet{SourceID: 1, TargetID: 2},
 			}
 			select {
-			case qp.Chan() <- pkt:
+			case qp.SendChan() <- pkt:
 			case <-ctx.Done():
 			case <-time.After(100 * time.Millisecond):
 			}
@@ -810,7 +810,7 @@ func TestProcessCycleWithExternalPorts(t *testing.T) {
 		Cycle:  0,
 		Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"},
 	}
-	upstreamPort.Chan() <- pkt
+	upstreamPort.SendChan() <- pkt
 	upstreamPort.SetDone(0)
 
 	// Process cycle

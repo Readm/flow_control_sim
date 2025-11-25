@@ -30,7 +30,7 @@ type SinglePort struct {
 	readyMap map[int]bool
 
 	// packetChan is the internal channel for packet transmission.
-	// Upstream pushes packets through Chan() (write-only view).
+	// Upstream pushes packets through SendChan() (write-only view).
 	// Downstream receives packets from ReceiveChan() (read-only view).
 	// Both views refer to the same underlying channel.
 	packetChan chan PacketWithCycle
@@ -88,15 +88,15 @@ func (p *SinglePort) GetDone() int {
 	return int(atomic.LoadInt64(&p.done))
 }
 
-// Chan returns a write-only channel for upstream to push packets to downstream.
+// SendChan returns a write-only channel for upstream to push packets to downstream.
 // Upstream sends (Packet, Cycle) pairs through this channel.
 // The same underlying channel is accessible to downstream via ReceiveChan().
-func (p *SinglePort) Chan() chan<- PacketWithCycle {
+func (p *SinglePort) SendChan() chan<- PacketWithCycle {
 	return p.packetChan
 }
 
 // ReceiveChan returns a read-only channel for downstream to receive packets from upstream.
-// This is the same underlying channel as Chan(), but from downstream's perspective.
+// This is the same underlying channel as SendChan(), but from downstream's perspective.
 // Downstream reads (Packet, Cycle) pairs from this channel.
 func (p *SinglePort) ReceiveChan() <-chan PacketWithCycle {
 	return p.packetChan
