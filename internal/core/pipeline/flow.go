@@ -5,6 +5,26 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
+// RouterHook is a function type that determines which output port a packet should be routed to.
+// Parameters:
+//   - pkt: the packet to route
+//   - outPorts: all available output AheadPorts
+//   - topology: network topology information (optional, can be nil)
+//
+// Returns:
+//   - index of the selected output port, or -1 to discard the packet
+type RouterHook func(pkt packet.Packet, outPorts []interface{}, topology interface{}) int
+
+// DefaultRouterHook is the default routing strategy that sends all packets to the first output port.
+// This is suitable when there's only one outgoing link or when no routing decision is needed.
+func DefaultRouterHook(pkt packet.Packet, outPorts []interface{}, topology interface{}) int {
+	if len(outPorts) == 0 {
+		return -1 // No output ports available, discard
+	}
+	// Send to the first output port
+	return 0
+}
+
 // Pipeline defines the contract for moving packets through a node using AheadPort.
 // Concrete implementations can apply arbitrary policies while conforming to this API.
 type Pipeline interface {
@@ -28,14 +48,14 @@ type Pipeline interface {
 // PipelinePacketProcessor implements PacketProcessor for Pipeline.
 // It handles receiving packets, processing them, and routing to multiple output ports.
 type PipelinePacketProcessor struct {
-	pipeline      *FIFO
+	pipeline       *FIFO
 	pendingPackets []ahead_port.PacketWithCycle
 }
 
 // NewPipelinePacketProcessor creates a new PipelinePacketProcessor.
 func NewPipelinePacketProcessor(pipeline *FIFO) *PipelinePacketProcessor {
 	return &PipelinePacketProcessor{
-		pipeline:      pipeline,
+		pipeline:       pipeline,
 		pendingPackets: make([]ahead_port.PacketWithCycle, 0),
 	}
 }
