@@ -21,7 +21,7 @@ func TestLinkWaitLogic(t *testing.T) {
 	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
-	flow0.AddOutPort(flow0OutPort)
+	flow0.SetOutPort(flow0OutPort)
 
 	// Create Link with latency=3
 	// At cycle 5, Link should wait for Done >= 5+1-3 = 3 (not 5)
@@ -102,7 +102,7 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
-	flow0.AddOutPort(flow0OutPort)
+	flow0.SetOutPort(flow0OutPort)
 
 	// Create Link with latency=5
 	link := NewLink(0, 1, flow0OutPort, flow1InPort, 5, 1)
@@ -144,7 +144,7 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
-	flow0.AddOutPort(flow0OutPort)
+	flow0.SetOutPort(flow0OutPort)
 
 	// Create Link with latency=4
 	// This means packets sent at cycle N will arrive at cycle N+4

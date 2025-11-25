@@ -96,7 +96,7 @@ func TestNodeWithSingleFlow(t *testing.T) {
 	// Create a link and send a packet using new interface
 	flow0 := node.Flows()[0]
 	outPort := ahead_port.NewAheadPort(8)
-	flow0.AddOutPort(outPort)
+	flow0.SetOutPort(outPort)
 	inPort := flow0.InPort()
 
 	link := link.NewLink(0, 1, outPort, inPort, 1, 1)
@@ -147,7 +147,7 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		flow := node.Flows()[i]
 		outPort := ahead_port.NewAheadPort(8)
-		flow.AddOutPort(outPort)
+		flow.SetOutPort(outPort)
 		inPort := flow.InPort()
 
 		links[i] = link.NewLink(0, flow.ID(), outPort, inPort, 1, 1)
@@ -198,7 +198,7 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		flow := node.Flows()[i]
 		outPort := ahead_port.NewAheadPort(8)
-		flow.AddOutPort(outPort)
+		flow.SetOutPort(outPort)
 		inPort := flow.InPort()
 
 		links[i] = link.NewLink(0, flow.ID(), outPort, inPort, 1, 1)
@@ -253,21 +253,12 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 	node := newMultiFlowNode(1, 2, false, 8, 0, 0)
 	flow0 := node.Flows()[0]
 	outPort := ahead_port.NewAheadPort(8)
-	flow0.AddOutPort(outPort)
+	flow0.SetOutPort(outPort)
 	inPort := flow0.InPort()
 
 	link := link.NewLink(0, flow0.ID(), outPort, inPort, 1, 1)
 
-	// Fix: prevent re-circulation of packets
-	flow0.SetRouterHook(func(pkt packet.Packet, outPorts []interface{}, topology interface{}) int {
-		if pkt.TargetID == flow0.ID() {
-			return -1
-		}
-		if len(outPorts) > 0 {
-			return 0
-		}
-		return -1
-	})
+	// Router hook removed - packets are sent directly to outPort
 
 	// Initialize upstream Done for flow (no upstream, so set to 0)
 	flow0.InPort().SetDone(-1)
@@ -320,7 +311,7 @@ func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
 
 	// Create output port and link
 	outPort := ahead_port.NewAheadPort(8)
-	f.AddOutPort(outPort)
+	f.SetOutPort(outPort)
 	targetInPort := targetFlow.InPort()
 	link := link.NewLink(1, 2, outPort, targetInPort, 1, 10)
 

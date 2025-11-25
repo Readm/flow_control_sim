@@ -10,13 +10,13 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// TestNewQueuePort tests QueuePort creation with default values.
-func TestNewQueuePort(t *testing.T) {
+// TestNewQueue tests Queue creation with default values.
+func TestNewQueue(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 2, 3, 1)
+	qp := NewQueue(10, 2, 3, 1)
 	if qp == nil {
-		t.Fatal("NewQueuePort returned nil")
+		t.Fatal("NewQueue returned nil")
 	}
 
 	if qp.Capacity() != 10 {
@@ -32,12 +32,12 @@ func TestNewQueuePort(t *testing.T) {
 	}
 }
 
-// TestNewQueuePortDefaults tests default values.
-func TestNewQueuePortDefaults(t *testing.T) {
+// TestNewQueueDefaults tests default values.
+func TestNewQueueDefaults(t *testing.T) {
 	t.Parallel()
 
 	// Test with zero/negative values
-	qp := NewQueuePort(0, 0, 0, 0)
+	qp := NewQueue(0, 0, 0, 0)
 	if qp.Capacity() != 16 {
 		t.Fatalf("expected default capacity 16, got %d", qp.Capacity())
 	}
@@ -56,7 +56,7 @@ func TestNewQueuePortDefaults(t *testing.T) {
 func TestSetDoneGetDone(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 1, 1, 1)
+	qp := NewQueue(10, 1, 1, 1)
 
 	// Test initial value
 	if qp.GetDone() != -1 {
@@ -94,7 +94,7 @@ func TestSetDoneGetDone(t *testing.T) {
 func TestWaitForDone(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 1, 1, 1)
+	qp := NewQueue(10, 1, 1, 1)
 
 	// Test fast path (already satisfied)
 	qp.SetDone(10)
@@ -144,7 +144,7 @@ func TestWaitForDone(t *testing.T) {
 func TestChanReceiveChan(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 1, 1, 1)
+	qp := NewQueue(10, 1, 1, 1)
 
 	// Test sending through SendChan()
 	pkt := ahead_port.PacketWithCycle{
@@ -179,7 +179,7 @@ func TestChanReceiveChan(t *testing.T) {
 func TestReady(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 1, 1, 1)
+	qp := NewQueue(10, 1, 1, 1)
 
 	// Test fast path (readyUntil)
 	qp.UpdateReady(5, true)
@@ -203,7 +203,7 @@ func TestReady(t *testing.T) {
 func TestReadyNonBlocking(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 1, 1, 1)
+	qp := NewQueue(10, 1, 1, 1)
 
 	// Test fast path
 	qp.UpdateReady(5, true)
@@ -230,7 +230,7 @@ func TestReadyNonBlocking(t *testing.T) {
 func TestUpdateReady(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 1, 1, 1)
+	qp := NewQueue(10, 1, 1, 1)
 
 	// Test updating readyMap
 	qp.UpdateReady(5, true)
@@ -279,7 +279,7 @@ func TestUpdateReady(t *testing.T) {
 func TestPick(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 1, 2, 1)
+	qp := NewQueue(10, 1, 2, 1)
 
 	// Add packets to array
 	pkt1 := PacketWithCycle{Cycle: 5, Packet: packet.Packet{SourceID: 1}}
@@ -340,7 +340,7 @@ func TestPick(t *testing.T) {
 func TestPickWithBlockReason(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 1, 2, 1)
+	qp := NewQueue(10, 1, 2, 1)
 
 	// Add packets with different block_reason
 	qp.arrayMu.Lock()
@@ -395,7 +395,7 @@ func TestPickWithBlockReason(t *testing.T) {
 func TestSetBlockReason(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 1, 1, 2) // bitmapWidth = 2
+	qp := NewQueue(10, 1, 1, 2) // bitmapWidth = 2
 
 	// Add a packet
 	qp.arrayMu.Lock()
@@ -450,7 +450,7 @@ func TestProcessCycle(t *testing.T) {
 	upstreamPort := ahead_port.NewAheadPort(8)
 	downstreamPort := ahead_port.NewAheadPort(8)
 
-	qp := NewQueuePort(10, 1, 1, 1)
+	qp := NewQueue(10, 1, 1, 1)
 	qp.SetUpstreamPort(upstreamPort)
 	qp.SetDownstreamPort(downstreamPort)
 
@@ -460,7 +460,7 @@ func TestProcessCycle(t *testing.T) {
 
 	// Send packet from upstream
 	pkt := ahead_port.PacketWithCycle{
-		Cycle: 0,
+		Cycle:  0,
 		Packet: packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"},
 	}
 	select {
@@ -508,7 +508,7 @@ func TestProcessPackets(t *testing.T) {
 	upstreamPort := ahead_port.NewAheadPort(8)
 	downstreamPort := ahead_port.NewAheadPort(8)
 
-	qp := NewQueuePort(10, 2, 2, 1)
+	qp := NewQueue(10, 2, 2, 1)
 	qp.SetUpstreamPort(upstreamPort)
 	qp.SetDownstreamPort(downstreamPort)
 
@@ -562,7 +562,7 @@ func TestReadyUntilCalculation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	qp := NewQueuePort(10, 2, 1, 1) // inBandwidth = 2
+	qp := NewQueue(10, 2, 1, 1) // inBandwidth = 2
 
 	// Add free packets
 	qp.arrayMu.Lock()
@@ -622,7 +622,7 @@ func TestConcurrentOperations(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	qp := NewQueuePort(10, 1, 1, 1)
+	qp := NewQueue(10, 1, 1, 1)
 
 	var wg sync.WaitGroup
 
@@ -691,7 +691,7 @@ func TestConcurrentOperations(t *testing.T) {
 func TestIsFullCapacity(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(5, 1, 1, 1)
+	qp := NewQueue(5, 1, 1, 1)
 
 	if qp.Capacity() != 5 {
 		t.Fatalf("expected capacity 5, got %d", qp.Capacity())
@@ -734,7 +734,7 @@ func TestIsFullCapacity(t *testing.T) {
 func TestFindFreeSlot(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(5, 1, 1, 1)
+	qp := NewQueue(5, 1, 1, 1)
 
 	// Initially all slots should be free
 	for i := 0; i < 5; i++ {
@@ -758,7 +758,7 @@ func TestFindFreeSlot(t *testing.T) {
 func TestCountFreePackets(t *testing.T) {
 	t.Parallel()
 
-	qp := NewQueuePort(10, 1, 1, 1)
+	qp := NewQueue(10, 1, 1, 1)
 
 	// Add packets with different block_reason
 	qp.arrayMu.Lock()
@@ -797,7 +797,7 @@ func TestProcessCycleWithExternalPorts(t *testing.T) {
 	upstreamPort := ahead_port.NewAheadPort(8)
 	downstreamPort := ahead_port.NewAheadPort(8)
 
-	qp := NewQueuePort(10, 1, 1, 1)
+	qp := NewQueue(10, 1, 1, 1)
 	qp.SetUpstreamPort(upstreamPort)
 	qp.SetDownstreamPort(downstreamPort)
 
@@ -837,4 +837,3 @@ func TestProcessCycleWithExternalPorts(t *testing.T) {
 		t.Fatal("ProcessCycle should configure cycle+1 in upstream port")
 	}
 }
-

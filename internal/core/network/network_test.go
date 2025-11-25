@@ -37,8 +37,8 @@ func TestNetworkNodesExchangePacketsThroughLink(t *testing.T) {
 	flowBOutPort := ahead_port.NewAheadPort(mailboxSize)
 
 	// Connect flows to output ports
-	nodeA.Flows()[0].AddOutPort(flowAOutPort)
-	nodeB.Flows()[0].AddOutPort(flowBOutPort)
+	nodeA.Flows()[0].SetOutPort(flowAOutPort)
+	nodeB.Flows()[0].SetOutPort(flowBOutPort)
 
 	// Create links with AheadPort
 	linkAB := link.NewLink(nodeA.ID(), nodeB.ID(), flowAOutPort, nodeB.Flows()[0].InPort(), linkCycles, 1)
@@ -117,16 +117,7 @@ type flowNode struct {
 
 func newFlowNode(id, peerID int, mailboxSize int, tracker *concurrencyTracker, workload time.Duration, totalCycles uint64) *flowNode {
 	f := pipeline.NewFIFO(id, mailboxSize)
-	// Add router hook to prevent infinite loops (consume if TargetID == id)
-	f.SetRouterHook(func(pkt packet.Packet, outPorts []interface{}, topology interface{}) int {
-		if pkt.TargetID == id {
-			return -1 // Consume (do not forward)
-		}
-		if len(outPorts) > 0 {
-			return 0 // Forward to peer
-		}
-		return -1
-	})
+	// Router hook removed - packets are sent directly to outPort
 	return &flowNode{
 		id:          id,
 		peerID:      peerID,

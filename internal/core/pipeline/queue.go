@@ -13,9 +13,9 @@ import (
 // PacketWithCycle is an alias for packet.PacketWithCycle
 type PacketWithCycle = packet.PacketWithCycle
 
-// QueuePort implements AheadPort interface with array-based storage.
+// Queue implements AheadPort interface with array-based storage.
 // It provides bidirectional synchronization between upstream and downstream components.
-type QueuePort struct {
+type Queue struct {
 	// AheadPort interface fields
 	done       int64
 	readyUntil int64
@@ -47,25 +47,25 @@ type QueuePort struct {
 	packetProc *QueuePacketProcessor
 }
 
-// QueueCycleProcessor is a custom cycle processor for QueuePort.
+// QueueCycleProcessor is a custom cycle processor for Queue.
 type QueueCycleProcessor struct {
 	upstreamPort   ahead_port.AheadPort
 	downstreamPort ahead_port.AheadPort
 	processor      ahead_port.PacketProcessor
-	queuePort      *QueuePort
+	queue          *Queue
 }
 
-// QueuePacketProcessor implements PacketProcessor for QueuePort.
+// QueuePacketProcessor implements PacketProcessor for Queue.
 type QueuePacketProcessor struct {
-	queuePort *QueuePort
+	queue *Queue
 }
 
-// NewQueuePort creates a new QueuePort with the specified parameters.
+// NewQueue creates a new Queue with the specified parameters.
 // - size: number of slots in the array
 // - inBandwidth: maximum packets per cycle from upstream
 // - outBandwidth: maximum packets per cycle to downstream
 // - bitmapWidth: width of block_reason bitmap (defaults to 1 if <= 0)
-func NewQueuePort(size, inBandwidth, outBandwidth int, bitmapWidth int) *QueuePort {
+func NewQueue(size, inBandwidth, outBandwidth int, bitmapWidth int) *Queue {
 	if size <= 0 {
 		size = 16 // Default size
 	}
@@ -79,7 +79,7 @@ func NewQueuePort(size, inBandwidth, outBandwidth int, bitmapWidth int) *QueuePo
 		bitmapWidth = 1 // Default bitmap width
 	}
 
-	qp := &QueuePort{
+	qp := &Queue{
 		done:         -1,
 		readyUntil:   -1,
 		readyMap:     make(map[int]bool),
@@ -100,12 +100,12 @@ func NewQueuePort(size, inBandwidth, outBandwidth int, bitmapWidth int) *QueuePo
 
 	// Create packet processor
 	qp.packetProc = &QueuePacketProcessor{
-		queuePort: qp,
+		queue: qp,
 	}
 
 	// Create cycle processor (ports will be set via SetUpstreamPort/SetDownstreamPort)
 	qp.processor = &QueueCycleProcessor{
-		queuePort: qp,
+		queue:     qp,
 		processor: qp.packetProc,
 	}
 
@@ -113,7 +113,7 @@ func NewQueuePort(size, inBandwidth, outBandwidth int, bitmapWidth int) *QueuePo
 }
 
 // SetDone updates Done using atomic store.
-func (qp *QueuePort) SetDone(cycle int) {
+func (qp *Queue) SetDone(cycle int) {
 	atomic.StoreInt64(&qp.done, int64(cycle))
 
 	qp.doneMu.Lock()
@@ -124,22 +124,22 @@ func (qp *QueuePort) SetDone(cycle int) {
 }
 
 // GetDone returns the current Done value.
-func (qp *QueuePort) GetDone() int {
+func (qp *Queue) GetDone() int {
 	return int(atomic.LoadInt64(&qp.done))
 }
 
 // SendChan returns a write-only channel for upstream to push packets.
-func (qp *QueuePort) SendChan() chan<- ahead_port.PacketWithCycle {
+func (qp *Queue) SendChan() chan<- ahead_port.PacketWithCycle {
 	return qp.packetChan
 }
 
 // ReceiveChan returns a read-only channel for downstream to receive packets.
-func (qp *QueuePort) ReceiveChan() <-chan ahead_port.PacketWithCycle {
+func (qp *Queue) ReceiveChan() <-chan ahead_port.PacketWithCycle {
 	return qp.packetChan
 }
 
 // Ready checks if downstream is ready to process the given cycle.
-func (qp *QueuePort) Ready(cycle int) bool {
+func (qp *Queue) Ready(cycle int) bool {
 	readyUntil := atomic.LoadInt64(&qp.readyUntil)
 	if int64(cycle) < readyUntil {
 		return true
@@ -157,7 +157,7 @@ func (qp *QueuePort) Ready(cycle int) bool {
 }
 
 // ReadyNonBlocking checks if downstream is ready without blocking.
-func (qp *QueuePort) ReadyNonBlocking(cycle int) (ready bool, configured bool) {
+func (qp *Queue) ReadyNonBlocking(cycle int) (ready bool, configured bool) {
 	readyUntil := atomic.LoadInt64(&qp.readyUntil)
 	if int64(cycle) < readyUntil {
 		return true, true
@@ -175,7 +175,7 @@ func (qp *QueuePort) ReadyNonBlocking(cycle int) (ready bool, configured bool) {
 }
 
 // waitForReady blocks until the given cycle becomes ready.
-func (qp *QueuePort) waitForReady(cycle int) bool {
+func (qp *Queue) waitForReady(cycle int) bool {
 	qp.waiterMu.Lock()
 	defer qp.waiterMu.Unlock()
 
@@ -192,7 +192,7 @@ func (qp *QueuePort) waitForReady(cycle int) bool {
 }
 
 // UpdateReady updates the ready status for a specific cycle.
-func (qp *QueuePort) UpdateReady(cycle int, ready bool) {
+func (qp *Queue) UpdateReady(cycle int, ready bool) {
 	qp.waiterMu.Lock()
 	defer qp.waiterMu.Unlock()
 
@@ -211,7 +211,7 @@ func (qp *QueuePort) UpdateReady(cycle int, ready bool) {
 }
 
 // WaitForDone blocks until upstream's Done >= targetCycle.
-func (qp *QueuePort) WaitForDone(targetCycle int) {
+func (qp *Queue) WaitForDone(targetCycle int) {
 	if qp.GetDone() >= targetCycle {
 		return
 	}
@@ -229,29 +229,29 @@ func (qp *QueuePort) WaitForDone(targetCycle int) {
 }
 
 // GetReadyUntil returns the current readyUntil value.
-func (qp *QueuePort) GetReadyUntil() int {
+func (qp *Queue) GetReadyUntil() int {
 	return int(atomic.LoadInt64(&qp.readyUntil))
 }
 
 // ProcessCycle processes a single cycle.
-func (qp *QueuePort) ProcessCycle(cycle int) error {
+func (qp *Queue) ProcessCycle(cycle int) error {
 	return qp.processor.ProcessCycle(cycle)
 }
 
-// ProcessCycle implements the cycle processing workflow for QueuePort.
+// ProcessCycle implements the cycle processing workflow for Queue.
 func (qcp *QueueCycleProcessor) ProcessCycle(cycle int) error {
 	if qcp.processor == nil {
 		panic("QueueCycleProcessor.processor is nil")
 	}
 
-	// Use QueuePort itself as ports if external ports are not set
+	// Use Queue itself as ports if external ports are not set
 	upstreamPort := qcp.upstreamPort
 	downstreamPort := qcp.downstreamPort
 	if upstreamPort == nil {
-		upstreamPort = qcp.queuePort
+		upstreamPort = qcp.queue
 	}
 	if downstreamPort == nil {
-		downstreamPort = qcp.queuePort
+		downstreamPort = qcp.queue
 	}
 
 	// Wait for upstream Done >= cycle-1
@@ -302,12 +302,12 @@ func (qcp *QueueCycleProcessor) ProcessCycle(cycle int) error {
 func (qcp *QueueCycleProcessor) sendPacket(pkt ahead_port.PacketWithCycle) {
 	downstreamPort := qcp.downstreamPort
 	if downstreamPort == nil {
-		downstreamPort = qcp.queuePort
+		downstreamPort = qcp.queue
 	}
 	downstreamPort.SendChan() <- pkt
 }
 
-// ProcessPackets implements PacketProcessor interface for QueuePort.
+// ProcessPackets implements PacketProcessor interface for Queue.
 func (qpp *QueuePacketProcessor) ProcessPackets(
 	receiveChan <-chan ahead_port.PacketWithCycle,
 	cycle int,
@@ -316,7 +316,7 @@ func (qpp *QueuePacketProcessor) ProcessPackets(
 	setDone func(int),
 	updateUpstreamReady func(cycle int, ready bool),
 ) {
-	qp := qpp.queuePort
+	qp := qpp.queue
 
 	// Receive packets from channel and store in array (non-blocking, drain all)
 	for {
@@ -336,37 +336,56 @@ func (qpp *QueuePacketProcessor) ProcessPackets(
 	}
 
 process:
-	// Pick packets from array and send to downstream
-	pickedPackets := qp.Pick()
-	for _, pkt := range pickedPackets {
-		if checkReady(pkt.Cycle) {
-			sendPacket(ahead_port.PacketWithCycle(pkt))
-		} else {
-			// Not ready, put back to array
-			slot := qp.findFreeSlot()
-			if slot >= 0 {
-				qp.arrayMu.Lock()
-				qp.slots[slot] = pkt
-				qp.freeBitmap[slot] = false
-				qp.blockReasons[slot] = 0
-				qp.arrayMu.Unlock()
+	// Calculate freeCount before sending packets (for ReadyUntil calculation)
+	freeCountBefore := qp.countFreePackets()
+
+	// Pick packets from array and send to downstream (loop until no more packets or downstream not ready)
+	for {
+		pickedPackets := qp.Pick()
+		if len(pickedPackets) == 0 {
+			break
+		}
+		allSent := true
+		for _, pkt := range pickedPackets {
+			if checkReady(pkt.Cycle) {
+				sendPacket(ahead_port.PacketWithCycle(pkt))
+			} else {
+				// Not ready, put back to array
+				slot := qp.findFreeSlot()
+				if slot >= 0 {
+					qp.arrayMu.Lock()
+					qp.slots[slot] = pkt
+					qp.freeBitmap[slot] = false
+					qp.blockReasons[slot] = 0
+					qp.arrayMu.Unlock()
+				}
+				allSent = false
 			}
+		}
+		// If downstream is not ready, stop trying to send more packets
+		if !allSent {
+			break
 		}
 	}
 
 	// SetDone
 	setDone(cycle)
 
-	// Update upstream ready status based on free packet count
+	// Update upstream ready status based on free packet count (before sending)
 	freeCount := qp.countFreePackets()
-	ready := freeCount > 0
+	ready := freeCount > 0 || freeCountBefore > 0
 
 	// Calculate ReadyUntil: currentCycle + N / inBandwidth
-	// This tells upstream how many cycles ahead QueuePort can receive packets
-	if ready {
-		readyUntilCycle := cycle + freeCount/qp.inBandwidth
-		// Update QueuePort's own readyUntil for fast path
-		qp.updateReadyUntil(readyUntilCycle)
+	// This tells upstream how many cycles ahead Queue can receive packets
+	// Use freeCountBefore to calculate ReadyUntil (before sending packets)
+	if freeCountBefore > 0 {
+		readyUntilCycle := cycle + freeCountBefore/qp.inBandwidth
+		// Update Queue's own readyUntil for fast path
+		// Use atomic store to update readyUntil directly
+		currentReadyUntil := atomic.LoadInt64(&qp.readyUntil)
+		if int64(readyUntilCycle) > currentReadyUntil {
+			atomic.StoreInt64(&qp.readyUntil, int64(readyUntilCycle))
+		}
 	}
 
 	// Notify upstream via UpdateReady (updates readyMap and readyUntil)
@@ -378,7 +397,7 @@ process:
 
 // Pick returns at most outBandwidth packets that are free (block_reason is 0).
 // Returns packets sorted by cycle (oldest first).
-func (qp *QueuePort) Pick() []PacketWithCycle {
+func (qp *Queue) Pick() []PacketWithCycle {
 	qp.arrayMu.Lock()
 	defer qp.arrayMu.Unlock()
 
@@ -423,7 +442,7 @@ func (qp *QueuePort) Pick() []PacketWithCycle {
 
 // findFreeSlot finds the first free slot in the array.
 // Returns -1 if no free slot is available.
-func (qp *QueuePort) findFreeSlot() int {
+func (qp *Queue) findFreeSlot() int {
 	qp.arrayMu.Lock()
 	defer qp.arrayMu.Unlock()
 
@@ -436,7 +455,7 @@ func (qp *QueuePort) findFreeSlot() int {
 }
 
 // countFreePackets counts the number of packets that are free (block_reason is 0).
-func (qp *QueuePort) countFreePackets() int {
+func (qp *Queue) countFreePackets() int {
 	qp.arrayMu.Lock()
 	defer qp.arrayMu.Unlock()
 
@@ -450,7 +469,7 @@ func (qp *QueuePort) countFreePackets() int {
 }
 
 // updateReadyUntil updates readyUntil based on free packet count and current cycle.
-func (qp *QueuePort) updateReadyUntil(cycle int) {
+func (qp *Queue) updateReadyUntil(cycle int) {
 	qp.waiterMu.Lock()
 	defer qp.waiterMu.Unlock()
 
@@ -461,7 +480,7 @@ func (qp *QueuePort) updateReadyUntil(cycle int) {
 }
 
 // setBlockReason sets or clears a bit in the block_reason bitmap for a slot.
-func (qp *QueuePort) setBlockReason(index int, bit int, value bool) {
+func (qp *Queue) setBlockReason(index int, bit int, value bool) {
 	if index < 0 || index >= qp.size {
 		return
 	}
@@ -480,7 +499,7 @@ func (qp *QueuePort) setBlockReason(index int, bit int, value bool) {
 }
 
 // isFree checks if a slot is free (block_reason is all 0s).
-func (qp *QueuePort) isFree(index int) bool {
+func (qp *Queue) isFree(index int) bool {
 	if index < 0 || index >= qp.size {
 		return false
 	}
@@ -489,23 +508,23 @@ func (qp *QueuePort) isFree(index int) bool {
 
 // SetCurrentCycle sets the current processing cycle.
 // This is used by ProcessCycle to update the cycle context.
-func (qp *QueuePort) SetCurrentCycle(cycle int) {
+func (qp *Queue) SetCurrentCycle(cycle int) {
 	// This method can be used to track current cycle if needed
 	// Currently, cycle is passed as parameter to ProcessCycle
 }
 
 // SetUpstreamPort sets the upstream port for QueueCycleProcessor.
-func (qp *QueuePort) SetUpstreamPort(upstreamPort ahead_port.AheadPort) {
+func (qp *Queue) SetUpstreamPort(upstreamPort ahead_port.AheadPort) {
 	qp.processor.upstreamPort = upstreamPort
 }
 
 // SetDownstreamPort sets the downstream port for QueueCycleProcessor.
-func (qp *QueuePort) SetDownstreamPort(downstreamPort ahead_port.AheadPort) {
+func (qp *Queue) SetDownstreamPort(downstreamPort ahead_port.AheadPort) {
 	qp.processor.downstreamPort = downstreamPort
 }
 
 // Length returns the current number of packets in the queue.
-func (qp *QueuePort) Length() int {
+func (qp *Queue) Length() int {
 	qp.arrayMu.Lock()
 	defer qp.arrayMu.Unlock()
 
@@ -519,11 +538,11 @@ func (qp *QueuePort) Length() int {
 }
 
 // Capacity returns the maximum capacity of the queue.
-func (qp *QueuePort) Capacity() int {
+func (qp *Queue) Capacity() int {
 	return qp.size
 }
 
 // IsFull checks if the queue is at capacity.
-func (qp *QueuePort) IsFull() bool {
+func (qp *Queue) IsFull() bool {
 	return qp.Length() == qp.Capacity()
 }

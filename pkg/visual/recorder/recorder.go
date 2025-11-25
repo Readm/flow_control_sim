@@ -132,12 +132,12 @@ func buildNodes(nodes []node.Node) []frame.Node {
 				Capacity: inQueueCap,
 			})
 
-			// Capture output ports information (replaces dispatch_queue)
-			outPorts := f.OutPorts()
-			for i := range outPorts {
+			// Capture output port information
+			outPort := f.OutPort()
+			if outPort != nil {
 				// We can't directly access port state, so use placeholder values
 				queues = append(queues, frame.Queue{
-					Name:     fmt.Sprintf("Flow-%d-out-%d", f.ID(), i),
+					Name:     fmt.Sprintf("Flow-%d-out", f.ID()),
 					Length:   0,  // Not accessible without breaking encapsulation
 					Capacity: -1, // Not accessible without breaking encapsulation
 				})

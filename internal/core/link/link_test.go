@@ -26,7 +26,7 @@ func TestLinkBasicFunctionality(t *testing.T) {
 	flow1InPort := flow1.InPort()
 
 	// Connect Flow0 output to Link upstream
-	flow0.AddOutPort(flow0OutPort)
+	flow0.SetOutPort(flow0OutPort)
 
 	// Create Link
 	link := NewLink(0, 1, flow0OutPort, flow1InPort, 2, 1)
@@ -86,7 +86,7 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
-	flow0.AddOutPort(flow0OutPort)
+	flow0.SetOutPort(flow0OutPort)
 
 	link := NewLink(0, 1, flow0OutPort, flow1InPort, 3, 2) // bandwidth=2 to allow 2 packets
 
@@ -147,7 +147,7 @@ func TestLinkBandwidthLimit(t *testing.T) {
 	flow0OutPort := ahead_port.NewAheadPort(8)
 	flow1InPort := flow1.InPort()
 
-	flow0.AddOutPort(flow0OutPort)
+	flow0.SetOutPort(flow0OutPort)
 
 	link := NewLink(0, 1, flow0OutPort, flow1InPort, 2, 2) // bandwidth = 2
 
@@ -220,9 +220,9 @@ func TestLinkMultipleUpstream(t *testing.T) {
 	flow2OutPort := upstreams[2]
 	flow3InPort := flow3.InPort()
 
-	flow0.AddOutPort(flow0OutPort)
-	flow1.AddOutPort(flow1OutPort)
-	flow2.AddOutPort(flow2OutPort)
+	flow0.SetOutPort(flow0OutPort)
+	flow1.SetOutPort(flow1OutPort)
+	flow2.SetOutPort(flow2OutPort)
 
 	// Create Link with single upstream port (the aggregator)
 	link := NewLink(0, 3, aggregator, flow3InPort, 1, 10)
