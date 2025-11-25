@@ -105,51 +105,22 @@ drainInQueue:
 	}
 
 	// Step 5: Process out_queue to send packets to outPort (with bandwidth limit and ready check)
+	// Reference: link.go - if downstream not ready, just backpressure (don't Pick), packets stay in queue
 	if p.pipeline.outQueue != nil && p.pipeline.outPort != nil {
-		// Process up to outBandwidth packets per cycle
-		sentCount := 0
-		for sentCount < p.pipeline.outQueue.outBandwidth {
+		// Check if outPort is ready for current cycle (like link.go line 189)
+		if p.pipeline.outPort.Ready(cycle) {
+			// Pick up to outBandwidth packets and send them
 			pickedPackets := p.pipeline.outQueue.Pick()
-			if len(pickedPackets) == 0 {
-				break // No more packets in queue
-			}
-			// Try to send each packet if outPort is ready
 			for _, pkt := range pickedPackets {
-				if sentCount >= p.pipeline.outQueue.outBandwidth {
-					// Reached bandwidth limit, put remaining packets back
-					slot := p.pipeline.outQueue.findFreeSlot()
-					if slot >= 0 {
-						p.pipeline.outQueue.arrayMu.Lock()
-						p.pipeline.outQueue.slots[slot] = pkt
-						p.pipeline.outQueue.freeBitmap[slot] = false
-						p.pipeline.outQueue.blockReasons[slot] = 0
-						p.pipeline.outQueue.arrayMu.Unlock()
-					}
-					continue
+				env := ahead_port.PacketWithCycle{
+					Cycle:  cycle,
+					Packet: pkt.Packet,
 				}
-				if p.pipeline.outPort.Ready(pkt.Cycle) {
-					// Send to outPort
-					env := ahead_port.PacketWithCycle{
-						Cycle:  pkt.Cycle,
-						Packet: pkt.Packet,
-					}
-					select {
-					case p.pipeline.outPort.SendChan() <- env:
-						// Successfully sent
-						sentCount++
-					default:
-						// outPort channel is full, put back to out_queue
-						slot := p.pipeline.outQueue.findFreeSlot()
-						if slot >= 0 {
-							p.pipeline.outQueue.arrayMu.Lock()
-							p.pipeline.outQueue.slots[slot] = pkt
-							p.pipeline.outQueue.freeBitmap[slot] = false
-							p.pipeline.outQueue.blockReasons[slot] = 0
-							p.pipeline.outQueue.arrayMu.Unlock()
-						}
-					}
-				} else {
-					// outPort not ready, put back to out_queue
+				select {
+				case p.pipeline.outPort.SendChan() <- env:
+					// Successfully sent
+				default:
+					// outPort channel is full, put back to out_queue
 					slot := p.pipeline.outQueue.findFreeSlot()
 					if slot >= 0 {
 						p.pipeline.outQueue.arrayMu.Lock()
@@ -161,6 +132,7 @@ drainInQueue:
 				}
 			}
 		}
+		// If outPort not ready, do nothing (backpressure - packets stay in out_queue, like link.go line 197-199)
 	}
 
 	// Step 6: Set Done for output port
