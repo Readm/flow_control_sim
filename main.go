@@ -110,11 +110,13 @@ func (n *flowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 	// Send packet to peer if not the last cycle (before processing, so it's included in this cycle)
 	if cycle+1 < n.totalCycles {
 		payload := fmt.Sprintf("node-%d-cycle-%d", n.id, cycle)
-		n.flow.Emit(packet.Packet{
-			SourceID: n.id,
-			TargetID: n.peerID,
-			Payload:  payload,
-		})
+		if fifo, ok := n.flow.(*pipeline.FIFO); ok {
+			fifo.InjectPackets(int(cycle), []packet.Packet{{
+				SourceID: n.id,
+				TargetID: n.peerID,
+				Payload:  payload,
+			}})
+		}
 	}
 
 	// Process incoming packets

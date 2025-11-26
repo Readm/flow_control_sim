@@ -132,12 +132,14 @@ func (m *mockNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 	m.flow.InPort().SetDone(initDone)
 
 	// Send packet to peer if not the last cycle (before processing, so it's included in this cycle)
-	// Note: In a real scenario, this would be sent through a link, but for this test we just emit
-	m.flow.Emit(packet.Packet{
-		SourceID: m.id,
-		TargetID: m.id,
-		Payload:  fmt.Sprintf("cycle-%d", cycle),
-	})
+	// Note: In a real scenario, this would be sent through a link, but for this test we just inject
+	if fifo, ok := m.flow.(*pipeline.FIFO); ok {
+		fifo.InjectPackets(int(cycle), []packet.Packet{{
+			SourceID: m.id,
+			TargetID: m.id,
+			Payload:  fmt.Sprintf("cycle-%d", cycle),
+		}})
+	}
 
 	// Process incoming packets
 	if err := m.flow.ProcessCycle(int(cycle)); err != nil {

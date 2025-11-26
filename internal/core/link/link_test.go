@@ -39,6 +39,11 @@ func TestLinkBasicFunctionality(t *testing.T) {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
 
+	// Initialize upstream ready state for flow0OutPort (allows Flow0 to send packets)
+	// This is required because flow0.ProcessCycle(0) will check outPort.Ready(0)
+	// before Link.ProcessCycle has a chance to call updateUpstreamReady
+	flow0OutPort.SetReadyUntil(10)
+
 	// Send packet from Flow0
 	pkt := packet.Packet{
 		SourceID: 0,
@@ -97,6 +102,9 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
+
+	// Initialize upstream ready state for flow0OutPort (allows Flow0 to send packets)
+	flow0OutPort.SetReadyUntil(10)
 
 	pkt1 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test1"}
 	pkt2 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test2"}
@@ -172,6 +180,9 @@ func TestLinkBandwidthLimit(t *testing.T) {
 		flow1InPortImpl.SetReadyUntil(10) // Allow processing up to cycle 10
 	}
 
+	// Initialize upstream ready state for flow0OutPort (allows Flow0 to send packets)
+	flow0OutPort.SetReadyUntil(10)
+
 	// Process cycles - need to advance to cycle >= 2 to process packets (targetCycle = 0+2=2)
 	// IMPORTANT: We must NOT call link.ProcessCycle when cycle < targetCycle, as it will panic
 	flow0.ProcessCycle(0)
@@ -232,14 +243,14 @@ func TestLinkMultipleUpstream(t *testing.T) {
 	flow1.InPort().SetDone(-1)
 	flow2.InPort().SetDone(-1)
 
-	// Send packets from all upstream flows using Emit (Flow will route to outPorts)
+	// Send packets from all upstream flows using InjectPackets
 	pkt0 := packet.Packet{SourceID: 0, TargetID: 3, Payload: "from0"}
 	pkt1 := packet.Packet{SourceID: 1, TargetID: 3, Payload: "from1"}
 	pkt2 := packet.Packet{SourceID: 2, TargetID: 3, Payload: "from2"}
 
-	flow0.Emit(pkt0)
-	flow1.Emit(pkt1)
-	flow2.Emit(pkt2)
+	flow0.InjectPackets(0, []packet.Packet{pkt0})
+	flow1.InjectPackets(0, []packet.Packet{pkt1})
+	flow2.InjectPackets(0, []packet.Packet{pkt2})
 
 	// Initialize downstream ready state for flow3 (allows Link to send packets)
 	if flow3InPortImpl, ok := flow3InPort.(*ahead_port.SinglePort); ok {

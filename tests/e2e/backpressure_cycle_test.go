@@ -173,13 +173,15 @@ func (n *testFlowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) 
 	if err := n.flow.ProcessCycle(int(cycle)); err != nil {
 		return err
 	}
-	// Emit packet only if cycle+1 < totalCycles
+	// Inject packet only if cycle+1 < totalCycles
 	if cycle+1 < n.totalCycles {
-		n.flow.Emit(packet.Packet{
-			SourceID: n.id,
-			TargetID: n.peerID,
-			Payload:  "",
-		})
+		if fifo, ok := n.flow.(*pipeline.FIFO); ok {
+			fifo.InjectPackets(int(cycle), []packet.Packet{{
+				SourceID: n.id,
+				TargetID: n.peerID,
+				Payload:  "",
+			}})
+		}
 	}
 	return nil
 }

@@ -325,10 +325,10 @@ func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
 		targetInPortImpl.SetReadyUntil(10)
 	}
 
-	// Emit packets
+	// Inject packets
 	pkt1 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test1"}
 	pkt2 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test2"}
-	f.Emit(pkt1, pkt2)
+	f.InjectPackets(0, []packet.Packet{pkt1, pkt2})
 
 	// Process cycles to route packets
 	f.ProcessCycle(0)

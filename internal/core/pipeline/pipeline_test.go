@@ -361,5 +361,3 @@ func TestFIFOProcessCycleMultipleCycles(t *testing.T) {
 		}
 	}
 }
-
-

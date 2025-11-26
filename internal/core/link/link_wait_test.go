@@ -35,6 +35,9 @@ func TestLinkWaitLogic(t *testing.T) {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
 
+	// Initialize upstream ready state for flow0OutPort (allows Flow0 to send packets)
+	flow0OutPort.SetReadyUntil(10)
+
 	// Send packet at cycle 0
 	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
 	env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
@@ -113,6 +116,9 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
 
+	// Initialize upstream ready state for flow0OutPort (allows Flow0 to send packets)
+	flow0OutPort.SetReadyUntil(10)
+
 	// Test case: cycle=2, latency=5
 	// targetWaitCycle = 2+1-5 = -2, should clamp to 0
 	// At cycle 2, Link should wait for Done >= 0
@@ -155,6 +161,9 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
 		flow1InPortImpl.SetReadyUntil(10)
 	}
+
+	// Initialize upstream ready state for flow0OutPort (allows Flow0 to send packets)
+	flow0OutPort.SetReadyUntil(10)
 
 	// Send packet at cycle 0
 	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
