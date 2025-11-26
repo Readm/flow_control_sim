@@ -102,14 +102,14 @@ type ProcessedInfo struct {
 type Message struct {
     ID            MessageID        // 唯一标识符
     TransactionID TransactionID   // 所属的 Transaction
-    Type          MessageType      // 消息类型（协议相关）
-    SourceNodeID  int              // 源节点
-    TargetNodeID  int              // 目标节点
-    LinkType      string           // 链路类型（可选，用于路由）
-    Payload       interface{}      // 消息载荷
-    Packets       []Packet         // 关联的 Packet 列表
-    CreatedCycle  uint64           // 创建时间（cycle）
-    ProcessedInfo []ProcessedInfo  // 处理历史（多个节点可能处理）
+    Type          int             // 消息类型（协议相关，整数类型）
+    SourceNodeID  int             // 源节点
+    TargetNodeID  int             // 目标节点
+    LinkType      string          // 链路类型（可选，用于路由）
+    Payload       interface{}     // 消息载荷
+    Packets       []Packet        // 关联的 Packet 列表
+    CreatedCycle  uint64          // 创建时间（cycle）
+    ProcessedInfo []ProcessedInfo // 处理历史（多个节点可能处理）
 }
 ```
 
@@ -154,14 +154,14 @@ const (
 
 **说明**: 事务状态枚举。
 
-### 3.4 Event
+### 4.4 Event
 
 ```go
 type Event struct {
     Cycle     uint64      // 发生时间（cycle）
     NodeID    int         // 发生位置（节点）
     EventType string      // 事件类型（Created, MessageSent, MessageReceived, Processed, Completed等）
-    MessageID *MessageID // 关联的 Message ID（如果有）
+    MessageID *MessageID  // 关联的 Message ID（如果有）
     PacketSeq *int        // 关联的 Packet Sequence（如果有）
     Details   string      // 详细信息
 }
@@ -364,22 +364,27 @@ txn := &transaction.Transaction{
         NodeID: 1,
         TxnID:  100,  // 节点 1 内的第 100 个事务
     },
-    Protocol:        ProtocolAXI,
+    Protocol:        transaction.ProtocolAXI,
     Type:            0,  // AXI Read
     InitiatorNodeID: 1,
-    State:           TransactionStatePending,
+    State:           transaction.TransactionStatePending,
     CreatedCycle:    0,
-    Messages:        []*Message{},
-    Events:          []Event{},
+    Messages:        []*message.Message{},
+    Events:          []transaction.Event{},
 }
 ```
 
 ### 9.2 创建 Message
 
 ```go
+import (
+    "github.com/Readm/flow_sim/internal/dataflow/message"
+    "github.com/Readm/flow_sim/internal/dataflow/packet"
+)
+
 // 在节点 1 创建 AR (Address Read) 消息
-msg := &Message{
-    ID: MessageID{
+msg := &message.Message{
+    ID: dataflow.MessageID{
         NodeID:    1,
         MessageID: 1,  // 节点 1 内的第 1 个消息
     },
@@ -388,16 +393,18 @@ msg := &Message{
     SourceNodeID:  1,
     TargetNodeID:  2,
     CreatedCycle:  3,
-    Packets:       []Packet{},
-    ProcessedInfo: []ProcessedInfo{},
+    Packets:       []packet.Packet{},
+    ProcessedInfo: []message.ProcessedInfo{},
 }
 ```
 
 ### 9.3 创建 Packet
 
 ```go
+import "github.com/Readm/flow_sim/internal/dataflow/packet"
+
 // 创建承载消息的 Packet
-pkt := Packet{
+pkt := packet.Packet{
     SourceID:      1,
     TargetID:      2,
     Payload:       "address=0x1000",
@@ -411,7 +418,7 @@ pkt := Packet{
 
 ```go
 // 在节点 2 的 Cycle 5 处理消息
-msg.ProcessedInfo = append(msg.ProcessedInfo, ProcessedInfo{
+msg.ProcessedInfo = append(msg.ProcessedInfo, message.ProcessedInfo{
     Cycle:    5,
     NodeID:    2,
     PacketIDs: []int{0},  // 处理了 Sequence 0 的 Packet
@@ -419,11 +426,12 @@ msg.ProcessedInfo = append(msg.ProcessedInfo, ProcessedInfo{
 })
 
 // 在 Transaction 中记录事件
-txn.Events = append(txn.Events, Event{
+msgID := msg.ID
+txn.Events = append(txn.Events, transaction.Event{
     Cycle:     5,
     NodeID:    2,
     EventType: "MessageReceived",
-    MessageID: &msg.ID,
+    MessageID: &msgID,
     Details:   "Received AR request",
 })
 ```

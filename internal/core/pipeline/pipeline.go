@@ -19,6 +19,13 @@ type Pipeline interface {
 	ProcessedCount() int
 	// SetOutPort sets the output port for a downstream Link.
 	SetOutPort(port ahead_port.AheadPort)
+	// GetProcessedPackets returns packets processed in the last ProcessCycle call.
+	// Returns an empty slice if no packets were processed or if not supported.
+	GetProcessedPackets() []packet.Packet
+	// InjectPackets injects packets into the pipeline's out_queue for transmission.
+	// These packets will be sent through OutPort in subsequent ProcessCycle calls,
+	// respecting bandwidth limits and downstream readiness.
+	InjectPackets(cycle int, packets []packet.Packet) error
 }
 
 // PipelinePacketProcessor implements PacketProcessor for Pipeline.
@@ -83,6 +90,8 @@ drainInQueue:
 
 	// Step 3: Record processed packets
 	p.pipeline.processed = append(p.pipeline.processed, processedPackets...)
+	// Store packets processed in this cycle for GetProcessedPackets()
+	p.pipeline.lastCyclePackets = processedPackets
 
 	// Step 4: Store processed packets directly in out_queue array
 	if p.pipeline.outQueue != nil {
@@ -149,14 +158,15 @@ drainInQueue:
 
 // FIFO implements Pipeline by draining packets in the order they arrive using AheadPort.
 type FIFO struct {
-	id         int
-	inPort     ahead_port.AheadPort // Input port from upstream Link
-	outPort    ahead_port.AheadPort // Output port to downstream Link
-	processor  *ahead_port.CycleProcessor
-	packetProc *PipelinePacketProcessor
-	processed  []packet.Packet
-	inQueue    *Queue // Internal in_queue
-	outQueue   *Queue // Internal out_queue
+	id               int
+	inPort           ahead_port.AheadPort // Input port from upstream Link
+	outPort          ahead_port.AheadPort // Output port to downstream Link
+	processor        *ahead_port.CycleProcessor
+	packetProc       *PipelinePacketProcessor
+	processed        []packet.Packet
+	lastCyclePackets []packet.Packet // Packets processed in the last ProcessCycle call
+	inQueue          *Queue          // Internal in_queue
+	outQueue         *Queue          // Internal out_queue
 }
 
 // NewFIFO constructs a FIFO pipeline with the provided identifier.
@@ -170,8 +180,10 @@ func NewFIFO(id int, bufferSize int) *FIFO {
 	inPort := ahead_port.NewAheadPort(bufferSize)
 
 	// Create internal queues
-	inQueue := NewQueue(bufferSize, 1, 1, 1)           // size, inBandwidth, outBandwidth, bitmapWidth
-	outQueue := NewQueue(bufferSize, 1, bufferSize, 1) // size, inBandwidth, outBandwidth (use bufferSize for higher bandwidth), bitmapWidth
+	inQueue := NewQueue(bufferSize, 1, 1, 1) // size, inBandwidth, outBandwidth, bitmapWidth
+	// outQueue outBandwidth is set to 1 to match typical Link bandwidth limits
+	// This ensures Pipeline doesn't send more packets than downstream Link can handle per cycle
+	outQueue := NewQueue(bufferSize, 1, 1, 1) // size, inBandwidth, outBandwidth, bitmapWidth
 
 	// Create pipeline instance
 	f := &FIFO{
@@ -222,7 +234,43 @@ func (f *FIFO) ProcessedCount() int {
 	return len(f.processed)
 }
 
+// GetProcessedPackets returns packets processed in the last ProcessCycle call.
+func (f *FIFO) GetProcessedPackets() []packet.Packet {
+	// Return a copy of packets processed in the last cycle
+	result := make([]packet.Packet, len(f.lastCyclePackets))
+	copy(result, f.lastCyclePackets)
+	return result
+}
+
 // SetOutPort sets the output port for a downstream Link.
 func (f *FIFO) SetOutPort(port ahead_port.AheadPort) {
 	f.outPort = port
+}
+
+// InjectPackets injects packets into the pipeline's out_queue for transmission.
+// Packets will be sent in the next ProcessCycle call, so the cycle parameter
+// should be set to cycle+1 to indicate when they should be transmitted.
+func (f *FIFO) InjectPackets(cycle int, packets []packet.Packet) error {
+	if f.outQueue == nil {
+		return nil // No out queue, packets are dropped
+	}
+
+	for _, pkt := range packets {
+		// Set cycle to cycle+1 since these packets will be sent in the next ProcessCycle
+		env := packet.PacketWithCycle{
+			Cycle:  cycle + 1,
+			Packet: pkt,
+		}
+		// Find a free slot in out_queue
+		slot := f.outQueue.findFreeSlot()
+		if slot >= 0 {
+			f.outQueue.arrayMu.Lock()
+			f.outQueue.slots[slot] = env
+			f.outQueue.freeBitmap[slot] = false
+			f.outQueue.blockReasons[slot] = 0
+			f.outQueue.arrayMu.Unlock()
+		}
+		// If no free slot, packet is dropped (silently)
+	}
+	return nil
 }
