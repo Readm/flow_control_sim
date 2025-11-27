@@ -109,7 +109,7 @@ func (m *Manager) Run(ctx context.Context, cycles uint64) error {
 
 func (m *Manager) advanceLinks(cycle uint64) {
 	for _, l := range m.links {
-		_ = l.ProcessCycle(int(cycle))
+		_ = l.Tick(int(cycle))
 	}
 }
 

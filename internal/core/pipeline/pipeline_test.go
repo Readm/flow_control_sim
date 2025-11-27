@@ -66,8 +66,8 @@ func TestFIFOSetOutPort(t *testing.T) {
 	}
 }
 
-// TestFIFOProcessCycleEmpty tests processing cycle with no packets.
-func TestFIFOProcessCycleEmpty(t *testing.T) {
+// TestFIFOTickEmpty tests processing cycle with no packets.
+func TestFIFOTickEmpty(t *testing.T) {
 	t.Parallel()
 
 	p := NewFIFO(1, 8)
@@ -82,18 +82,18 @@ func TestFIFOProcessCycleEmpty(t *testing.T) {
 	outPort.UpdateReady(0, true)
 
 	// Process cycle 0
-	if err := p.ProcessCycle(0); err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+	if err := p.Tick(0); err != nil {
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify Done was set
 	if p.OutPort().GetDone() < 0 {
-		t.Fatal("ProcessCycle should set Done on output port")
+		t.Fatal("Tick should set Done on output port")
 	}
 }
 
-// TestFIFOProcessCycleWithPackets tests processing cycle with incoming packets.
-func TestFIFOProcessCycleWithPackets(t *testing.T) {
+// TestFIFOTickWithPackets tests processing cycle with incoming packets.
+func TestFIFOTickWithPackets(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -131,8 +131,8 @@ func TestFIFOProcessCycleWithPackets(t *testing.T) {
 	p.InPort().SetDone(0)
 
 	// Process cycle 0
-	if err := p.ProcessCycle(0); err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+	if err := p.Tick(0); err != nil {
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify packet was processed
@@ -154,8 +154,8 @@ func TestFIFOProcessCycleWithPackets(t *testing.T) {
 	}
 }
 
-// TestFIFOProcessCycleMultiplePackets tests processing multiple packets.
-func TestFIFOProcessCycleMultiplePackets(t *testing.T) {
+// TestFIFOTickMultiplePackets tests processing multiple packets.
+func TestFIFOTickMultiplePackets(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -195,8 +195,8 @@ func TestFIFOProcessCycleMultiplePackets(t *testing.T) {
 
 	// Process cycle 0 - receives and processes all 3 packets, puts them in outQueue
 	// With outBandwidth=1, only 1 packet will be sent in cycle 0
-	if err := p.ProcessCycle(0); err != nil {
-		t.Fatalf("ProcessCycle(0) failed: %v", err)
+	if err := p.Tick(0); err != nil {
+		t.Fatalf("Tick(0) failed: %v", err)
 	}
 
 	// Verify all packets were processed
@@ -209,13 +209,13 @@ func TestFIFOProcessCycleMultiplePackets(t *testing.T) {
 	for cycle := 1; cycle < 3; cycle++ {
 		// Set downstream ready for this cycle
 		outPort.UpdateReady(cycle, true)
-		
+
 		// Set upstream Done for this cycle (no new incoming packets, but need to advance Done)
 		p.InPort().SetDone(cycle - 1)
-		
+
 		// Process cycle to send one more packet from outQueue (outBandwidth=1)
-		if err := p.ProcessCycle(cycle); err != nil {
-			t.Fatalf("ProcessCycle(%d) failed: %v", cycle, err)
+		if err := p.Tick(cycle); err != nil {
+			t.Fatalf("Tick(%d) failed: %v", cycle, err)
 		}
 	}
 
@@ -234,8 +234,8 @@ func TestFIFOProcessCycleMultiplePackets(t *testing.T) {
 	}
 }
 
-// TestFIFOProcessCycleWithEmitAndIncoming tests processing with both incoming and emitted packets.
-func TestFIFOProcessCycleWithEmitAndIncoming(t *testing.T) {
+// TestFIFOTickWithEmitAndIncoming tests processing with both incoming and emitted packets.
+func TestFIFOTickWithEmitAndIncoming(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -272,8 +272,8 @@ func TestFIFOProcessCycleWithEmitAndIncoming(t *testing.T) {
 	p.InPort().SetDone(0)
 
 	// Process cycle 0
-	if err := p.ProcessCycle(0); err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+	if err := p.Tick(0); err != nil {
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify packet was processed
@@ -298,8 +298,8 @@ func TestFIFOProcessCycleWithEmitAndIncoming(t *testing.T) {
 	}
 }
 
-// TestFIFOProcessCycleMultipleCycles tests processing across multiple cycles.
-func TestFIFOProcessCycleMultipleCycles(t *testing.T) {
+// TestFIFOTickMultipleCycles tests processing across multiple cycles.
+func TestFIFOTickMultipleCycles(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -333,8 +333,8 @@ func TestFIFOProcessCycleMultipleCycles(t *testing.T) {
 	}
 	p.InPort().SetDone(0)
 
-	if err := p.ProcessCycle(0); err != nil {
-		t.Fatalf("ProcessCycle(0) failed: %v", err)
+	if err := p.Tick(0); err != nil {
+		t.Fatalf("Tick(0) failed: %v", err)
 	}
 
 	// Process cycle 1
@@ -354,8 +354,8 @@ func TestFIFOProcessCycleMultipleCycles(t *testing.T) {
 	}
 	p.InPort().SetDone(1)
 
-	if err := p.ProcessCycle(1); err != nil {
-		t.Fatalf("ProcessCycle(1) failed: %v", err)
+	if err := p.Tick(1); err != nil {
+		t.Fatalf("Tick(1) failed: %v", err)
 	}
 
 	// Verify both packets were processed

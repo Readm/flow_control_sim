@@ -40,8 +40,8 @@ func NewCycleProcessor(upstreamPort AheadPort, downstreamPort AheadPort, process
 	}
 }
 
-// ProcessCycle implements the complete cycle processing workflow.
-func (cp *CycleProcessor) ProcessCycle(cycle int) error {
+// Tick implements the complete cycle processing workflow.
+func (cp *CycleProcessor) Tick(cycle int) error {
 	// Ensure processor is not nil (should never happen if NewCycleProcessor is used correctly)
 	if cp.processor == nil {
 		panic("CycleProcessor.processor is nil, this should never happen. Use NewCycleProcessor to create CycleProcessor.")
@@ -92,12 +92,12 @@ func (cp *CycleProcessor) ProcessCycle(cycle int) error {
 	if upstreamPort, ok := cp.upstreamPort.(*SinglePort); ok {
 		_, configured := upstreamPort.ReadyNonBlocking(cycle + 1)
 		if !configured {
-			panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
+			panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 		}
 	} else if faninPort, ok := cp.upstreamPort.(*FaninPort); ok {
 		_, configured := faninPort.ReadyNonBlocking(cycle + 1)
 		if !configured {
-			panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in all upstream ports. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
+			panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not configured in all upstream ports. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 		}
 	}
 
@@ -122,19 +122,19 @@ func (d *DefaultProcessor) ProcessPackets(receiveChan <-chan PacketWithCycle, cy
 	// pendingPackets is a static variable (struct field) - access directly
 	newPendingPackets := make([]PacketWithCycle, 0)
 
-		// Helper function to process a single packet
-		processPacket := func(pkt PacketWithCycle) {
-			pktCycle := int(pkt.Cycle)
-			isReady := checkReady(pktCycle)
-			if isReady {
-				// Ready: send the packet immediately
-				pkt.Cycle = int(pktCycle)
-				sendPacket(pkt)
-			} else {
-				// Not ready: keep in pending
-				newPendingPackets = append(newPendingPackets, pkt)
-			}
+	// Helper function to process a single packet
+	processPacket := func(pkt PacketWithCycle) {
+		pktCycle := int(pkt.Cycle)
+		isReady := checkReady(pktCycle)
+		if isReady {
+			// Ready: send the packet immediately
+			pkt.Cycle = int(pktCycle)
+			sendPacket(pkt)
+		} else {
+			// Not ready: keep in pending
+			newPendingPackets = append(newPendingPackets, pkt)
 		}
+	}
 
 	// Process pending packets first (from static variable)
 	for _, pkt := range d.pendingPackets {

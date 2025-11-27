@@ -233,13 +233,13 @@ func (qp *Queue) GetReadyUntil() int {
 	return int(atomic.LoadInt64(&qp.readyUntil))
 }
 
-// ProcessCycle processes a single cycle.
-func (qp *Queue) ProcessCycle(cycle int) error {
-	return qp.processor.ProcessCycle(cycle)
+// Tick processes a single cycle.
+func (qp *Queue) Tick(cycle int) error {
+	return qp.processor.Tick(cycle)
 }
 
-// ProcessCycle implements the cycle processing workflow for Queue.
-func (qcp *QueueCycleProcessor) ProcessCycle(cycle int) error {
+// Tick implements the cycle processing workflow for Queue.
+func (qcp *QueueCycleProcessor) Tick(cycle int) error {
 	if qcp.processor == nil {
 		panic("QueueCycleProcessor.processor is nil")
 	}
@@ -290,7 +290,7 @@ func (qcp *QueueCycleProcessor) ProcessCycle(cycle int) error {
 		if checker, ok := upstreamPort.(interface{ ReadyNonBlocking(int) (bool, bool) }); ok && checker != nil {
 			_, configured := checker.ReadyNonBlocking(cycle + 1)
 			if !configured {
-				panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
+				panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 			}
 		}
 	}
@@ -507,10 +507,10 @@ func (qp *Queue) isFree(index int) bool {
 }
 
 // SetCurrentCycle sets the current processing cycle.
-// This is used by ProcessCycle to update the cycle context.
+// This is used by Tick to update the cycle context.
 func (qp *Queue) SetCurrentCycle(cycle int) {
 	// This method can be used to track current cycle if needed
-	// Currently, cycle is passed as parameter to ProcessCycle
+	// Currently, cycle is passed as parameter to Tick
 }
 
 // SetUpstreamPort sets the upstream port for QueueCycleProcessor.

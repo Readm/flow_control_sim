@@ -17,7 +17,7 @@
 
 ## 核心流程
 
-### ProcessCycle 处理步骤
+### Tick 处理步骤
 
 1. **接收数据包**：从 `inPort` channel 非阻塞接收，存储到 `in_queue` array
 2. **提取数据包**：使用 `Pick()` 从 `in_queue` 取出所有可用数据包（FIFO 顺序）

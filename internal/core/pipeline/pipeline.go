@@ -9,8 +9,8 @@ import (
 // Concrete implementations can apply arbitrary policies while conforming to this API.
 type Pipeline interface {
 	ID() int
-	// ProcessCycle processes a single cycle, receiving packets from upstream and sending to downstream.
-	ProcessCycle(cycle int) error
+	// Tick processes a single cycle, receiving packets from upstream and sending to downstream.
+	Tick(cycle int) error
 	// InPort returns the input AheadPort for receiving packets from upstream Link.
 	InPort() ahead_port.AheadPort
 	// OutPort returns the output AheadPort for sending packets to downstream Link.
@@ -19,11 +19,11 @@ type Pipeline interface {
 	ProcessedCount() int
 	// SetOutPort sets the output port for a downstream Link.
 	SetOutPort(port ahead_port.AheadPort)
-	// GetProcessedPackets returns packets processed in the last ProcessCycle call.
+	// GetProcessedPackets returns packets processed in the last Tick call.
 	// Returns an empty slice if no packets were processed or if not supported.
 	GetProcessedPackets() []packet.Packet
 	// InjectPackets injects packets into the pipeline's out_queue for transmission.
-	// These packets will be sent through OutPort in subsequent ProcessCycle calls,
+	// These packets will be sent through OutPort in subsequent Tick calls,
 	// respecting bandwidth limits and downstream readiness.
 	InjectPackets(cycle int, packets []packet.Packet) error
 }
@@ -164,7 +164,7 @@ type FIFO struct {
 	processor        *ahead_port.CycleProcessor
 	packetProc       *PipelinePacketProcessor
 	processed        []packet.Packet
-	lastCyclePackets []packet.Packet // Packets processed in the last ProcessCycle call
+	lastCyclePackets []packet.Packet // Packets processed in the last Tick call
 	inQueue          *Queue          // Internal in_queue
 	outQueue         *Queue          // Internal out_queue
 }
@@ -210,13 +210,13 @@ func (f *FIFO) ID() int {
 	return f.id
 }
 
-// ProcessCycle processes a single cycle.
-func (f *FIFO) ProcessCycle(cycle int) error {
+// Tick processes a single cycle.
+func (f *FIFO) Tick(cycle int) error {
 	// Recreate processor with dummy downstream (not used in ProcessPackets)
 	dummyDownstream := ahead_port.NewAheadPort(8)
 	f.processor = ahead_port.NewCycleProcessor(f.inPort, dummyDownstream, f.packetProc)
 
-	return f.processor.ProcessCycle(cycle)
+	return f.processor.Tick(cycle)
 }
 
 // InPort returns the input AheadPort.
@@ -234,7 +234,7 @@ func (f *FIFO) ProcessedCount() int {
 	return len(f.processed)
 }
 
-// GetProcessedPackets returns packets processed in the last ProcessCycle call.
+// GetProcessedPackets returns packets processed in the last Tick call.
 func (f *FIFO) GetProcessedPackets() []packet.Packet {
 	// Return a copy of packets processed in the last cycle
 	result := make([]packet.Packet, len(f.lastCyclePackets))
@@ -248,7 +248,7 @@ func (f *FIFO) SetOutPort(port ahead_port.AheadPort) {
 }
 
 // InjectPackets injects packets into the pipeline's out_queue for transmission.
-// Packets will be sent in the next ProcessCycle call, so the cycle parameter
+// Packets will be sent in the next Tick call, so the cycle parameter
 // should be set to cycle+1 to indicate when they should be transmitted.
 func (f *FIFO) InjectPackets(cycle int, packets []packet.Packet) error {
 	if f.outQueue == nil {
@@ -256,7 +256,7 @@ func (f *FIFO) InjectPackets(cycle int, packets []packet.Packet) error {
 	}
 
 	for _, pkt := range packets {
-		// Set cycle to cycle+1 since these packets will be sent in the next ProcessCycle
+		// Set cycle to cycle+1 since these packets will be sent in the next Tick
 		env := packet.PacketWithCycle{
 			Cycle:  cycle + 1,
 			Packet: pkt,

@@ -86,6 +86,6 @@ process:
 //
 //     // Process cycles
 //     for cycle := 0; cycle < 10; cycle++ {
-//         processor.ProcessCycle(cycle)
+//         processor.Tick(cycle)
 //     }
 // }

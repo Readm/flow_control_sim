@@ -299,9 +299,9 @@ func TestCycleProcessorBasicFlow(t *testing.T) {
 	upstreamPort.SetDone(1)
 
 	// Process cycle 0
-	err := processor.ProcessCycle(0)
+	err := processor.Tick(0)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify hook calls
@@ -418,9 +418,9 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 	upstreamPort.SetDone(6)
 
 	// Process cycle 5 - cycle 5 is not ready, so packet should be saved to pendingPackets
-	err := processor.ProcessCycle(5)
+	err := processor.Tick(5)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify OnDownstreamReady(ready=false) was called for cycle 5
@@ -440,9 +440,9 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 	}
 
 	// Process cycle 6 - cycle 5 is still not ready, packet remains in pendingPackets
-	err = processor.ProcessCycle(6)
+	err = processor.Tick(6)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify OnDownstreamReady(ready=false) was called again for cycle 5
@@ -465,9 +465,9 @@ func TestCycleProcessorCycleIncrement(t *testing.T) {
 	upstreamPort.SetDone(7)
 
 	// Process cycle 7 - cycle 5 is now ready, packet should be sent
-	err = processor.ProcessCycle(7)
+	err = processor.Tick(7)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify OnDownstreamReady(ready=true) was called for cycle 5
@@ -522,9 +522,9 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 	upstreamPort.SetDone(11)
 
 	// Process cycle 10 - cycle 10 is not ready, packet should be saved to pendingPackets
-	err := processor.ProcessCycle(10)
+	err := processor.Tick(10)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify increment count (should be 1: cycle 10 checked once)
@@ -544,9 +544,9 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 	for cycle := 11; cycle <= 14; cycle++ {
 		// Set upstream Done for this cycle
 		upstreamPort.SetDone(cycle)
-		err = processor.ProcessCycle(cycle)
+		err = processor.Tick(cycle)
 		if err != nil {
-			t.Fatalf("ProcessCycle failed: %v", err)
+			t.Fatalf("Tick failed: %v", err)
 		}
 		// Verify increment count increases (each cycle checks once)
 		expectedCount := cycle - 10 + 1
@@ -575,9 +575,9 @@ func TestCycleProcessorMultipleNonReadyCycles(t *testing.T) {
 	upstreamPort.SetDone(15)
 
 	// Process cycle 15 - cycle 10 is now ready, packet should be sent
-	err = processor.ProcessCycle(15)
+	err = processor.Tick(15)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify packet was sent with original cycle 10
@@ -614,9 +614,9 @@ func TestCycleProcessorWithCustomHooks(t *testing.T) {
 	upstreamPort.SetDone(1)
 
 	// Process cycle
-	err := processor.ProcessCycle(0)
+	err := processor.Tick(0)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify packet was processed and sent
@@ -645,9 +645,9 @@ func TestCycleProcessorWaitsForUpstreamDone(t *testing.T) {
 
 	go func() {
 		// This should wait until upstream sets Done >= 0
-		err := processor.ProcessCycle(0)
+		err := processor.Tick(0)
 		if err != nil {
-			t.Errorf("ProcessCycle failed: %v", err)
+			t.Errorf("Tick failed: %v", err)
 		}
 		done <- true
 	}()
@@ -671,11 +671,11 @@ func TestCycleProcessorWaitsForUpstreamDone(t *testing.T) {
 	case <-done:
 		// Success
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("ProcessCycle did not complete after setting Done")
+		t.Fatal("Tick did not complete after setting Done")
 	}
 }
 
-// TestCycleProcessorReceivesAllPackets tests that ProcessCycle receives and processes all available packets.
+// TestCycleProcessorReceivesAllPackets tests that Tick receives and processes all available packets.
 func TestCycleProcessorReceivesAllPackets(t *testing.T) {
 	t.Parallel()
 
@@ -714,9 +714,9 @@ func TestCycleProcessorReceivesAllPackets(t *testing.T) {
 	upstreamPort.SetDone(6)
 
 	// Process cycle 5 - should receive and process all packets
-	err := processor.ProcessCycle(5)
+	err := processor.Tick(5)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Wait a bit for all packets to be processed
@@ -765,10 +765,10 @@ func TestCycleProcessorReceivesAllPackets(t *testing.T) {
 		t.Errorf("expected %d packets from downstream, got %d", numPackets, receivedFromDownstream)
 	}
 
-	t.Logf("Successfully received and processed %d packets in a single ProcessCycle call", numPackets)
+	t.Logf("Successfully received and processed %d packets in a single Tick call", numPackets)
 }
 
-// TestCycleProcessorHandlesMultipleCyclesInChannel tests that ProcessCycle correctly handles
+// TestCycleProcessorHandlesMultipleCyclesInChannel tests that Tick correctly handles
 // packets with different cycles in the channel.
 func TestCycleProcessorHandlesMultipleCyclesInChannel(t *testing.T) {
 	t.Parallel()
@@ -806,9 +806,9 @@ func TestCycleProcessorHandlesMultipleCyclesInChannel(t *testing.T) {
 	}
 
 	// Process cycle 5 - should receive all packets (even though they have different cycles)
-	err := processor.ProcessCycle(5)
+	err := processor.Tick(5)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Wait a bit
@@ -849,12 +849,12 @@ func TestCycleProcessorHandlesMultipleCyclesInChannel(t *testing.T) {
 		}
 	}
 
-	t.Logf("Successfully handled packets with different cycles in a single ProcessCycle call")
+	t.Logf("Successfully handled packets with different cycles in a single Tick call")
 }
 
-// TestCycleProcessorUpdateReadyAfterProcessCycle tests that ProcessCycle automatically calls UpdateReady
+// TestCycleProcessorUpdateReadyAfterTick tests that Tick automatically calls UpdateReady
 // to notify upstream that the next cycle is ready. Without this, upstream would block when calling Ready(cycle+1).
-func TestCycleProcessorUpdateReadyAfterProcessCycle(t *testing.T) {
+func TestCycleProcessorUpdateReadyAfterTick(t *testing.T) {
 	t.Parallel()
 
 	upstreamPort := NewAheadPort(8)
@@ -864,16 +864,16 @@ func TestCycleProcessorUpdateReadyAfterProcessCycle(t *testing.T) {
 
 	// Set initial state
 	upstreamPort.SetDone(-1)
-	// DO NOT manually call UpdateReady(1, true) - ProcessCycle should do it automatically
+	// DO NOT manually call UpdateReady(1, true) - Tick should do it automatically
 
 	// Process cycle 0
-	err := processor.ProcessCycle(0)
+	err := processor.Tick(0)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Now verify that upstream can check Ready(1) without blocking
-	// If ProcessCycle didn't call UpdateReady(1, true), this would block forever
+	// If Tick didn't call UpdateReady(1, true), this would block forever
 	readyChan := make(chan bool, 1)
 	go func() {
 		// This should return immediately if UpdateReady(1, true) was called
@@ -885,24 +885,24 @@ func TestCycleProcessorUpdateReadyAfterProcessCycle(t *testing.T) {
 	select {
 	case ready := <-readyChan:
 		if !ready {
-			t.Fatal("expected Ready(1) to return true after ProcessCycle(0) calls UpdateReady(1, true)")
+			t.Fatal("expected Ready(1) to return true after Tick(0) calls UpdateReady(1, true)")
 		}
-		t.Logf("Successfully verified that Ready(1) returns true after ProcessCycle(0)")
+		t.Logf("Successfully verified that Ready(1) returns true after Tick(0)")
 	case <-time.After(1 * time.Second):
-		t.Fatal("Ready(1) blocked - ProcessCycle(0) did not call UpdateReady(1, true)!")
+		t.Fatal("Ready(1) blocked - Tick(0) did not call UpdateReady(1, true)!")
 	}
 
 	// Verify readyMap was updated
 	// We can't directly access readyMap, but we can verify by checking Ready() again
 	if !upstreamPort.Ready(1) {
-		t.Fatal("Ready(1) should return true after ProcessCycle(0)")
+		t.Fatal("Ready(1) should return true after Tick(0)")
 	}
 
 	// Process cycle 1
 	upstreamPort.SetDone(1)
-	err = processor.ProcessCycle(1)
+	err = processor.Tick(1)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify Ready(2) also works
@@ -915,11 +915,11 @@ func TestCycleProcessorUpdateReadyAfterProcessCycle(t *testing.T) {
 	select {
 	case ready := <-readyChan2:
 		if !ready {
-			t.Fatal("expected Ready(2) to return true after ProcessCycle(1) calls UpdateReady(2, true)")
+			t.Fatal("expected Ready(2) to return true after Tick(1) calls UpdateReady(2, true)")
 		}
-		t.Logf("Successfully verified that Ready(2) returns true after ProcessCycle(1)")
+		t.Logf("Successfully verified that Ready(2) returns true after Tick(1)")
 	case <-time.After(1 * time.Second):
-		t.Fatal("Ready(2) blocked - ProcessCycle(1) did not call UpdateReady(2, true)!")
+		t.Fatal("Ready(2) blocked - Tick(1) did not call UpdateReady(2, true)!")
 	}
 }
 
@@ -934,7 +934,7 @@ func TestCycleProcessorUpdateReadyWithoutUpdateReadyBlocks(t *testing.T) {
 	// Set initial state
 	upstreamPort.SetDone(-1)
 	// DO NOT call UpdateReady(1, true)
-	// This simulates the buggy behavior where ProcessCycle doesn't call UpdateReady
+	// This simulates the buggy behavior where Tick doesn't call UpdateReady
 
 	// Now verify that upstream blocks when calling Ready(1)
 	readyChan := make(chan bool, 1)

@@ -44,14 +44,14 @@ func TestPendingPacketsIsolation(t *testing.T) {
 	upstreamPort2.SetDone(1)
 
 	// Process cycle 0 for both
-	err1 := processor1.ProcessCycle(0)
+	err1 := processor1.Tick(0)
 	if err1 != nil {
-		t.Fatalf("processor1.ProcessCycle failed: %v", err1)
+		t.Fatalf("processor1.Tick failed: %v", err1)
 	}
 
-	err2 := processor2.ProcessCycle(0)
+	err2 := processor2.Tick(0)
 	if err2 != nil {
-		t.Fatalf("processor2.ProcessCycle failed: %v", err2)
+		t.Fatalf("processor2.Tick failed: %v", err2)
 	}
 
 	// Verify: processor1's packet should be sent (downstream was ready)
@@ -123,14 +123,14 @@ func TestPendingPacketsSharing(t *testing.T) {
 	upstreamPort2.SetDone(1)
 
 	// Process cycle 0 for both
-	err1 := processor1.ProcessCycle(0)
+	err1 := processor1.Tick(0)
 	if err1 != nil {
-		t.Fatalf("processor1.ProcessCycle failed: %v", err1)
+		t.Fatalf("processor1.Tick failed: %v", err1)
 	}
 
-	err2 := processor2.ProcessCycle(0)
+	err2 := processor2.Tick(0)
 	if err2 != nil {
-		t.Fatalf("processor2.ProcessCycle failed: %v", err2)
+		t.Fatalf("processor2.Tick failed: %v", err2)
 	}
 
 	// Verify: both packets should be in the shared pendingPackets
@@ -155,4 +155,3 @@ func TestPendingPacketsSharing(t *testing.T) {
 		t.Error("shared processor: processor2's packet not found in pendingPackets")
 	}
 }
-

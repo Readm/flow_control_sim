@@ -44,9 +44,9 @@ func TestLinkWaitLogic(t *testing.T) {
 	flow0OutPort.SendChan() <- env
 
 	// Process flow0 to send the packet
-	flow0.ProcessCycle(0)
+	flow0.Tick(0)
 	flow0.InPort().SetDone(1)
-	flow0.ProcessCycle(1)
+	flow0.Tick(1)
 	flow0.InPort().SetDone(2)
 
 	// At cycle 2, Link should wait for Done >= 2+1-3 = 0
@@ -57,21 +57,21 @@ func TestLinkWaitLogic(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		// This should not block because Done(2) >= 0
-		link.ProcessCycle(2)
+		link.Tick(2)
 	}()
 	wg.Wait()
 	elapsed := time.Since(startTime)
 
 	// Should complete quickly (no blocking)
 	if elapsed > 100*time.Millisecond {
-		t.Errorf("Link.ProcessCycle(2) should not block when Done(2) >= 0, but took %v", elapsed)
+		t.Errorf("Link.Tick(2) should not block when Done(2) >= 0, but took %v", elapsed)
 	}
 
 	// Now test that it waits correctly when upstream is behind
 	// At cycle 5, Link should wait for Done >= 5+1-3 = 3
 	// But flow0OutPort.Done is only 2, so it should wait
 	flow0.InPort().SetDone(3)
-	flow0.ProcessCycle(3)
+	flow0.Tick(3)
 	// flow0OutPort.Done is now 3
 
 	// Test blocking behavior
@@ -80,7 +80,7 @@ func TestLinkWaitLogic(t *testing.T) {
 	go func() {
 		// At cycle 4, Link should wait for Done >= 4+1-3 = 2
 		// flow0OutPort.Done is 3, so it should proceed immediately
-		link.ProcessCycle(4)
+		link.Tick(4)
 		done <- true
 	}()
 
@@ -88,10 +88,10 @@ func TestLinkWaitLogic(t *testing.T) {
 	case <-done:
 		elapsed = time.Since(startTime)
 		if elapsed > 100*time.Millisecond {
-			t.Errorf("Link.ProcessCycle(4) should not block when Done(3) >= 2, but took %v", elapsed)
+			t.Errorf("Link.Tick(4) should not block when Done(3) >= 2, but took %v", elapsed)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Link.ProcessCycle(4) should complete immediately when Done(3) >= 2")
+		t.Fatal("Link.Tick(4) should complete immediately when Done(3) >= 2")
 	}
 }
 
@@ -122,13 +122,13 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 	// Test case: cycle=2, latency=5
 	// targetWaitCycle = 2+1-5 = -2, should clamp to 0
 	// At cycle 2, Link should wait for Done >= 0
-	flow0.ProcessCycle(0)
+	flow0.Tick(0)
 	flow0.InPort().SetDone(1)
 
 	done := make(chan bool, 1)
 	go func() {
 		// Should not block because Done(1) >= 0
-		link.ProcessCycle(2)
+		link.Tick(2)
 		done <- true
 	}()
 
@@ -136,7 +136,7 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 	case <-done:
 		// Success
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Link.ProcessCycle(2) should complete when Done(1) >= 0 (clamped)")
+		t.Fatal("Link.Tick(2) should complete when Done(1) >= 0 (clamped)")
 	}
 }
 
@@ -171,17 +171,17 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	flow0OutPort.SendChan() <- env
 
 	// Process flow0
-	flow0.ProcessCycle(0)
+	flow0.Tick(0)
 	flow0.InPort().SetDone(1)
-	flow0.ProcessCycle(1)
+	flow0.Tick(1)
 	flow0.InPort().SetDone(2)
-	flow0.ProcessCycle(2)
+	flow0.Tick(2)
 	// flow0OutPort.Done is now 3
 
 	// At cycle 2, Link should wait for Done >= 2+1-4 = -1 (clamped to 0)
 	// Since flow0OutPort.Done is 3, it should proceed
 	// The packet will be stored in slot for cycle 0+4=4
-	link.ProcessCycle(2)
+	link.Tick(2)
 
 	// Verify packet is in the buffer (not yet sent, as targetCycle is 4)
 	if flow1.ProcessedCount() != 0 {
@@ -190,13 +190,12 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 
 	// Process cycle 4 - packet should be sent
 	flow0.InPort().SetDone(4)
-	flow0.ProcessCycle(4)
-	link.ProcessCycle(4)
-	flow1.ProcessCycle(4)
+	flow0.Tick(4)
+	link.Tick(4)
+	flow1.Tick(4)
 
 	// Verify packet was received
 	if flow1.ProcessedCount() != 1 {
 		t.Errorf("expected 1 processed packet at cycle 4, got %d", flow1.ProcessedCount())
 	}
 }
-

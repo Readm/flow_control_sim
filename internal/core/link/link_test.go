@@ -40,8 +40,8 @@ func TestLinkBasicFunctionality(t *testing.T) {
 	}
 
 	// Initialize upstream ready state for flow0OutPort (allows Flow0 to send packets)
-	// This is required because flow0.ProcessCycle(0) will check outPort.Ready(0)
-	// before Link.ProcessCycle has a chance to call updateUpstreamReady
+	// This is required because flow0.Tick(0) will check outPort.Ready(0)
+	// before Link.Tick has a chance to call updateUpstreamReady
 	flow0OutPort.SetReadyUntil(10)
 
 	// Send packet from Flow0
@@ -60,15 +60,15 @@ func TestLinkBasicFunctionality(t *testing.T) {
 	// Note: New implementation requires cycle >= targetCycle to process packets
 	// For latency=2, targetCycle = sourceCycle(0) + 2 = 2
 	// So we can only process the packet when cycle >= 2
-	// IMPORTANT: We must NOT call link.ProcessCycle when cycle < targetCycle, as it will panic
+	// IMPORTANT: We must NOT call link.Tick when cycle < targetCycle, as it will panic
 	// Instead, we advance cycles until cycle >= targetCycle before processing
-	flow0.ProcessCycle(0) // Sets flow0OutPort.Done = 1
+	flow0.Tick(0) // Sets flow0OutPort.Done = 1
 	flow0.InPort().SetDone(1)
-	flow0.ProcessCycle(1) // Sets flow0OutPort.Done = 2
-	// Skip link.ProcessCycle(0) and link.ProcessCycle(1) because cycle < targetCycle(2) would panic
+	flow0.Tick(1) // Sets flow0OutPort.Done = 2
+	// Skip link.Tick(0) and link.Tick(1) because cycle < targetCycle(2) would panic
 	// Go directly to cycle 2 where we can process the packet
-	link.ProcessCycle(2)  // cycle(2) >= targetCycle(2), processes packet, puts in slot, sends to flow1InPort
-	flow1.ProcessCycle(2) // Receives packet, waits for flow1InPort.Done >= 2 (already 2)
+	link.Tick(2)  // cycle(2) >= targetCycle(2), processes packet, puts in slot, sends to flow1InPort
+	flow1.Tick(2) // Receives packet, waits for flow1InPort.Done >= 2 (already 2)
 
 	// Verify packet was received
 	if flow1.ProcessedCount() != 1 {
@@ -119,22 +119,22 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	flow0OutPort.SendChan() <- env2
 
 	// Process cycles - need to advance to cycle >= 3 to process packets (targetCycle = 0+3=3)
-	// IMPORTANT: We must NOT call link.ProcessCycle when cycle < targetCycle, as it will panic
-	flow0.ProcessCycle(0)
+	// IMPORTANT: We must NOT call link.Tick when cycle < targetCycle, as it will panic
+	flow0.Tick(0)
 	flow0.InPort().SetDone(1)
-	flow0.ProcessCycle(1)
+	flow0.Tick(1)
 	flow0.InPort().SetDone(2)
-	flow0.ProcessCycle(2)
+	flow0.Tick(2)
 	flow0.InPort().SetDone(3)
-	flow0.ProcessCycle(3)
+	flow0.Tick(3)
 
 	// Process link cycles - packets will be processed when cycle >= targetCycle
 	// Skip cycles 0, 1, 2 because cycle < targetCycle(3) would panic
-	link.ProcessCycle(3) // cycle(3) >= targetCycle(3), processes both packets, puts in slot
+	link.Tick(3) // cycle(3) >= targetCycle(3), processes both packets, puts in slot
 
 	// Verify packets received by flow1
 	// Since downstream is ready, packets are sent immediately in cycle 3
-	flow1.ProcessCycle(3)
+	flow1.Tick(3)
 	if flow1.ProcessedCount() != 2 {
 		t.Fatalf("expected 2 processed packets, got %d", flow1.ProcessedCount())
 	}
@@ -184,12 +184,12 @@ func TestLinkBandwidthLimit(t *testing.T) {
 	flow0OutPort.SetReadyUntil(10)
 
 	// Process cycles - need to advance to cycle >= 2 to process packets (targetCycle = 0+2=2)
-	// IMPORTANT: We must NOT call link.ProcessCycle when cycle < targetCycle, as it will panic
-	flow0.ProcessCycle(0)
+	// IMPORTANT: We must NOT call link.Tick when cycle < targetCycle, as it will panic
+	flow0.Tick(0)
 	flow0.InPort().SetDone(1)
-	flow0.ProcessCycle(1)
+	flow0.Tick(1)
 	flow0.InPort().SetDone(2)
-	flow0.ProcessCycle(2)
+	flow0.Tick(2)
 
 	// Process link cycles - packets will be processed when cycle >= targetCycle(2)
 	// Skip cycles 0, 1 because cycle < targetCycle(2) would panic
@@ -197,8 +197,8 @@ func TestLinkBandwidthLimit(t *testing.T) {
 	// The 3rd packet would cause slot to exceed bandwidth, which would panic
 	// So we only send 2 packets to avoid panic
 	// Note: This test verifies that bandwidth limit is enforced by slot capacity
-	link.ProcessCycle(2)  // cycle(2) >= targetCycle(2), processes first 2 packets, puts in slot, sends to flow1
-	flow1.ProcessCycle(2) // Receives packets
+	link.Tick(2)  // cycle(2) >= targetCycle(2), processes first 2 packets, puts in slot, sends to flow1
+	flow1.Tick(2) // Receives packets
 
 	// Verify at most 2 packets were sent (bandwidth limit per cycle)
 	processed := flow1.ProcessedCount()
@@ -277,17 +277,17 @@ func TestLinkMultipleUpstream(t *testing.T) {
 	// Process cycles - framework will automatically manage Done
 	// For latency=1, targetCycle = sourceCycle(0) + 1 = 1
 	// New implementation requires cycle >= targetCycle(1) to process packets
-	// IMPORTANT: We must NOT call link.ProcessCycle when cycle < targetCycle, as it will panic
-	flow0.ProcessCycle(0) // Processes emitQueue, routes to flow0OutPort, sets flow0OutPort.Done = 1
-	flow1.ProcessCycle(0) // Processes emitQueue, routes to flow1OutPort, sets flow1OutPort.Done = 1
-	flow2.ProcessCycle(0) // Processes emitQueue, routes to flow2OutPort, sets flow2OutPort.Done = 1
+	// IMPORTANT: We must NOT call link.Tick when cycle < targetCycle, as it will panic
+	flow0.Tick(0) // Processes emitQueue, routes to flow0OutPort, sets flow0OutPort.Done = 1
+	flow1.Tick(0) // Processes emitQueue, routes to flow1OutPort, sets flow1OutPort.Done = 1
+	flow2.Tick(0) // Processes emitQueue, routes to flow2OutPort, sets flow2OutPort.Done = 1
 	// Need to advance flow cycles to ensure Done is set correctly
 	flow0.InPort().SetDone(1)
 	flow1.InPort().SetDone(1)
 	flow2.InPort().SetDone(1)
-	// Skip link.ProcessCycle(0) because cycle(0) < targetCycle(1) would panic
-	link.ProcessCycle(1)  // cycle(1) >= targetCycle(1), processes packets, sends to flow3InPort, sets flow3InPort.Done = 2
-	flow3.ProcessCycle(1) // Receives packets from flow3InPort, waits for Done >= 1 (already 1)
+	// Skip link.Tick(0) because cycle(0) < targetCycle(1) would panic
+	link.Tick(1)  // cycle(1) >= targetCycle(1), processes packets, sends to flow3InPort, sets flow3InPort.Done = 2
+	flow3.Tick(1) // Receives packets from flow3InPort, waits for Done >= 1 (already 1)
 
 	// Verify all packets were received
 	if flow3.ProcessedCount() != 3 {

@@ -344,9 +344,9 @@ func TestFaninPortWithCycleProcessor(t *testing.T) {
 	upstreamPort2.SetDone(1)
 
 	// Process cycle 0
-	err := processor.ProcessCycle(0)
+	err := processor.Tick(0)
 	if err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Verify packets were received by downstream

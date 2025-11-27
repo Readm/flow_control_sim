@@ -104,7 +104,7 @@ func (n *PingNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 	n.mu.Unlock()
 
 	// Step 1: Process pipeline first - this drains in_queue and processes packets
-	if err := n.flow.ProcessCycle(int(cycle)); err != nil {
+	if err := n.flow.Tick(int(cycle)); err != nil {
 		return err
 	}
 
@@ -125,7 +125,7 @@ func (n *PingNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 
 func (n *PingNode) receiveMessages(cycle uint64) []*message.Message {
 	var msgs []*message.Message
-	// Get processed packets from pipeline (processed in ProcessCycle)
+	// Get processed packets from pipeline (processed in Tick)
 	processedPackets := n.flow.GetProcessedPackets()
 	for _, pkt := range processedPackets {
 		// Convert packet to message
@@ -166,7 +166,7 @@ func (n *PingNode) sendMessages(cycle uint64, msgs []*message.Message) {
 	}
 
 	// Inject packets into pipeline's out_queue
-	// They will be sent through OutPort in the next ProcessCycle call
+	// They will be sent through OutPort in the next Tick call
 	n.flow.InjectPackets(int(cycle), packets)
 }
 
@@ -219,7 +219,7 @@ func (n *PongNode) Flows() []pipeline.Pipeline {
 
 func (n *PongNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
 	// Step 1: Process pipeline first - this drains in_queue and processes packets
-	if err := n.flow.ProcessCycle(int(cycle)); err != nil {
+	if err := n.flow.Tick(int(cycle)); err != nil {
 		return err
 	}
 
@@ -264,7 +264,7 @@ func (n *PongNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 
 func (n *PongNode) receiveMessages(cycle uint64) []*message.Message {
 	var msgs []*message.Message
-	// Get processed packets from pipeline (processed in ProcessCycle)
+	// Get processed packets from pipeline (processed in Tick)
 	processedPackets := n.flow.GetProcessedPackets()
 	for _, pkt := range processedPackets {
 		// Convert packet to message
@@ -305,7 +305,7 @@ func (n *PongNode) sendMessages(cycle uint64, msgs []*message.Message) {
 	}
 
 	// Inject packets into pipeline's out_queue
-	// They will be sent through OutPort in the next ProcessCycle call
+	// They will be sent through OutPort in the next Tick call
 	n.flow.InjectPackets(int(cycle), packets)
 }
 
@@ -430,4 +430,3 @@ func TestPingPongTransaction(t *testing.T) {
 		t.Errorf("ping transaction did not complete: state=%s, pingComplete=%v", txn.State, pingNode.IsPingComplete())
 	}
 }
-

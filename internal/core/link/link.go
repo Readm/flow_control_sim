@@ -17,8 +17,8 @@ type LinkCycleProcessor struct {
 	latency        int
 }
 
-// ProcessCycle implements the cycle processing workflow with custom wait logic.
-func (lcp *LinkCycleProcessor) ProcessCycle(cycle int) error {
+// Tick implements the cycle processing workflow with custom wait logic.
+func (lcp *LinkCycleProcessor) Tick(cycle int) error {
 	if lcp.processor == nil {
 		panic("LinkCycleProcessor.processor is nil")
 	}
@@ -61,7 +61,7 @@ func (lcp *LinkCycleProcessor) ProcessCycle(cycle int) error {
 		if checker, ok := lcp.upstreamPort.(interface{ ReadyNonBlocking(int) (bool, bool) }); ok && checker != nil {
 			_, configured := checker.ReadyNonBlocking(cycle + 1)
 			if !configured {
-				panic(fmt.Sprintf("ProcessCycle(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
+				panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 			}
 		}
 	}
@@ -269,9 +269,9 @@ func (l *Link) Bandwidth() int {
 	return l.bandwidth
 }
 
-// ProcessCycle processes a single cycle.
-func (l *Link) ProcessCycle(cycle int) error {
-	return l.processor.ProcessCycle(cycle)
+// Tick processes a single cycle.
+func (l *Link) Tick(cycle int) error {
+	return l.processor.Tick(cycle)
 }
 
 // UpstreamPort returns the upstream port.

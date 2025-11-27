@@ -170,7 +170,7 @@ func (n *testFlowNode) Flows() []pipeline.Pipeline {
 }
 
 func (n *testFlowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
-	if err := n.flow.ProcessCycle(int(cycle)); err != nil {
+	if err := n.flow.Tick(int(cycle)); err != nil {
 		return err
 	}
 	// Inject packet only if cycle+1 < totalCycles

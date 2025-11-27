@@ -71,7 +71,7 @@ Flow -> Link 和 Link -> Flow 都是一样的逻辑。下面，我们按方向�
 
 ## CycleProcessor 处理流程
 
-以下流程图展示了 `CycleProcessor.ProcessCycle(cycle)` 的完整执行流程，包括与 `PacketProcessor` 的交互：
+以下流程图展示了 `CycleProcessor.Tick(cycle)` 的完整执行流程，包括与 `PacketProcessor` 的交互：
 
 ``` mermaid
 ---
@@ -79,14 +79,14 @@ config:
   layout: dagre
 ---
 flowchart TB
-    subgraph CP["CycleProcessor.ProcessCycle(cycle)"]
-        START(["开始 ProcessCycle(cycle)"])
+    subgraph CP["CycleProcessor.Tick(cycle)"]
+        START(["开始 Tick(cycle)"])
         WAIT["1. WaitForDoneUntil(cycle)<br/>等待上游 DoneUntil >= cycle"]
         PREPARE["2. 准备 updateUpstreamReady 函数<br/>通过类型断言获取 SinglePort.UpdateReady"]
         CALL_PROC["3. 调用 processor.ProcessPackets()<br/>传入: receiveChan, cycle, checkReady,<br/>sendPacket, setDoneUntil, updateUpstreamReady"]
         SET_DONE["4. SetDoneUntil(cycle+1)<br/>如果当前值 < cycle+1<br/>确保单调递增"]
         ASSERT["5. 断言 cycle+1 已配置<br/>ReadyNonBlocking(cycle+1) 必须返回 configured=true"]
-        END_CP(["结束 ProcessCycle"])
+        END_CP(["结束 Tick"])
     end
 
     subgraph PP["PacketProcessor.ProcessPackets()"]
@@ -154,7 +154,7 @@ flowchart TB
 
 ### 流程图说明
 
-1. **CycleProcessor.ProcessCycle(cycle)**（红色区域）：
+1. **CycleProcessor.Tick(cycle)**（红色区域）：
    - 这是框架层，负责协调整个 cycle 的处理流程
    - 步骤 1：等待上游完成（`WaitForDoneUntil`）
    - 步骤 2-3：准备并调用 `PacketProcessor.ProcessPackets()`

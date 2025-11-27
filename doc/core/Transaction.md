@@ -156,7 +156,7 @@ type activeTxn struct {
        
        // 4. 处理 Pipeline
        for _, flow := range n.Flows() {
-           if err := flow.ProcessCycle(int(cycle)); err != nil {
+           if err := flow.Tick(int(cycle)); err != nil {
                return err
            }
        }
@@ -377,7 +377,7 @@ func (n *CoherenceNode) Tick(ctx context.Context, cycle uint64, linkDelay time.D
     
     // 4. 处理 Pipeline
     for _, flow := range n.Flows() {
-        if err := flow.ProcessCycle(int(cycle)); err != nil {
+        if err := flow.Tick(int(cycle)); err != nil {
             return err
         }
     }

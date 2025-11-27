@@ -439,8 +439,8 @@ func TestSetBlockReason(t *testing.T) {
 	}
 }
 
-// TestProcessCycle tests ProcessCycle method.
-func TestProcessCycle(t *testing.T) {
+// TestTick tests Tick method.
+func TestTick(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -474,16 +474,16 @@ func TestProcessCycle(t *testing.T) {
 	// Process cycle 0
 	done := make(chan error, 1)
 	go func() {
-		done <- qp.ProcessCycle(0)
+		done <- qp.Tick(0)
 	}()
 
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("ProcessCycle failed: %v", err)
+			t.Fatalf("Tick failed: %v", err)
 		}
 	case <-ctx.Done():
-		t.Fatal("ProcessCycle timed out")
+		t.Fatal("Tick timed out")
 	}
 
 	// Verify packet was received and stored
@@ -494,7 +494,7 @@ func TestProcessCycle(t *testing.T) {
 
 	// Verify Done was set on downstream port
 	if downstreamPort.GetDone() < 0 {
-		t.Fatal("ProcessCycle should set Done on downstream port")
+		t.Fatal("Tick should set Done on downstream port")
 	}
 }
 
@@ -534,16 +534,16 @@ func TestProcessPackets(t *testing.T) {
 	// Process cycle 0
 	done := make(chan error, 1)
 	go func() {
-		done <- qp.ProcessCycle(0)
+		done <- qp.Tick(0)
 	}()
 
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("ProcessCycle failed: %v", err)
+			t.Fatalf("Tick failed: %v", err)
 		}
 	case <-ctx.Done():
-		t.Fatal("ProcessCycle timed out")
+		t.Fatal("Tick timed out")
 	}
 
 	// Verify packets were processed
@@ -595,16 +595,16 @@ func TestReadyUntilCalculation(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- qp.ProcessCycle(0)
+		done <- qp.Tick(0)
 	}()
 
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("ProcessCycle failed: %v", err)
+			t.Fatalf("Tick failed: %v", err)
 		}
 	case <-ctx.Done():
-		t.Fatal("ProcessCycle timed out")
+		t.Fatal("Tick timed out")
 	}
 
 	// Verify ReadyUntil was updated
@@ -790,8 +790,8 @@ func TestCountFreePackets(t *testing.T) {
 	}
 }
 
-// TestProcessCycleWithExternalPorts tests ProcessCycle with external ports.
-func TestProcessCycleWithExternalPorts(t *testing.T) {
+// TestTickWithExternalPorts tests Tick with external ports.
+func TestTickWithExternalPorts(t *testing.T) {
 	t.Parallel()
 
 	upstreamPort := ahead_port.NewAheadPort(8)
@@ -819,21 +819,21 @@ func TestProcessCycleWithExternalPorts(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- qp.ProcessCycle(0)
+		done <- qp.Tick(0)
 	}()
 
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("ProcessCycle failed: %v", err)
+			t.Fatalf("Tick failed: %v", err)
 		}
 	case <-ctx.Done():
-		t.Fatal("ProcessCycle timed out")
+		t.Fatal("Tick timed out")
 	}
 
 	// Verify cycle+1 was configured
 	_, configured := upstreamPort.ReadyNonBlocking(1)
 	if !configured {
-		t.Fatal("ProcessCycle should configure cycle+1 in upstream port")
+		t.Fatal("Tick should configure cycle+1 in upstream port")
 	}
 }

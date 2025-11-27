@@ -124,7 +124,7 @@ func (m *mockNode) Flows() []pipeline.Pipeline {
 
 func (m *mockNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
 	// Initialize upstream Done (no upstream, so set to cycle-1 to allow processing cycle)
-	// Must be >= cycle-1 for ProcessCycle to proceed
+	// Must be >= cycle-1 for Tick to proceed
 	initDone := int(cycle) - 1
 	if initDone < -1 {
 		initDone = -1
@@ -142,7 +142,7 @@ func (m *mockNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 	}
 
 	// Process incoming packets
-	if err := m.flow.ProcessCycle(int(cycle)); err != nil {
+	if err := m.flow.Tick(int(cycle)); err != nil {
 		return err
 	}
 

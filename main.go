@@ -120,7 +120,7 @@ func (n *flowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 	}
 
 	// Process incoming packets
-	if err := n.flow.ProcessCycle(int(cycle)); err != nil {
+	if err := n.flow.Tick(int(cycle)); err != nil {
 		return err
 	}
 

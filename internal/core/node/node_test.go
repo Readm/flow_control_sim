@@ -48,7 +48,7 @@ func (n *multiFlowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration)
 			wg.Add(1)
 			go func(fl pipeline.Pipeline) {
 				defer wg.Done()
-				if err := fl.ProcessCycle(int(cycle)); err != nil {
+				if err := fl.Tick(int(cycle)); err != nil {
 					select {
 					case errCh <- err:
 					default:
@@ -65,7 +65,7 @@ func (n *multiFlowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration)
 		}
 	} else {
 		for _, f := range n.flows {
-			if err := f.ProcessCycle(int(cycle)); err != nil {
+			if err := f.Tick(int(cycle)); err != nil {
 				return err
 			}
 		}
@@ -121,11 +121,11 @@ func TestNodeWithSingleFlow(t *testing.T) {
 	outPort.SetDone(1)
 
 	// Process cycles
-	flow0.ProcessCycle(0)
-	link.ProcessCycle(0)
-	link.ProcessCycle(1)
+	flow0.Tick(0)
+	link.Tick(0)
+	link.Tick(1)
 	flow0.InPort().SetDone(1)
-	flow0.ProcessCycle(1)
+	flow0.Tick(1)
 
 	// Verify packet was processed
 	if flow0.ProcessedCount() != 1 {
@@ -173,10 +173,10 @@ func TestNodeWithMultipleFlowsSerial(t *testing.T) {
 
 	// Process cycles
 	for i := 0; i < 3; i++ {
-		node.Flows()[i].ProcessCycle(0)
-		links[i].ProcessCycle(0)
-		links[i].ProcessCycle(1)
-		node.Flows()[i].ProcessCycle(1)
+		node.Flows()[i].Tick(0)
+		links[i].Tick(0)
+		links[i].Tick(1)
+		node.Flows()[i].Tick(1)
 	}
 
 	// Verify all flows processed packets
@@ -225,10 +225,10 @@ func TestNodeWithMultipleFlowsParallel(t *testing.T) {
 	// Process cycles
 	start := time.Now()
 	for i := 0; i < 3; i++ {
-		node.Flows()[i].ProcessCycle(0)
-		links[i].ProcessCycle(0)
-		links[i].ProcessCycle(1)
-		node.Flows()[i].ProcessCycle(1)
+		node.Flows()[i].Tick(0)
+		links[i].Tick(0)
+		links[i].Tick(1)
+		node.Flows()[i].Tick(1)
 	}
 	duration := time.Since(start)
 
@@ -281,17 +281,17 @@ func TestNodeRunMultipleCycles(t *testing.T) {
 
 		// Process Flow cycle (sends packet to outPort)
 		flow0.InPort().SetDone(cycle)
-		flow0.ProcessCycle(cycle)
+		flow0.Tick(cycle)
 
 		// Process Link cycle (receives from outPort)
-		link.ProcessCycle(cycle)
+		link.Tick(cycle)
 
 		// Process Link next cycle (forwards to inPort with latency=1)
-		link.ProcessCycle(cycle + 1)
+		link.Tick(cycle + 1)
 
 		// Process Flow next cycle (receives and processes packet)
 		flow0.InPort().SetDone(cycle)
-		flow0.ProcessCycle(cycle + 1)
+		flow0.Tick(cycle + 1)
 	}
 
 	// Verify packets were processed (should have at least 5 packets processed)
@@ -331,10 +331,10 @@ func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
 	f.InjectPackets(0, []packet.Packet{pkt1, pkt2})
 
 	// Process cycles to route packets
-	f.ProcessCycle(0)
-	link.ProcessCycle(0)
-	link.ProcessCycle(1)
-	targetFlow.ProcessCycle(1)
+	f.Tick(0)
+	link.Tick(0)
+	link.Tick(1)
+	targetFlow.Tick(1)
 
 	// Verify packets were processed
 	if targetFlow.ProcessedCount() != 2 {

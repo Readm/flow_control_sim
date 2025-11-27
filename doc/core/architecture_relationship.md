@@ -98,7 +98,7 @@ flowchart TB
   - `upstreamPort AheadPort` - 上游端口
   - `downstreamPort AheadPort` - 下游端口
   - `processor PacketProcessor` - 包处理器
-- **方法**: `ProcessCycle(cycle int)` - 执行一个 cycle 的处理流程
+- **方法**: `Tick(cycle int)` - 执行一个 cycle 的处理流程
 
 ### 4. 类型别名
 
@@ -125,7 +125,7 @@ cp := NewCycleProcessor(upstreamPort, downstreamPort, processor)
 
 // 4. 处理周期
 for cycle := 0; cycle < 10; cycle++ {
-    cp.ProcessCycle(cycle)
+    cp.Tick(cycle)
 }
 ```
 
