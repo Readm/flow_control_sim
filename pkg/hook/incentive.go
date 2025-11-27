@@ -25,13 +25,13 @@ type MockIncentiveHook struct {
 	// MaxTransactionsPerNode limits the number of transactions per node (0 means unlimited)
 	MaxTransactionsPerNode int
 	// TransactionManager is used to create transactions
-	TransactionManager *transaction.Manager
+	TransactionManager *transaction.TxnManager
 	// Node transaction counters
 	nodeCounters map[int]int
 }
 
 // NewMockIncentiveHook creates a new MockIncentiveHook.
-func NewMockIncentiveHook(mgr *transaction.Manager) *MockIncentiveHook {
+func NewMockIncentiveHook(mgr *transaction.TxnManager) *MockIncentiveHook {
 	return &MockIncentiveHook{
 		TransactionManager: mgr,
 		nodeCounters:       make(map[int]int),
@@ -82,14 +82,18 @@ func (h *MockIncentiveHook) CreateTransaction(nodeID int, cycle uint64) (*transa
 		return nil, nil
 	}
 
-	txn := h.TransactionManager.NewTransaction(nodeID, cycle)
+	// Note: TxnManager.Start() requires a transaction function, which is not available here.
+	// This hook interface may need to be redesigned to work with the new transaction framework.
+	// For now, return nil to indicate this functionality is not yet implemented.
+	_ = nodeID
+	_ = cycle
 	
 	// Update counter
 	if h.MaxTransactionsPerNode > 0 {
 		h.nodeCounters[nodeID]++
 	}
 
-	return txn, nil
+	return nil, nil
 }
 
 // SetCreateEveryNCycles sets the cycle interval for transaction creation.

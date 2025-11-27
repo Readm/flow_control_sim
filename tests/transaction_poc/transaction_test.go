@@ -69,11 +69,12 @@ func (n *PingNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 					MessageID: 1,
 				},
 				TransactionID: txCtx.TxnID(),
-				Type:          MsgPing,
-				SourceNodeID:  n.id,
-				TargetNodeID:  n.targetID,
-				Payload:       "ping",
-				CreatedCycle:  cycle,
+				Channel:        message.ChannelREQ, // Set channel type
+				Type:           MsgPing,
+				SourceNodeID:   n.id,
+				TargetNodeID:   n.targetID,
+				Payload:        "ping",
+				CreatedCycle:   cycle,
 			}
 
 			// Send ping
@@ -129,10 +130,17 @@ func (n *PingNode) receiveMessages(cycle uint64) []*message.Message {
 	processedPackets := n.flow.GetProcessedPackets()
 	for _, pkt := range processedPackets {
 		// Convert packet to message
+		msgType := n.parseMessageType(pkt.Payload)
+		// Determine channel based on message type (simple heuristic for ping/pong)
+		channel := message.ChannelREQ
+		if msgType == MsgPong {
+			channel = message.ChannelRSP
+		}
 		msg := &message.Message{
 			ID:            pkt.MessageID,
 			TransactionID: pkt.TransactionID,
-			Type:          n.parseMessageType(pkt.Payload),
+			Channel:       channel,
+			Type:          msgType,
 			SourceNodeID:  pkt.SourceID,
 			TargetNodeID:  pkt.TargetID,
 			Payload:       pkt.Payload,
@@ -237,6 +245,7 @@ func (n *PongNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 					MessageID: len(pongReplies) + 1,
 				},
 				TransactionID: msg.TransactionID,
+				Channel:       message.ChannelRSP, // Set channel type for response
 				Type:          MsgPong,
 				SourceNodeID:  n.id,
 				TargetNodeID:  msg.SourceNodeID,
@@ -268,10 +277,17 @@ func (n *PongNode) receiveMessages(cycle uint64) []*message.Message {
 	processedPackets := n.flow.GetProcessedPackets()
 	for _, pkt := range processedPackets {
 		// Convert packet to message
+		msgType := n.parseMessageType(pkt.Payload)
+		// Determine channel based on message type (simple heuristic for ping/pong)
+		channel := message.ChannelREQ
+		if msgType == MsgPong {
+			channel = message.ChannelRSP
+		}
 		msg := &message.Message{
 			ID:            pkt.MessageID,
 			TransactionID: pkt.TransactionID,
-			Type:          n.parseMessageType(pkt.Payload),
+			Channel:       channel,
+			Type:          msgType,
 			SourceNodeID:  pkt.SourceID,
 			TargetNodeID:  pkt.TargetID,
 			Payload:       pkt.Payload,
