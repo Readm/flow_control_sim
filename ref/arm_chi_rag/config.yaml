@@ -1,0 +1,44 @@
+# RAG系统配置文件
+
+# 文档处理配置
+document:
+  chunk_size: 512          # 文本分块大小（tokens）
+  chunk_overlap: 50        # 分块重叠大小（tokens）
+  pdf_parser: "pdfplumber" # PDF解析器：pdfplumber 或 pypdf2
+  extract_images: true      # 是否提取PDF中的图片
+  ocr_enabled: false        # 是否启用OCR提取图片中的文字（需要安装tesseract-ocr）
+  image_output_dir: null    # 图片保存目录（null表示不保存，可设置为"./extracted_images"）
+
+# 向量化配置
+embedding:
+  model_name: "all-MiniLM-L6-v2"  # 嵌入模型名称
+  device: "cpu"                    # 设备：cpu 或 cuda
+  normalize_embeddings: true       # 是否归一化向量
+
+# 向量数据库配置
+vector_db:
+  persist_directory: "./vector_db"  # 持久化目录
+  collection_name: "arm_chi_docs"   # 集合名称
+
+# 检索配置
+retrieval:
+  top_k: 5              # 返回top-k个相关文档块
+  score_threshold: 0.5  # 相似度阈值
+
+# API服务配置
+api:
+  host: "127.0.0.1"
+  port: 8000
+  reload: false
+
+# LLM生成配置（可选）
+generation:
+  enabled: false              # 是否启用LLM生成回答
+  provider: "openai"          # LLM提供商：openai, local, ollama, anthropic
+  model_name: "gpt-3.5-turbo" # 模型名称
+  api_key: null               # API密钥（如果使用云服务）
+  base_url: null              # API基础URL（如果使用本地模型）
+  temperature: 0.7            # 生成温度
+  max_tokens: 1000            # 最大生成token数
+  system_prompt: null         # 自定义系统提示词（null使用默认）
+
