@@ -193,14 +193,30 @@ func TestFIFOProcessCycleMultiplePackets(t *testing.T) {
 	// Set Done after sending
 	p.InPort().SetDone(0)
 
-	// Process cycle 0
+	// Process cycle 0 - receives and processes all 3 packets, puts them in outQueue
+	// With outBandwidth=1, only 1 packet will be sent in cycle 0
 	if err := p.ProcessCycle(0); err != nil {
-		t.Fatalf("ProcessCycle failed: %v", err)
+		t.Fatalf("ProcessCycle(0) failed: %v", err)
 	}
 
 	// Verify all packets were processed
 	if p.ProcessedCount() != 3 {
 		t.Fatalf("expected ProcessedCount 3, got %d", p.ProcessedCount())
+	}
+
+	// Process additional cycles to send remaining packets (outBandwidth=1, so each cycle sends 1 packet)
+	// Cycle 0 already sent 1 packet, so we need cycles 1 and 2 to send the remaining 2 packets
+	for cycle := 1; cycle < 3; cycle++ {
+		// Set downstream ready for this cycle
+		outPort.UpdateReady(cycle, true)
+		
+		// Set upstream Done for this cycle (no new incoming packets, but need to advance Done)
+		p.InPort().SetDone(cycle - 1)
+		
+		// Process cycle to send one more packet from outQueue (outBandwidth=1)
+		if err := p.ProcessCycle(cycle); err != nil {
+			t.Fatalf("ProcessCycle(%d) failed: %v", cycle, err)
+		}
 	}
 
 	// Verify all packets were sent to outPort
