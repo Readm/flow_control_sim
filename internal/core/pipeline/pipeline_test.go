@@ -71,28 +71,23 @@ func TestFIFOTickEmpty(t *testing.T) {
 	t.Parallel()
 
 	p := NewFIFO(1, 8)
-	outPort := ahead_port.NewAheadPort(8)
-	p.SetOutPort(outPort)
 
 	// Initialize upstream Done
 	p.InPort().SetDone(-1)
-
-	// Set downstream ready - both SetReadyUntil and UpdateReady for cycle 0
-	outPort.SetReadyUntil(10)
-	outPort.UpdateReady(0, true)
 
 	// Process cycle 0
 	if err := p.Tick(0); err != nil {
 		t.Fatalf("Tick failed: %v", err)
 	}
 
-	// Verify Done was set
-	if p.OutPort().GetDone() < 0 {
-		t.Fatal("Tick should set Done on output port")
+	// Verify no packets were processed
+	if p.ProcessedCount() != 0 {
+		t.Fatalf("expected ProcessedCount 0, got %d", p.ProcessedCount())
 	}
 }
 
 // TestFIFOTickWithPackets tests processing cycle with incoming packets.
+// Pipeline only processes up to Pick(), packets are available via GetProcessedPackets().
 func TestFIFOTickWithPackets(t *testing.T) {
 	t.Parallel()
 
@@ -100,15 +95,9 @@ func TestFIFOTickWithPackets(t *testing.T) {
 	defer cancel()
 
 	p := NewFIFO(1, 8)
-	outPort := ahead_port.NewAheadPort(8)
-	p.SetOutPort(outPort)
 
 	// Initialize upstream Done
 	p.InPort().SetDone(-1)
-
-	// Set downstream ready - both SetReadyUntil and UpdateReady for cycle 0
-	outPort.SetReadyUntil(10)
-	outPort.UpdateReady(0, true)
 
 	// Send packet to inPort
 	pkt := packet.Packet{
@@ -140,21 +129,21 @@ func TestFIFOTickWithPackets(t *testing.T) {
 		t.Fatalf("expected ProcessedCount 1, got %d", p.ProcessedCount())
 	}
 
-	// Verify packet was sent to outPort
-	select {
-	case received := <-outPort.ReceiveChan():
-		if received.Packet.SourceID != 0 {
-			t.Fatalf("expected SourceID 0, got %d", received.Packet.SourceID)
-		}
-		if received.Packet.TargetID != 1 {
-			t.Fatalf("expected TargetID 1, got %d", received.Packet.TargetID)
-		}
-	case <-ctx.Done():
-		t.Fatal("timeout receiving packet from outPort")
+	// Verify packet is available via GetProcessedPackets()
+	processedPackets := p.GetProcessedPackets()
+	if len(processedPackets) != 1 {
+		t.Fatalf("expected 1 processed packet, got %d", len(processedPackets))
+	}
+	if processedPackets[0].SourceID != 0 {
+		t.Fatalf("expected SourceID 0, got %d", processedPackets[0].SourceID)
+	}
+	if processedPackets[0].TargetID != 1 {
+		t.Fatalf("expected TargetID 1, got %d", processedPackets[0].TargetID)
 	}
 }
 
 // TestFIFOTickMultiplePackets tests processing multiple packets.
+// Pipeline processes all packets up to Pick(), they are available via GetProcessedPackets().
 func TestFIFOTickMultiplePackets(t *testing.T) {
 	t.Parallel()
 
@@ -162,15 +151,9 @@ func TestFIFOTickMultiplePackets(t *testing.T) {
 	defer cancel()
 
 	p := NewFIFO(1, 8)
-	outPort := ahead_port.NewAheadPort(8)
-	p.SetOutPort(outPort)
 
 	// Initialize upstream Done
 	p.InPort().SetDone(-1)
-
-	// Set downstream ready - both SetReadyUntil and UpdateReady for cycle 0
-	outPort.SetReadyUntil(10)
-	outPort.UpdateReady(0, true)
 
 	// Send multiple packets
 	for i := 0; i < 3; i++ {
@@ -193,8 +176,7 @@ func TestFIFOTickMultiplePackets(t *testing.T) {
 	// Set Done after sending
 	p.InPort().SetDone(0)
 
-	// Process cycle 0 - receives and processes all 3 packets, puts them in outQueue
-	// With outBandwidth=1, only 1 packet will be sent in cycle 0
+	// Process cycle 0 - receives and processes all 3 packets up to Pick()
 	if err := p.Tick(0); err != nil {
 		t.Fatalf("Tick(0) failed: %v", err)
 	}
@@ -204,37 +186,23 @@ func TestFIFOTickMultiplePackets(t *testing.T) {
 		t.Fatalf("expected ProcessedCount 3, got %d", p.ProcessedCount())
 	}
 
-	// Process additional cycles to send remaining packets (outBandwidth=1, so each cycle sends 1 packet)
-	// Cycle 0 already sent 1 packet, so we need cycles 1 and 2 to send the remaining 2 packets
-	for cycle := 1; cycle < 3; cycle++ {
-		// Set downstream ready for this cycle
-		outPort.UpdateReady(cycle, true)
-
-		// Set upstream Done for this cycle (no new incoming packets, but need to advance Done)
-		p.InPort().SetDone(cycle - 1)
-
-		// Process cycle to send one more packet from outQueue (outBandwidth=1)
-		if err := p.Tick(cycle); err != nil {
-			t.Fatalf("Tick(%d) failed: %v", cycle, err)
-		}
+	// Verify all packets are available via GetProcessedPackets()
+	processedPackets := p.GetProcessedPackets()
+	if len(processedPackets) != 3 {
+		t.Fatalf("expected 3 processed packets, got %d", len(processedPackets))
 	}
-
-	// Verify all packets were sent to outPort
-	receivedCount := 0
-	for receivedCount < 3 {
-		select {
-		case received := <-outPort.ReceiveChan():
-			receivedCount++
-			if received.Packet.SourceID != 0 {
-				t.Fatalf("expected SourceID 0, got %d", received.Packet.SourceID)
-			}
-		case <-ctx.Done():
-			t.Fatalf("timeout receiving packets, got %d", receivedCount)
+	for i, pkt := range processedPackets {
+		if pkt.SourceID != 0 {
+			t.Fatalf("packet %d: expected SourceID 0, got %d", i, pkt.SourceID)
+		}
+		if string(pkt.Payload) != fmt.Sprintf("test-%d", i) {
+			t.Fatalf("packet %d: expected Payload 'test-%d', got '%s'", i, i, string(pkt.Payload))
 		}
 	}
 }
 
-// TestFIFOTickWithEmitAndIncoming tests processing with both incoming and emitted packets.
+// TestFIFOTickWithEmitAndIncoming tests processing with incoming packets.
+// Pipeline processes packets up to Pick(), they are available via GetProcessedPackets().
 func TestFIFOTickWithEmitAndIncoming(t *testing.T) {
 	t.Parallel()
 
@@ -242,15 +210,9 @@ func TestFIFOTickWithEmitAndIncoming(t *testing.T) {
 	defer cancel()
 
 	p := NewFIFO(1, 8)
-	outPort := ahead_port.NewAheadPort(8)
-	p.SetOutPort(outPort)
 
 	// Initialize upstream Done
 	p.InPort().SetDone(-1)
-
-	// Set downstream ready - both SetReadyUntil and UpdateReady for cycle 0
-	outPort.SetReadyUntil(10)
-	outPort.UpdateReady(0, true)
 
 	// Send incoming packet
 	incomingPkt := packet.Packet{
@@ -281,24 +243,24 @@ func TestFIFOTickWithEmitAndIncoming(t *testing.T) {
 		t.Fatalf("expected ProcessedCount 1, got %d", p.ProcessedCount())
 	}
 
-	// Verify packet was sent to outPort
-	select {
-	case received := <-outPort.ReceiveChan():
-		if received.Packet.SourceID != 0 {
-			t.Fatalf("expected SourceID 0, got %d", received.Packet.SourceID)
-		}
-		if received.Packet.TargetID != 1 {
-			t.Fatalf("expected TargetID 1, got %d", received.Packet.TargetID)
-		}
-		if string(received.Packet.Payload) != "incoming" {
-			t.Fatalf("expected Payload 'incoming', got '%s'", received.Packet.Payload)
-		}
-	case <-ctx.Done():
-		t.Fatal("timeout receiving packet from outPort")
+	// Verify packet is available via GetProcessedPackets()
+	processedPackets := p.GetProcessedPackets()
+	if len(processedPackets) != 1 {
+		t.Fatalf("expected 1 processed packet, got %d", len(processedPackets))
+	}
+	if processedPackets[0].SourceID != 0 {
+		t.Fatalf("expected SourceID 0, got %d", processedPackets[0].SourceID)
+	}
+	if processedPackets[0].TargetID != 1 {
+		t.Fatalf("expected TargetID 1, got %d", processedPackets[0].TargetID)
+	}
+	if string(processedPackets[0].Payload) != "incoming" {
+		t.Fatalf("expected Payload 'incoming', got '%s'", string(processedPackets[0].Payload))
 	}
 }
 
 // TestFIFOTickMultipleCycles tests processing across multiple cycles.
+// Pipeline processes packets up to Pick() in each cycle.
 func TestFIFOTickMultipleCycles(t *testing.T) {
 	t.Parallel()
 
@@ -306,15 +268,9 @@ func TestFIFOTickMultipleCycles(t *testing.T) {
 	defer cancel()
 
 	p := NewFIFO(1, 8)
-	outPort := ahead_port.NewAheadPort(8)
-	p.SetOutPort(outPort)
 
 	// Initialize upstream Done
 	p.InPort().SetDone(-1)
-
-	// Set downstream ready - both SetReadyUntil and UpdateReady for cycle 0
-	outPort.SetReadyUntil(10)
-	outPort.UpdateReady(0, true)
 
 	// Process cycle 0
 	pkt0 := packet.Packet{
@@ -335,6 +291,15 @@ func TestFIFOTickMultipleCycles(t *testing.T) {
 
 	if err := p.Tick(0); err != nil {
 		t.Fatalf("Tick(0) failed: %v", err)
+	}
+
+	// Verify packet from cycle 0 was processed
+	processed0 := p.GetProcessedPackets()
+	if len(processed0) != 1 {
+		t.Fatalf("cycle 0: expected 1 processed packet, got %d", len(processed0))
+	}
+	if string(processed0[0].Payload) != "cycle-0" {
+		t.Fatalf("cycle 0: expected Payload 'cycle-0', got '%s'", string(processed0[0].Payload))
 	}
 
 	// Process cycle 1
@@ -363,9 +328,53 @@ func TestFIFOTickMultipleCycles(t *testing.T) {
 		t.Fatalf("expected ProcessedCount 2, got %d", p.ProcessedCount())
 	}
 
-	// Verify both packets were sent to outPort
+	// Verify packet from cycle 1 was processed
+	processed1 := p.GetProcessedPackets()
+	if len(processed1) != 1 {
+		t.Fatalf("cycle 1: expected 1 processed packet, got %d", len(processed1))
+	}
+		if string(processed1[0].Payload) != "cycle-1" {
+			t.Fatalf("cycle 1: expected Payload 'cycle-1', got '%s'", string(processed1[0].Payload))
+		}
+}
+
+// TestOutputQueue tests OutputQueue functionality.
+func TestOutputQueue(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	oq := NewOutputQueue(8)
+	outPort := ahead_port.NewAheadPort(8)
+	oq.SetOutPort(outPort)
+
+	// Set downstream ready
+	outPort.SetReadyUntil(10)
+	outPort.UpdateReady(0, true)
+
+	// Inject packets
+	packets := []packet.Packet{
+		{SourceID: 0, TargetID: 1, Payload: "test-0"},
+		{SourceID: 0, TargetID: 1, Payload: "test-1"},
+	}
+	if err := oq.InjectPackets(0, packets); err != nil {
+		t.Fatalf("InjectPackets failed: %v", err)
+	}
+
+	// Verify packets are in queue
+	if oq.Length() != 2 {
+		t.Fatalf("expected queue length 2, got %d", oq.Length())
+	}
+
+	// Process cycle 0 - should send packets
+	if err := oq.Tick(0); err != nil {
+		t.Fatalf("Tick failed: %v", err)
+	}
+
+	// Verify packets were sent (with outBandwidth=1, only 1 packet should be sent)
 	receivedCount := 0
-	for receivedCount < 2 {
+	for receivedCount < 1 {
 		select {
 		case received := <-outPort.ReceiveChan():
 			receivedCount++
@@ -375,5 +384,21 @@ func TestFIFOTickMultipleCycles(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatalf("timeout receiving packets, got %d", receivedCount)
 		}
+	}
+
+	// Process cycle 1 - should send remaining packet
+	outPort.UpdateReady(1, true)
+	if err := oq.Tick(1); err != nil {
+		t.Fatalf("Tick(1) failed: %v", err)
+	}
+
+	// Verify remaining packet was sent
+	select {
+	case received := <-outPort.ReceiveChan():
+		if received.Packet.SourceID != 0 {
+			t.Fatalf("expected SourceID 0, got %d", received.Packet.SourceID)
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout receiving remaining packet")
 	}
 }

@@ -22,9 +22,8 @@ type Pipeline interface {
 	// GetProcessedPackets returns packets processed in the last Tick call.
 	// Returns an empty slice if no packets were processed or if not supported.
 	GetProcessedPackets() []packet.Packet
-	// InjectPackets injects packets into the pipeline's out_queue for transmission.
-	// These packets will be sent through OutPort in subsequent Tick calls,
-	// respecting bandwidth limits and downstream readiness.
+	// InjectPackets is deprecated. Pipeline no longer manages out_queue.
+	// Use OutputQueue component instead for packet transmission.
 	InjectPackets(cycle int, packets []packet.Packet) error
 }
 
@@ -41,7 +40,8 @@ func NewPipelinePacketProcessor(pipeline *FIFO) *PipelinePacketProcessor {
 	}
 }
 
-// ProcessPackets processes packets for Pipeline: receive from in_queue, process, and send to out_queue.
+// ProcessPackets processes packets for Pipeline: receive from in_queue and process up to Pick().
+// Data flow stops at Pick(), processed packets are stored for GetProcessedPackets().
 func (p *PipelinePacketProcessor) ProcessPackets(
 	receiveChan <-chan ahead_port.PacketWithCycle,
 	cycle int,
@@ -74,6 +74,7 @@ func (p *PipelinePacketProcessor) ProcessPackets(
 drainInQueue:
 
 	// Step 2: Drain packets from in_queue (using Pick method)
+	// Data flow stops here - processed packets are stored for GetProcessedPackets()
 	var processedPackets []packet.Packet
 	if p.pipeline.inQueue != nil {
 		// Pick all available packets from in_queue array (loop until no more packets)
@@ -93,66 +94,7 @@ drainInQueue:
 	// Store packets processed in this cycle for GetProcessedPackets()
 	p.pipeline.lastCyclePackets = processedPackets
 
-	// Step 4: Store processed packets directly in out_queue array
-	if p.pipeline.outQueue != nil {
-		for _, pkt := range processedPackets {
-			env := packet.PacketWithCycle{
-				Cycle:  cycle,
-				Packet: pkt,
-			}
-			// Store directly in out_queue array
-			slot := p.pipeline.outQueue.findFreeSlot()
-			if slot >= 0 {
-				p.pipeline.outQueue.arrayMu.Lock()
-				p.pipeline.outQueue.slots[slot] = env
-				p.pipeline.outQueue.freeBitmap[slot] = false
-				p.pipeline.outQueue.blockReasons[slot] = 0
-				p.pipeline.outQueue.arrayMu.Unlock()
-			}
-			// If no free slot, packet is dropped
-		}
-	}
-
-	// Step 5: Process out_queue to send packets to outPort (with bandwidth limit and ready check)
-	// Reference: link.go - if downstream not ready, just backpressure (don't Pick), packets stay in queue
-	if p.pipeline.outQueue != nil && p.pipeline.outPort != nil {
-		// Check if outPort is ready for current cycle (like link.go line 189)
-		if p.pipeline.outPort.Ready(cycle) {
-			// Pick up to outBandwidth packets and send them
-			pickedPackets := p.pipeline.outQueue.Pick()
-			for _, pkt := range pickedPackets {
-				env := ahead_port.PacketWithCycle{
-					Cycle:  cycle,
-					Packet: pkt.Packet,
-				}
-				select {
-				case p.pipeline.outPort.SendChan() <- env:
-					// Successfully sent
-				default:
-					// outPort channel is full, put back to out_queue
-					slot := p.pipeline.outQueue.findFreeSlot()
-					if slot >= 0 {
-						p.pipeline.outQueue.arrayMu.Lock()
-						p.pipeline.outQueue.slots[slot] = pkt
-						p.pipeline.outQueue.freeBitmap[slot] = false
-						p.pipeline.outQueue.blockReasons[slot] = 0
-						p.pipeline.outQueue.arrayMu.Unlock()
-					}
-				}
-			}
-		}
-		// If outPort not ready, do nothing (backpressure - packets stay in out_queue, like link.go line 197-199)
-	}
-
-	// Step 6: Set Done for output port
-	if p.pipeline.outPort != nil {
-		currentDone := p.pipeline.outPort.GetDone()
-		if currentDone < cycle {
-			p.pipeline.outPort.SetDone(cycle)
-		}
-	}
-
-	// Step 7: Notify upstream that we are ready for next cycle
+	// Step 4: Notify upstream that we are ready for next cycle
 	updateUpstreamReady(cycle+1, true)
 }
 
@@ -160,13 +102,12 @@ drainInQueue:
 type FIFO struct {
 	id               int
 	inPort           ahead_port.AheadPort // Input port from upstream Link
-	outPort          ahead_port.AheadPort // Output port to downstream Link
+	outPort          ahead_port.AheadPort // Output port to downstream Link (deprecated, kept for interface compatibility)
 	processor        *ahead_port.CycleProcessor
 	packetProc       *PipelinePacketProcessor
 	processed        []packet.Packet
 	lastCyclePackets []packet.Packet // Packets processed in the last Tick call
 	inQueue          *Queue          // Internal in_queue
-	outQueue         *Queue          // Internal out_queue
 }
 
 // NewFIFO constructs a FIFO pipeline with the provided identifier.
@@ -179,11 +120,8 @@ func NewFIFO(id int, bufferSize int) *FIFO {
 	// Create input port
 	inPort := ahead_port.NewAheadPort(bufferSize)
 
-	// Create internal queues
+	// Create internal queue
 	inQueue := NewQueue(bufferSize, 1, 1, 1) // size, inBandwidth, outBandwidth, bitmapWidth
-	// outQueue outBandwidth is set to 1 to match typical Link bandwidth limits
-	// This ensures Pipeline doesn't send more packets than downstream Link can handle per cycle
-	outQueue := NewQueue(bufferSize, 1, 1, 1) // size, inBandwidth, outBandwidth, bitmapWidth
 
 	// Create pipeline instance
 	f := &FIFO{
@@ -192,7 +130,6 @@ func NewFIFO(id int, bufferSize int) *FIFO {
 		outPort:   nil,
 		processed: make([]packet.Packet, 0),
 		inQueue:   inQueue,
-		outQueue:  outQueue,
 	}
 
 	// Create packet processor
@@ -247,30 +184,10 @@ func (f *FIFO) SetOutPort(port ahead_port.AheadPort) {
 	f.outPort = port
 }
 
-// InjectPackets injects packets into the pipeline's out_queue for transmission.
-// Packets will be sent in the next Tick call, so the cycle parameter
-// should be set to cycle+1 to indicate when they should be transmitted.
+// InjectPackets is deprecated. Pipeline no longer manages out_queue.
+// Use OutputQueue component instead for packet transmission.
 func (f *FIFO) InjectPackets(cycle int, packets []packet.Packet) error {
-	if f.outQueue == nil {
-		return nil // No out queue, packets are dropped
-	}
-
-	for _, pkt := range packets {
-		// Set cycle to cycle+1 since these packets will be sent in the next Tick
-		env := packet.PacketWithCycle{
-			Cycle:  cycle + 1,
-			Packet: pkt,
-		}
-		// Find a free slot in out_queue
-		slot := f.outQueue.findFreeSlot()
-		if slot >= 0 {
-			f.outQueue.arrayMu.Lock()
-			f.outQueue.slots[slot] = env
-			f.outQueue.freeBitmap[slot] = false
-			f.outQueue.blockReasons[slot] = 0
-			f.outQueue.arrayMu.Unlock()
-		}
-		// If no free slot, packet is dropped (silently)
-	}
+	// Pipeline no longer manages out_queue, packets are dropped
+	// Use OutputQueue component for packet injection
 	return nil
 }
