@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
+	"github.com/Readm/flow_sim/internal/core/capability/cache"
+	"github.com/Readm/flow_sim/internal/core/capability/directory"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
@@ -38,8 +40,8 @@ type PingNode struct {
 // NewPingNode creates a new PingNode.
 func NewPingNode(id int, targetID int) *PingNode {
 	flow := pipeline.NewFIFO(id, 8)
-	nodeCtx := &simpleNodeCtx{}
-	txnMgr := transaction.NewTxnManager(id, nodeCtx)
+	caps := &simpleCapabilities{}
+	txnMgr := transaction.NewTxnManager(id, caps)
 
 	return &PingNode{
 		id:       id,
@@ -69,12 +71,12 @@ func (n *PingNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 					MessageID: 1,
 				},
 				TransactionID: txCtx.TxnID(),
-				Channel:        message.ChannelREQ, // Set channel type
-				Type:           MsgPing,
-				SourceNodeID:   n.id,
-				TargetNodeID:   n.targetID,
-				Payload:        "ping",
-				CreatedCycle:   cycle,
+				Channel:       dataflow.ChannelREQ, // Set channel type
+				Type:          MsgPing,
+				SourceNodeID:  n.id,
+				TargetNodeID:  n.targetID,
+				Payload:       "ping",
+				CreatedCycle:  cycle,
 			}
 
 			// Send ping
@@ -113,7 +115,7 @@ func (n *PingNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 	incomingMsgs := n.receiveMessages(cycle)
 
 	// Step 3: Process transactions with incoming messages
-	outgoingMsgs, err := n.txnMgr.Tick(cycle, incomingMsgs)
+	outgoingMsgs, _, err := n.txnMgr.Tick(cycle, incomingMsgs)
 	if err != nil {
 		return err
 	}
@@ -131,10 +133,9 @@ func (n *PingNode) receiveMessages(cycle uint64) []*message.Message {
 	for _, pkt := range processedPackets {
 		// Convert packet to message
 		msgType := n.parseMessageType(pkt.Payload)
-		// Determine channel based on message type (simple heuristic for ping/pong)
-		channel := message.ChannelREQ
-		if msgType == MsgPong {
-			channel = message.ChannelRSP
+		channel := pkt.Channel
+		if channel == "" {
+			channel = dataflow.ChannelREQ
 		}
 		msg := &message.Message{
 			ID:            pkt.MessageID,
@@ -167,6 +168,7 @@ func (n *PingNode) sendMessages(cycle uint64, msgs []*message.Message) {
 			SourceID:      msg.SourceNodeID,
 			TargetID:      msg.TargetNodeID,
 			Payload:       payload,
+			Channel:       msg.Channel,
 			TransactionID: msg.TransactionID,
 			MessageID:     msg.ID,
 		}
@@ -206,8 +208,8 @@ type PongNode struct {
 // NewPongNode creates a new PongNode.
 func NewPongNode(id int) *PongNode {
 	flow := pipeline.NewFIFO(id, 8)
-	nodeCtx := &simpleNodeCtx{}
-	txnMgr := transaction.NewTxnManager(id, nodeCtx)
+	caps := &simpleCapabilities{}
+	txnMgr := transaction.NewTxnManager(id, caps)
 
 	return &PongNode{
 		id:     id,
@@ -245,7 +247,7 @@ func (n *PongNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 					MessageID: len(pongReplies) + 1,
 				},
 				TransactionID: msg.TransactionID,
-				Channel:       message.ChannelRSP, // Set channel type for response
+				Channel:       dataflow.ChannelRSP, // Set channel type for response
 				Type:          MsgPong,
 				SourceNodeID:  n.id,
 				TargetNodeID:  msg.SourceNodeID,
@@ -257,7 +259,7 @@ func (n *PongNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 	}
 
 	// Step 4: Process transactions (for pong transaction if needed)
-	outgoingMsgs, err := n.txnMgr.Tick(cycle, incomingMsgs)
+	outgoingMsgs, _, err := n.txnMgr.Tick(cycle, incomingMsgs)
 	if err != nil {
 		return err
 	}
@@ -278,10 +280,9 @@ func (n *PongNode) receiveMessages(cycle uint64) []*message.Message {
 	for _, pkt := range processedPackets {
 		// Convert packet to message
 		msgType := n.parseMessageType(pkt.Payload)
-		// Determine channel based on message type (simple heuristic for ping/pong)
-		channel := message.ChannelREQ
-		if msgType == MsgPong {
-			channel = message.ChannelRSP
+		channel := pkt.Channel
+		if channel == "" {
+			channel = dataflow.ChannelREQ
 		}
 		msg := &message.Message{
 			ID:            pkt.MessageID,
@@ -314,6 +315,7 @@ func (n *PongNode) sendMessages(cycle uint64, msgs []*message.Message) {
 			SourceID:      msg.SourceNodeID,
 			TargetID:      msg.TargetNodeID,
 			Payload:       payload,
+			Channel:       msg.Channel,
 			TransactionID: msg.TransactionID,
 			MessageID:     msg.ID,
 		}
@@ -335,19 +337,15 @@ func (n *PongNode) parseMessageType(payload string) int {
 	return 0
 }
 
-// simpleNodeCtx is a simple implementation of NodeCtx for testing.
-type simpleNodeCtx struct{}
+// simpleCapabilities is a stub CapabilityProvider for tests.
+type simpleCapabilities struct{}
 
-func (c *simpleNodeCtx) GetCacheState(addr transaction.Addr) string {
-	return "Invalid"
-}
-
-func (c *simpleNodeCtx) ReadCache(addr transaction.Addr) []byte {
+func (c *simpleCapabilities) Cache() cache.Cache {
 	return nil
 }
 
-func (c *simpleNodeCtx) UpdateCache(addr transaction.Addr, state string, data []byte) {
-	// No-op for testing
+func (c *simpleCapabilities) Directory() directory.Directory {
+	return nil
 }
 
 // TestPingPongTransaction tests the basic ping/pong transaction flow.

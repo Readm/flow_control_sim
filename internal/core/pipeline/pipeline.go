@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
+	"github.com/Readm/flow_sim/internal/dataflow"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -9,6 +10,10 @@ import (
 // Concrete implementations can apply arbitrary policies while conforming to this API.
 type Pipeline interface {
 	ID() int
+	// Channel returns the channel type (REQ, RSP, DAT, SNP) that this pipeline handles.
+	Channel() dataflow.Channel
+	// SetChannel sets the channel type handled by this pipeline.
+	SetChannel(ch dataflow.Channel)
 	// Tick processes a single cycle, receiving packets from upstream and sending to downstream.
 	Tick(cycle int) error
 	// InPort returns the input AheadPort for receiving packets from upstream Link.
@@ -159,6 +164,7 @@ drainInQueue:
 // FIFO implements Pipeline by draining packets in the order they arrive using AheadPort.
 type FIFO struct {
 	id               int
+	channel          dataflow.Channel
 	inPort           ahead_port.AheadPort // Input port from upstream Link
 	outPort          ahead_port.AheadPort // Output port to downstream Link
 	processor        *ahead_port.CycleProcessor
@@ -188,6 +194,7 @@ func NewFIFO(id int, bufferSize int) *FIFO {
 	// Create pipeline instance
 	f := &FIFO{
 		id:        id,
+		channel:   dataflow.ChannelREQ,
 		inPort:    inPort,
 		outPort:   nil,
 		processed: make([]packet.Packet, 0),
@@ -208,6 +215,16 @@ func NewFIFO(id int, bufferSize int) *FIFO {
 // ID returns the node identifier that owns the pipeline.
 func (f *FIFO) ID() int {
 	return f.id
+}
+
+// Channel returns the channel type handled by this pipeline.
+func (f *FIFO) Channel() dataflow.Channel {
+	return f.channel
+}
+
+// SetChannel sets the channel type handled by this pipeline.
+func (f *FIFO) SetChannel(ch dataflow.Channel) {
+	f.channel = ch
 }
 
 // Tick processes a single cycle.

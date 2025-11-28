@@ -14,3 +14,14 @@ type MessageID struct {
 	MessageID int // Message ID within the node (monotonically increasing)
 }
 
+// Channel represents the physical or virtual channel type for message routing.
+// Different protocols may define their own channel types (e.g., CHI: REQ, RSP, DAT, SNP).
+type Channel string
+
+const (
+	// Generic channel types (can be extended by protocols)
+	ChannelREQ Channel = "REQ" // Request channel
+	ChannelRSP Channel = "RSP" // Response channel
+	ChannelDAT Channel = "DAT" // Data channel
+	ChannelSNP Channel = "SNP" // Snoop channel
+)

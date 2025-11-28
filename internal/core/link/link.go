@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
+	"github.com/Readm/flow_sim/internal/dataflow"
 )
 
 // LinkCycleProcessor is a custom cycle processor for Link that waits for Done(cycle-latency)
@@ -81,6 +82,7 @@ func (lcp *LinkCycleProcessor) sendPacket(pkt ahead_port.PacketWithCycle) {
 type Link struct {
 	sourceID          int
 	targetID          int
+	channel           dataflow.Channel
 	upstreamPort      ahead_port.AheadPort // Single upstream port (may be an aggregator)
 	downstreamPort    ahead_port.AheadPort // Single downstream port to target Pipeline
 	processor         *LinkCycleProcessor
@@ -228,6 +230,7 @@ func NewLink(sourceID int, targetID int, upstreamPort ahead_port.AheadPort, down
 	link := &Link{
 		sourceID:          sourceID,
 		targetID:          targetID,
+		channel:           dataflow.ChannelREQ,
 		upstreamPort:      upstreamPort,
 		downstreamPort:    downstreamPort,
 		latency:           latency,
@@ -257,6 +260,16 @@ func (l *Link) SourceID() int {
 // TargetID returns the ID of the downstream node.
 func (l *Link) TargetID() int {
 	return l.targetID
+}
+
+// Channel returns the channel type carried by this link.
+func (l *Link) Channel() dataflow.Channel {
+	return l.channel
+}
+
+// SetChannel sets the channel type carried by this link.
+func (l *Link) SetChannel(ch dataflow.Channel) {
+	l.channel = ch
 }
 
 // Latency returns the configured delay in cycles.
