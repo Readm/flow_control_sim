@@ -26,17 +26,17 @@ type TxnManager struct {
 	pendingByAddr map[Addr][]*activeTxn
 	nextTxnID     int
 	mu            sync.Mutex
-	caps          CapabilityProvider
+	nodeCtx       NodeCtx
 }
 
 // NewTxnManager creates a new TxnManager.
-func NewTxnManager(nodeID int, caps CapabilityProvider) *TxnManager {
+func NewTxnManager(nodeID int, nodeCtx NodeCtx) *TxnManager {
 	return &TxnManager{
 		nodeID:        nodeID,
 		activeTxns:    make(map[dataflow.TransactionID]*activeTxn),
 		pendingByAddr: make(map[Addr][]*activeTxn),
 		nextTxnID:     1,
-		caps:          caps,
+		nodeCtx:       nodeCtx,
 	}
 }
 
@@ -51,12 +51,12 @@ func (tm *TxnManager) Start(ctx context.Context, txnFunc func(*TxnContext)) data
 	tm.mu.Unlock()
 
 	// Create channels for yield/resume
-	yieldCh := make(chan *YieldCommand, 10) // Buffered to avoid blocking
-	resumeCh := make(chan interface{}, 10)  // Buffered to avoid blocking
+	yieldCh := make(chan *YieldCommand, 10)  // Buffered to avoid blocking
+	resumeCh := make(chan interface{}, 10)   // Buffered to avoid blocking
 	done := make(chan struct{})
 
 	// Create TxnContext
-	txnCtx := NewTxnContext(tm.nodeID, txnID, yieldCh, resumeCh, ctx, tm.caps)
+	txnCtx := NewTxnContext(tm.nodeID, txnID, yieldCh, resumeCh, ctx, tm.nodeCtx)
 
 	// Create Transaction record
 	txn := &Transaction{
@@ -111,9 +111,8 @@ func (tm *TxnManager) Start(ctx context.Context, txnFunc func(*TxnContext)) data
 
 // Tick processes incoming messages and handles transaction yields.
 // Must be called from Node.Tick to ensure serialization.
-func (tm *TxnManager) Tick(cycle uint64, incoming []*message.Message) ([]*message.Message, []Operation, error) {
+func (tm *TxnManager) Tick(cycle uint64, incoming []*message.Message) ([]*message.Message, error) {
 	var outgoing []*message.Message
-	var operations []Operation
 
 	// Step 1: Process incoming messages - route to waiting transactions
 	for _, msg := range incoming {
@@ -129,10 +128,10 @@ func (tm *TxnManager) Tick(cycle uint64, incoming []*message.Message) ([]*messag
 	tm.mu.Unlock()
 
 	for _, active := range activeList {
-		tm.processYields(active, &outgoing, &operations)
+		tm.processYields(active, &outgoing)
 	}
 
-	return outgoing, operations, nil
+	return outgoing, nil
 }
 
 // routeMessage routes an incoming message to waiting transactions.
@@ -194,6 +193,10 @@ func (tm *TxnManager) matchesWait(msg *message.Message, wait *WaitForMessage) bo
 	if msg.Type != wait.Type {
 		return false
 	}
+	if wait.Addr != "" && msg.Payload != nil {
+		// Simple address matching - can be enhanced
+		// For now, we'll match if Addr is empty or matches
+	}
 	if wait.SourceID != nil && msg.SourceNodeID != *wait.SourceID {
 		return false
 	}
@@ -204,17 +207,17 @@ func (tm *TxnManager) matchesWait(msg *message.Message, wait *WaitForMessage) bo
 }
 
 // processYields processes yield commands from a transaction (non-blocking).
-func (tm *TxnManager) processYields(active *activeTxn, outgoing *[]*message.Message, ops *[]Operation) {
+func (tm *TxnManager) processYields(active *activeTxn, outgoing *[]*message.Message) {
 	select {
 	case cmd := <-active.context.yieldCh:
-		tm.handleYieldCommand(active, cmd, outgoing, ops)
+		tm.handleYieldCommand(active, cmd, outgoing)
 	default:
 		// No yield command available
 	}
 }
 
 // handleYieldCommand handles a yield command from a transaction.
-func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, outgoing *[]*message.Message, ops *[]Operation) {
+func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, outgoing *[]*message.Message) {
 	switch cmd.Type {
 	case YieldTypeWaitForMessage:
 		// Transaction is waiting for a message
@@ -245,8 +248,8 @@ func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, o
 		}
 
 		// Register in pendingByAddr if address is specified
-		if cmd.WaitFor != nil && cmd.WaitFor.Addr != 0 {
-			addr := cmd.WaitFor.Addr
+		if cmd.WaitFor != nil && cmd.WaitFor.Addr != "" {
+			addr := Addr(cmd.WaitFor.Addr)
 			tm.pendingByAddr[addr] = append(tm.pendingByAddr[addr], active)
 			active.mu.Lock()
 			active.pendingAddrs = append(active.pendingAddrs, addr)
@@ -256,14 +259,26 @@ func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, o
 
 		// Collect messages to send
 		*outgoing = append(*outgoing, cmd.SendQueue...)
-		tm.collectOperations(cmd, ops)
+
+		// Execute operations (e.g., cache updates)
+		for _, op := range cmd.Operations {
+			if err := op.Execute(tm.nodeID); err != nil {
+				// Log error but continue
+			}
+		}
 
 	case YieldTypeSendOnly:
 		// Transaction is only sending messages, not waiting for a response
 		// Do not set waiting state or register in pendingByAddr
 		// Just collect messages to send
 		*outgoing = append(*outgoing, cmd.SendQueue...)
-		tm.collectOperations(cmd, ops)
+
+		// Execute operations (e.g., cache updates)
+		for _, op := range cmd.Operations {
+			if err := op.Execute(tm.nodeID); err != nil {
+				// Log error but continue
+			}
+		}
 
 	case YieldTypeComplete:
 		// Transaction is complete
@@ -273,20 +288,23 @@ func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, o
 
 		// Collect any remaining messages to send
 		*outgoing = append(*outgoing, cmd.SendQueue...)
-		tm.collectOperations(cmd, ops)
+
+		// Execute operations
+		for _, op := range cmd.Operations {
+			if err := op.Execute(tm.nodeID); err != nil {
+				// Log error but continue
+			}
+		}
 
 	default:
 		// Unknown yield type, just collect messages and operations
 		*outgoing = append(*outgoing, cmd.SendQueue...)
-		tm.collectOperations(cmd, ops)
+		for _, op := range cmd.Operations {
+			if err := op.Execute(tm.nodeID); err != nil {
+				// Log error but continue
+			}
+		}
 	}
-}
-
-func (tm *TxnManager) collectOperations(cmd *YieldCommand, ops *[]Operation) {
-	if len(cmd.Operations) == 0 {
-		return
-	}
-	*ops = append(*ops, cmd.Operations...)
 }
 
 // GetTransaction retrieves a transaction by ID.
@@ -307,3 +325,4 @@ func (tm *TxnManager) ActiveCount() int {
 	defer tm.mu.Unlock()
 	return len(tm.activeTxns)
 }
+

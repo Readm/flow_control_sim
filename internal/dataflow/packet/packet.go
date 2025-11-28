@@ -11,11 +11,9 @@ type Packet struct {
 	SourceID      int
 	TargetID      int
 	Payload       string
-	Channel       dataflow.Channel
-	Type          int
 	TransactionID dataflow.TransactionID // Associated Transaction ID
 	MessageID     dataflow.MessageID     // Associated Message ID
-	Sequence      int                    // Sequence number in Message (for multi-packet messages)
+	Sequence      int                   // Sequence number in Message (for multi-packet messages)
 }
 
 // PacketWithCycle associates a packet with the cycle in which it becomes visible to

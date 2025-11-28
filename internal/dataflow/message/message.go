@@ -13,11 +13,23 @@ type ProcessedInfo struct {
 	Info      string // Additional information about the processing
 }
 
+// Channel represents the physical or virtual channel type for message routing.
+// Different protocols may define their own channel types (e.g., CHI: REQ, RSP, DAT, SNP).
+type Channel string
+
+const (
+	// Generic channel types (can be extended by protocols)
+	ChannelREQ Channel = "REQ" // Request channel
+	ChannelRSP Channel = "RSP" // Response channel
+	ChannelDAT Channel = "DAT" // Data channel
+	ChannelSNP Channel = "SNP" // Snoop channel
+)
+
 // Message represents a message unit in a transaction.
 type Message struct {
 	ID            dataflow.MessageID     // Unique identifier
 	TransactionID dataflow.TransactionID // Belongs to Transaction
-	Channel       dataflow.Channel       // Channel type (REQ, RSP, DAT, SNP) - explicit channel differentiation
+	Channel       Channel                // Channel type (REQ, RSP, DAT, SNP) - explicit channel differentiation
 	Type          int                    // Message type (protocol-specific opcode)
 	SourceNodeID  int                    // Source node
 	TargetNodeID  int                    // Target node

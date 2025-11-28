@@ -5,8 +5,6 @@ import (
 	"errors"
 	"time"
 
-	capcache "github.com/Readm/flow_sim/internal/core/capability/cache"
-	capdir "github.com/Readm/flow_sim/internal/core/capability/directory"
 	"github.com/Readm/flow_sim/internal/dataflow"
 	"github.com/Readm/flow_sim/internal/dataflow/message"
 )
@@ -18,20 +16,18 @@ type TxnContext struct {
 	ctx      context.Context
 	nodeID   int
 	txnID    dataflow.TransactionID
-	caps     CapabilityProvider
-
-	pendingOps []Operation
+	nodeCtx  NodeCtx
 }
 
 // NewTxnContext creates a new TxnContext.
-func NewTxnContext(nodeID int, txnID dataflow.TransactionID, yieldCh chan *YieldCommand, resumeCh chan interface{}, ctx context.Context, caps CapabilityProvider) *TxnContext {
+func NewTxnContext(nodeID int, txnID dataflow.TransactionID, yieldCh chan *YieldCommand, resumeCh chan interface{}, ctx context.Context, nodeCtx NodeCtx) *TxnContext {
 	return &TxnContext{
 		yieldCh:  yieldCh,
 		resumeCh: resumeCh,
 		ctx:      ctx,
 		nodeID:   nodeID,
 		txnID:    txnID,
-		caps:     caps,
+		nodeCtx:  nodeCtx,
 	}
 }
 
@@ -40,8 +36,6 @@ func (tc *TxnContext) Yield(cmd *YieldCommand) (interface{}, error) {
 	if cmd == nil {
 		return nil, errors.New("yield command cannot be nil")
 	}
-
-	tc.attachPendingOperations(cmd)
 
 	// Send yield command (non-blocking, should have buffer)
 	select {
@@ -89,7 +83,6 @@ func (tc *TxnContext) Send(msg *message.Message) error {
 		Type:      YieldTypeSendOnly,
 		SendQueue: []*message.Message{msg},
 	}
-	tc.attachPendingOperations(cmd)
 
 	select {
 	case tc.yieldCh <- cmd:
@@ -101,94 +94,27 @@ func (tc *TxnContext) Send(msg *message.Message) error {
 	}
 }
 
-// GetCacheState gets the cache state for an address via capability provider.
-func (tc *TxnContext) GetCacheState(addr Addr) capcache.State {
-	if tc.caps == nil || tc.caps.Cache() == nil {
-		return capcache.StateInvalid
+// GetCacheState gets the cache state for an address (via NodeCtx).
+func (tc *TxnContext) GetCacheState(addr Addr) string {
+	if tc.nodeCtx != nil {
+		return tc.nodeCtx.GetCacheState(addr)
 	}
-	return tc.caps.Cache().GetState(uint64(addr))
+	return "Invalid" // Default state
 }
 
-// ReadCache reads data from cache via capability provider.
+// ReadCache reads data from cache (via NodeCtx).
 func (tc *TxnContext) ReadCache(addr Addr) []byte {
-	if tc.caps == nil || tc.caps.Cache() == nil {
-		return nil
+	if tc.nodeCtx != nil {
+		return tc.nodeCtx.ReadCache(addr)
 	}
-	return tc.caps.Cache().GetData(uint64(addr))
+	return nil
 }
 
-// UpdateCache schedules a cache update operation.
-func (tc *TxnContext) UpdateCache(addr Addr, state capcache.State, data []byte) {
-	op := &CacheOperation{
-		Addr:     addr,
-		NewState: state,
+// UpdateCache updates cache state (via NodeCtx).
+func (tc *TxnContext) UpdateCache(addr Addr, state string, data []byte) {
+	if tc.nodeCtx != nil {
+		tc.nodeCtx.UpdateCache(addr, state, data)
 	}
-	if data != nil {
-		copyData := make([]byte, len(data))
-		copy(copyData, data)
-		op.Data = copyData
-	}
-	tc.pendingOps = append(tc.pendingOps, op)
-}
-
-// InvalidateCache schedules a cache invalidation.
-func (tc *TxnContext) InvalidateCache(addr Addr) {
-	tc.pendingOps = append(tc.pendingOps, &CacheOperation{
-		Addr:       addr,
-		Invalidate: true,
-	})
-}
-
-// GetDirectoryState returns the directory state for an address.
-func (tc *TxnContext) GetDirectoryState(addr Addr) capdir.State {
-	if tc.caps == nil || tc.caps.Directory() == nil {
-		return capdir.StateNotPresent
-	}
-	return tc.caps.Directory().GetState(uint64(addr))
-}
-
-// GetDirectorySharers returns the list of sharers for an address.
-func (tc *TxnContext) GetDirectorySharers(addr Addr) []int {
-	if tc.caps == nil || tc.caps.Directory() == nil {
-		return nil
-	}
-	return tc.caps.Directory().GetSharers(uint64(addr))
-}
-
-// AddDirectorySharer schedules adding a sharer.
-func (tc *TxnContext) AddDirectorySharer(addr Addr, nodeID int) {
-	tc.pendingOps = append(tc.pendingOps, &DirectoryOperation{
-		Addr:   addr,
-		Type:   DirectoryOpAddSharer,
-		Sharer: nodeID,
-	})
-}
-
-// RemoveDirectorySharer schedules removing a sharer.
-func (tc *TxnContext) RemoveDirectorySharer(addr Addr, nodeID int) {
-	tc.pendingOps = append(tc.pendingOps, &DirectoryOperation{
-		Addr:   addr,
-		Type:   DirectoryOpRemoveSharer,
-		Sharer: nodeID,
-	})
-}
-
-// SetDirectoryState schedules a directory state update.
-func (tc *TxnContext) SetDirectoryState(addr Addr, state capdir.State) {
-	tc.pendingOps = append(tc.pendingOps, &DirectoryOperation{
-		Addr:  addr,
-		Type:  DirectoryOpSetState,
-		State: state,
-	})
-}
-
-// SetDirectoryOwner schedules setting the directory owner.
-func (tc *TxnContext) SetDirectoryOwner(addr Addr, owner int) {
-	tc.pendingOps = append(tc.pendingOps, &DirectoryOperation{
-		Addr:  addr,
-		Type:  DirectoryOpSetOwner,
-		Owner: owner,
-	})
 }
 
 // NodeID returns the node ID.
@@ -207,7 +133,6 @@ func (tc *TxnContext) Complete(result interface{}) error {
 		Type: YieldTypeComplete,
 	}
 	// Send complete command
-	tc.attachPendingOperations(cmd)
 	select {
 	case tc.yieldCh <- cmd:
 		// Optionally send result via resumeCh if needed
@@ -225,10 +150,3 @@ func (tc *TxnContext) Complete(result interface{}) error {
 	}
 }
 
-func (tc *TxnContext) attachPendingOperations(cmd *YieldCommand) {
-	if len(tc.pendingOps) == 0 {
-		return
-	}
-	cmd.Operations = append(cmd.Operations, tc.pendingOps...)
-	tc.pendingOps = nil
-}
