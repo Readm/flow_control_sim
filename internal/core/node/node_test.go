@@ -186,6 +186,12 @@ func (m *mockInputQueue) IsFull() bool  { return false }
 type mockOutputQueue struct {
 	tickCount int
 	tickErr   error
+	injected  []packet.Packet
+}
+
+func (m *mockOutputQueue) InjectPackets(_ int, packets []packet.Packet) error {
+	m.injected = append(m.injected, packets...)
+	return nil
 }
 
 func (m *mockOutputQueue) Tick(int) error {
@@ -200,5 +206,3 @@ func (m *mockOutputQueue) IsFull() bool  { return false }
 type fakeCache struct{ cache.Cache }
 
 type fakeDirectory struct{ directory.Directory }
-
-

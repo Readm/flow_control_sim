@@ -29,6 +29,7 @@ type OutputQueue interface {
 	Length() int
 	Capacity() int
 	IsFull() bool
+	InjectPackets(cycle int, packets []packet.Packet) error
 }
 
 // Node is a schedulable processing element that aggregates multiple InputQueues,
