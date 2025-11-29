@@ -13,7 +13,8 @@ type Packet struct {
 	Payload       string
 	TransactionID dataflow.TransactionID // Associated Transaction ID
 	MessageID     dataflow.MessageID     // Associated Message ID
-	Sequence      int                   // Sequence number in Message (for multi-packet messages)
+	Sequence      int                    // Sequence number in Message (for multi-packet messages)
+	Type          int                    // Logical packet type identifier
 }
 
 // PacketWithCycle associates a packet with the cycle in which it becomes visible to

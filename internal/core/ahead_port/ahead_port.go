@@ -67,4 +67,10 @@ type AheadPort interface {
 	// upstream calls SetDone with a value >= targetCycle.
 	// Returns immediately if Done >= targetCycle (no blocking needed).
 	WaitForDone(targetCycle int)
+
+	// SetPacketTypes configures the packet type identifiers (logical categories)
+	// that this port is expected to handle.
+	SetPacketTypes(types []int)
+	// PacketTypes returns the configured packet type identifiers for this port.
+	PacketTypes() []int
 }

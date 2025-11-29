@@ -33,7 +33,7 @@ type FanoutPort struct {
 	upstreamPort    AheadPort
 	downstreamPorts []AheadPort
 	router          RouterFunc
-	topology       interface{}
+	topology        interface{}
 }
 
 // NewFanoutPort creates a new FanoutPort.
@@ -162,6 +162,19 @@ func (f *FanoutPort) AllReadyNonBlocking(cycle int) (ready bool, configured bool
 // WaitForDone blocks until upstream's Done >= targetCycle.
 func (f *FanoutPort) WaitForDone(targetCycle int) {
 	f.upstreamPort.WaitForDone(targetCycle)
+}
+
+// SetPacketTypes configures packet types on upstream and downstream ports.
+func (f *FanoutPort) SetPacketTypes(types []int) {
+	f.upstreamPort.SetPacketTypes(types)
+	for _, port := range f.downstreamPorts {
+		port.SetPacketTypes(types)
+	}
+}
+
+// PacketTypes returns the upstream configuration.
+func (f *FanoutPort) PacketTypes() []int {
+	return f.upstreamPort.PacketTypes()
 }
 
 // SetTopology sets topology information for the router.

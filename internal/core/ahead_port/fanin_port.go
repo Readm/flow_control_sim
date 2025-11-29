@@ -82,6 +82,21 @@ func (m *FaninPort) WaitForDone(targetCycle int) {
 	}
 }
 
+// SetPacketTypes configures packet types for all upstream ports.
+func (m *FaninPort) SetPacketTypes(types []int) {
+	for _, port := range m.upstreamPorts {
+		port.SetPacketTypes(types)
+	}
+}
+
+// PacketTypes returns the first upstream port's configuration (if any).
+func (m *FaninPort) PacketTypes() []int {
+	if len(m.upstreamPorts) == 0 {
+		return nil
+	}
+	return m.upstreamPorts[0].PacketTypes()
+}
+
 func (m *FaninPort) UpdateReady(cycle int, ready bool) {
 	for _, port := range m.upstreamPorts {
 		if impl, ok := port.(*SinglePort); ok {

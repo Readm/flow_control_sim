@@ -2,346 +2,203 @@ package node
 
 import (
 	"context"
-	"fmt"
-	"sync"
+	"errors"
 	"testing"
-	"time"
 
-	"github.com/Readm/flow_sim/internal/core/ahead_port"
-	"github.com/Readm/flow_sim/internal/core/link"
-	"github.com/Readm/flow_sim/internal/core/pipeline"
+	"github.com/Readm/flow_sim/internal/core/capability/cache"
+	"github.com/Readm/flow_sim/internal/core/capability/directory"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// multiFlowNode implements Node with multiple flows that can execute serially or in parallel.
-type multiFlowNode struct {
-	id       int
-	flows    []pipeline.Pipeline
-	parallel bool
-}
-
-func newMultiFlowNode(id int, flowCount int, parallel bool, mailboxSize int, inQueueCapacity int, outQueueCapacity int) *multiFlowNode {
-	flows := make([]pipeline.Pipeline, flowCount)
-	for i := 0; i < flowCount; i++ {
-		flows[i] = pipeline.NewFIFO(id, mailboxSize)
-	}
-	return &multiFlowNode{
-		id:       id,
-		flows:    flows,
-		parallel: parallel,
-	}
-}
-
-func (n *multiFlowNode) ID() int {
-	return n.id
-}
-
-func (n *multiFlowNode) Flows() []pipeline.Pipeline {
-	return n.flows
-}
-
-func (n *multiFlowNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
-	if n.parallel {
-		var wg sync.WaitGroup
-		errCh := make(chan error, len(n.flows))
-		for _, f := range n.flows {
-			wg.Add(1)
-			go func(fl pipeline.Pipeline) {
-				defer wg.Done()
-				if err := fl.Tick(int(cycle)); err != nil {
-					select {
-					case errCh <- err:
-					default:
-					}
-				}
-			}(f)
-		}
-		wg.Wait()
-		close(errCh)
-		for err := range errCh {
-			if err != nil {
-				return err
-			}
-		}
-	} else {
-		for _, f := range n.flows {
-			if err := f.Tick(int(cycle)); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// Run executes the requested number of cycles, calling Tick for each cycle.
-func (n *multiFlowNode) Run(cycles uint64) error {
-	ctx := context.Background()
-	for i := uint64(0); i < cycles; i++ {
-		if err := n.Tick(ctx, i, 0); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// TestNodeWithSingleFlow tests that a Node can have at least one Flow.
-func TestNodeWithSingleFlow(t *testing.T) {
+func TestNodeCollectsPacketsAndUpdatesBuffer(t *testing.T) {
 	t.Parallel()
 
-	node := newMultiFlowNode(1, 1, false, 8, 0, 0)
-	if len(node.Flows()) != 1 {
-		t.Fatalf("expected 1 flow, got %d", len(node.Flows()))
+	iq1 := &mockInputQueue{
+		picks: [][]packet.Packet{
+			{{Payload: "a"}, {Payload: "b"}},
+		},
+	}
+	iq2 := &mockInputQueue{
+		picks: [][]packet.Packet{
+			{{Payload: "c"}},
+		},
+	}
+	oq := &mockOutputQueue{}
+
+	n := New(10)
+	if err := n.AddInputQueue(iq1); err != nil {
+		t.Fatalf("AddInputQueue: %v", err)
+	}
+	if err := n.AddInputQueue(iq2); err != nil {
+		t.Fatalf("AddInputQueue: %v", err)
+	}
+	if err := n.AddOutputQueue(oq); err != nil {
+		t.Fatalf("AddOutputQueue: %v", err)
 	}
 
-	// Create a link and send a packet using new interface
-	flow0 := node.Flows()[0]
-	outPort := ahead_port.NewAheadPort(8)
-	flow0.SetOutPort(outPort)
-	inPort := flow0.InPort()
-
-	link := link.NewLink(0, 1, outPort, inPort, 1, 1)
-	pkt := packet.Packet{
-		SourceID: 0,
-		TargetID: 1,
-		Payload:  "test",
+	if err := n.Tick(context.Background(), 1, 0); err != nil {
+		t.Fatalf("Tick: %v", err)
 	}
 
-	// Initialize upstream Done for flow0 (no upstream, so set to 0)
-	flow0.InPort().SetDone(-1)
-
-	// Initialize downstream ready state
-	if inPortImpl, ok := inPort.(*ahead_port.SinglePort); ok {
-		inPortImpl.SetReadyUntil(10)
+	buf := n.ProcessBuffer()
+	if len(buf) != 3 {
+		t.Fatalf("expected 3 packets in buffer, got %d", len(buf))
 	}
-	outPort.SetReadyUntil(10)
+	want := []string{"a", "b", "c"}
+	for i, pkt := range buf {
+		if string(pkt.Payload) != want[i] {
+			t.Fatalf("buffer[%d] = %s, want %s", i, pkt.Payload, want[i])
+		}
+	}
 
-	// Send packet through port
-	env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
-	outPort.SendChan() <- env
-	outPort.SetDone(1)
-
-	// Process cycles
-	flow0.Tick(0)
-	link.Tick(0)
-	link.Tick(1)
-	flow0.InPort().SetDone(1)
-	flow0.Tick(1)
-
-	// Verify packet was processed
-	if flow0.ProcessedCount() != 1 {
-		t.Fatalf("expected 1 processed packet, got %d", flow0.ProcessedCount())
+	if iq1.tickCount != 1 || iq2.tickCount != 1 {
+		t.Fatalf("input queues not ticked: %d %d", iq1.tickCount, iq2.tickCount)
+	}
+	if oq.tickCount != 1 {
+		t.Fatalf("output queue not ticked: %d", oq.tickCount)
 	}
 }
 
-// TestNodeWithMultipleFlowsSerial tests that multiple flows execute serially.
-func TestNodeWithMultipleFlowsSerial(t *testing.T) {
-	t.Skip("暂时跳过")
+func TestNodeProcessHookCanMutateBuffer(t *testing.T) {
 	t.Parallel()
 
-	node := newMultiFlowNode(1, 3, false, 8, 0, 0)
-	if len(node.Flows()) != 3 {
-		t.Fatalf("expected 3 flows, got %d", len(node.Flows()))
+	iq := &mockInputQueue{
+		picks: [][]packet.Packet{
+			{{Payload: "payload"}, {Payload: "other"}},
+		},
 	}
 
-	// Create links for each flow using new interface
-	links := make([]*link.Link, 3)
-	for i := 0; i < 3; i++ {
-		flow := node.Flows()[i]
-		outPort := ahead_port.NewAheadPort(8)
-		flow.SetOutPort(outPort)
-		inPort := flow.InPort()
-
-		links[i] = link.NewLink(0, flow.ID(), outPort, inPort, 1, 1)
-
-		// Initialize upstream Done for flow (no upstream, so set to 0)
-		flow.InPort().SetDone(-1)
-
-		// Initialize downstream ready state
-		if inPortImpl, ok := inPort.(*ahead_port.SinglePort); ok {
-			inPortImpl.SetReadyUntil(10)
-		}
-
-		// Send packet through port
-		pkt := packet.Packet{
-			SourceID: 0,
-			TargetID: 1,
-			Payload:  "test",
-		}
-		env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
-		outPort.SendChan() <- env
-		outPort.SetDone(1)
+	n := New(5)
+	if err := n.AddInputQueue(iq); err != nil {
+		t.Fatalf("AddInputQueue: %v", err)
 	}
 
-	// Process cycles
-	for i := 0; i < 3; i++ {
-		node.Flows()[i].Tick(0)
-		links[i].Tick(0)
-		links[i].Tick(1)
-		node.Flows()[i].Tick(1)
+	n.SetProcessHook(func(_ context.Context, _ uint64, buf []packet.Packet) ([]packet.Packet, error) {
+		return []packet.Packet{{Payload: "hooked"}}, nil
+	})
+
+	if err := n.Tick(context.Background(), 2, 0); err != nil {
+		t.Fatalf("Tick: %v", err)
 	}
 
-	// Verify all flows processed packets
-	for i, f := range node.Flows() {
-		if f.ProcessedCount() != 1 {
-			t.Fatalf("flow %d: expected 1 processed packet, got %d", i, f.ProcessedCount())
-		}
+	buf := n.ProcessBuffer()
+	if len(buf) != 1 || string(buf[0].Payload) != "hooked" {
+		t.Fatalf("unexpected buffer after hook: %#v", buf)
 	}
 }
 
-// TestNodeWithMultipleFlowsParallel tests that multiple flows execute in parallel.
-func TestNodeWithMultipleFlowsParallel(t *testing.T) {
-	t.Skip("暂时跳过")
+func TestNodeProcessHookErrorStopsTick(t *testing.T) {
 	t.Parallel()
 
-	node := newMultiFlowNode(1, 3, true, 8, 0, 0)
+	n := New(3)
+	errHook := errors.New("boom")
+	n.SetProcessHook(func(_ context.Context, _ uint64, _ []packet.Packet) ([]packet.Packet, error) {
+		return nil, errHook
+	})
 
-	// Create links for each flow using new interface
-	links := make([]*link.Link, 3)
-	for i := 0; i < 3; i++ {
-		flow := node.Flows()[i]
-		outPort := ahead_port.NewAheadPort(8)
-		flow.SetOutPort(outPort)
-		inPort := flow.InPort()
-
-		links[i] = link.NewLink(0, flow.ID(), outPort, inPort, 1, 1)
-
-		// Initialize upstream Done for flow (no upstream, so set to 0)
-		flow.InPort().SetDone(-1)
-
-		// Initialize downstream ready state
-		if inPortImpl, ok := inPort.(*ahead_port.SinglePort); ok {
-			inPortImpl.SetReadyUntil(10)
-		}
-
-		// Send packet through port
-		pkt := packet.Packet{
-			SourceID: 0,
-			TargetID: 1,
-			Payload:  "test",
-		}
-		env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
-		outPort.SendChan() <- env
-		outPort.SetDone(1)
-	}
-
-	// Process cycles
-	start := time.Now()
-	for i := 0; i < 3; i++ {
-		node.Flows()[i].Tick(0)
-		links[i].Tick(0)
-		links[i].Tick(1)
-		node.Flows()[i].Tick(1)
-	}
-	duration := time.Since(start)
-
-	// Verify all flows processed packets
-	for i, f := range node.Flows() {
-		if f.ProcessedCount() != 1 {
-			t.Fatalf("flow %d: expected 1 processed packet, got %d", i, f.ProcessedCount())
-		}
-	}
-
-	// Parallel execution should be fast (no significant delay)
-	if duration > 100*time.Millisecond {
-		t.Logf("parallel execution took %v, which seems slow", duration)
+	if err := n.Tick(context.Background(), 0, 0); !errors.Is(err, errHook) {
+		t.Fatalf("expected hook error %v, got %v", errHook, err)
 	}
 }
 
-// TestNodeRunMultipleCycles tests that Run executes the correct number of cycles.
-// Simplified: tests that multiple packets can be sent and processed across cycles.
-func TestNodeRunMultipleCycles(t *testing.T) {
-	t.Skip("暂时跳过")
+func TestNodeProcessBufferIsolatedFromCallers(t *testing.T) {
 	t.Parallel()
 
-	node := newMultiFlowNode(1, 2, false, 8, 0, 0)
-	flow0 := node.Flows()[0]
-	outPort := ahead_port.NewAheadPort(8)
-	flow0.SetOutPort(outPort)
-	inPort := flow0.InPort()
+	iq := &mockInputQueue{
+		picks: [][]packet.Packet{
+			{{Payload: "immutable"}},
+		},
+	}
+	n := New(7)
+	_ = n.AddInputQueue(iq)
 
-	link := link.NewLink(0, flow0.ID(), outPort, inPort, 1, 1)
-
-	// Router hook removed - packets are sent directly to outPort
-
-	// Initialize upstream Done for flow (no upstream, so set to 0)
-	flow0.InPort().SetDone(-1)
-
-	// Initialize downstream ready state
-	if inPortImpl, ok := inPort.(*ahead_port.SinglePort); ok {
-		inPortImpl.SetReadyUntil(10)
+	if err := n.Tick(context.Background(), 1, 0); err != nil {
+		t.Fatalf("Tick: %v", err)
 	}
 
-	// Send and process packets one by one across cycles
-	for cycle := 0; cycle < 5; cycle++ {
-		pkt := packet.Packet{
-			SourceID: 0,
-			TargetID: 1,
-			Payload:  fmt.Sprintf("test-%d", cycle),
-		}
-		env := ahead_port.PacketWithCycle{Cycle: cycle, Packet: pkt}
-		outPort.SendChan() <- env
-		outPort.SetDone(cycle)
+	buf := n.ProcessBuffer()
+	buf[0].Payload = "mutated"
 
-		// Process Flow cycle (sends packet to outPort)
-		flow0.InPort().SetDone(cycle)
-		flow0.Tick(cycle)
-
-		// Process Link cycle (receives from outPort)
-		link.Tick(cycle)
-
-		// Process Link next cycle (forwards to inPort with latency=1)
-		link.Tick(cycle + 1)
-
-		// Process Flow next cycle (receives and processes packet)
-		flow0.InPort().SetDone(cycle)
-		flow0.Tick(cycle + 1)
-	}
-
-	// Verify packets were processed (should have at least 5 packets processed)
-	processed := node.Flows()[0].ProcessedCount()
-	if processed < 5 {
-		t.Fatalf("expected at least 5 processed packets, got %d", processed)
+	buf2 := n.ProcessBuffer()
+	if string(buf2[0].Payload) != "immutable" {
+		t.Fatalf("ProcessBuffer should return copy, got %s", buf2[0].Payload)
 	}
 }
 
-// TestFlowEmitAndDrainDispatchQueue tests that packets can be emitted and routed to dispatch queues.
-func TestFlowEmitAndDrainDispatchQueue(t *testing.T) {
-	t.Skip("暂时跳过")
+func TestNodeCachesAndDirectories(t *testing.T) {
 	t.Parallel()
 
-	// Create flows with output ports and link
-	targetFlow := pipeline.NewFIFO(2, 8)
-	f := pipeline.NewFIFO(1, 8)
+	n := New(9)
+	mockCache := &fakeCache{}
+	mockDir := &fakeDirectory{}
 
-	// Create output port and link
-	outPort := ahead_port.NewAheadPort(8)
-	f.SetOutPort(outPort)
-	targetInPort := targetFlow.InPort()
-	link := link.NewLink(1, 2, outPort, targetInPort, 1, 10)
+	n.AddCache(mockCache)
+	n.AddDirectory(mockDir)
 
-	// Initialize upstream Done for flows
-	f.InPort().SetDone(-1)
-	targetFlow.InPort().SetDone(-1)
-
-	// Initialize downstream ready state
-	outPort.SetReadyUntil(10)
-	if targetInPortImpl, ok := targetInPort.(*ahead_port.SinglePort); ok {
-		targetInPortImpl.SetReadyUntil(10)
+	if len(n.Caches()) != 1 {
+		t.Fatalf("expected 1 cache")
 	}
-
-	// Inject packets
-	pkt1 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test1"}
-	pkt2 := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test2"}
-	f.InjectPackets(0, []packet.Packet{pkt1, pkt2})
-
-	// Process cycles to route packets
-	f.Tick(0)
-	link.Tick(0)
-	link.Tick(1)
-	targetFlow.Tick(1)
-
-	// Verify packets were processed
-	if targetFlow.ProcessedCount() != 2 {
-		t.Fatalf("expected 2 processed packets, got %d", targetFlow.ProcessedCount())
+	if len(n.Directories()) != 1 {
+		t.Fatalf("expected 1 directory")
 	}
 }
+
+func TestNodeTickPropagatesQueueErrors(t *testing.T) {
+	t.Parallel()
+
+	iqErr := errors.New("input error")
+	oqErr := errors.New("output error")
+
+	n := New(11)
+	_ = n.AddInputQueue(&mockInputQueue{tickErr: iqErr})
+	_ = n.AddOutputQueue(&mockOutputQueue{tickErr: oqErr})
+
+	err := n.Tick(context.Background(), 0, 0)
+	if !errors.Is(err, iqErr) && !errors.Is(err, oqErr) {
+		t.Fatalf("expected queue error, got %v", err)
+	}
+}
+
+type mockInputQueue struct {
+	picks     [][]packet.Packet
+	tickCount int
+	tickErr   error
+}
+
+func (m *mockInputQueue) Pick() []packet.Packet {
+	if len(m.picks) == 0 {
+		return nil
+	}
+	pkt := m.picks[0]
+	m.picks = m.picks[1:]
+	return pkt
+}
+
+func (m *mockInputQueue) Tick(int) error {
+	m.tickCount++
+	return m.tickErr
+}
+
+func (m *mockInputQueue) Length() int   { return len(m.picks) }
+func (m *mockInputQueue) Capacity() int { return 32 }
+func (m *mockInputQueue) IsFull() bool  { return false }
+
+type mockOutputQueue struct {
+	tickCount int
+	tickErr   error
+}
+
+func (m *mockOutputQueue) Tick(int) error {
+	m.tickCount++
+	return m.tickErr
+}
+
+func (m *mockOutputQueue) Length() int   { return 0 }
+func (m *mockOutputQueue) Capacity() int { return 0 }
+func (m *mockOutputQueue) IsFull() bool  { return false }
+
+type fakeCache struct{ cache.Cache }
+
+type fakeDirectory struct{ directory.Directory }
+
+

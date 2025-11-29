@@ -1,4 +1,4 @@
-package pipeline
+package queue
 
 import (
 	"fmt"
@@ -45,6 +45,9 @@ type Queue struct {
 	// Processor fields
 	processor  *QueueCycleProcessor
 	packetProc *QueuePacketProcessor
+
+	ptMu        sync.RWMutex
+	packetTypes []int
 }
 
 // QueueCycleProcessor is a custom cycle processor for Queue.
@@ -545,4 +548,25 @@ func (qp *Queue) Capacity() int {
 // IsFull checks if the queue is at capacity.
 func (qp *Queue) IsFull() bool {
 	return qp.Length() == qp.Capacity()
+}
+
+// SetPacketTypes configures accepted packet type identifiers for this port.
+func (qp *Queue) SetPacketTypes(types []int) {
+	qp.ptMu.Lock()
+	defer qp.ptMu.Unlock()
+	if len(types) == 0 {
+		qp.packetTypes = nil
+		return
+	}
+	qp.packetTypes = append([]int(nil), types...)
+}
+
+// PacketTypes returns the configured packet type identifiers.
+func (qp *Queue) PacketTypes() []int {
+	qp.ptMu.RLock()
+	defer qp.ptMu.RUnlock()
+	if len(qp.packetTypes) == 0 {
+		return nil
+	}
+	return append([]int(nil), qp.packetTypes...)
 }

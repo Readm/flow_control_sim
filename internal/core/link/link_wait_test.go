@@ -1,12 +1,9 @@
 package link
 
 import (
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/Readm/flow_sim/internal/core/ahead_port"
-	"github.com/Readm/flow_sim/internal/core/pipeline"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -15,83 +12,42 @@ import (
 func TestLinkWaitLogic(t *testing.T) {
 	t.Parallel()
 
-	flow0 := pipeline.NewFIFO(0, 8)
-	flow1 := pipeline.NewFIFO(1, 8)
+	upstream := newTestAheadPort(8)
+	downstream := newTestAheadPort(8)
 
-	flow0OutPort := ahead_port.NewAheadPort(8)
-	flow1InPort := flow1.InPort()
+	link := NewLink(0, 1, upstream, downstream, 3, 1)
 
-	flow0.SetOutPort(flow0OutPort)
+	sendPacket(t, upstream, 0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"})
+	upstream.SetDone(2)
 
-	// Create Link with latency=3
-	// At cycle 5, Link should wait for Done >= 5+1-3 = 3 (not 5)
-	link := NewLink(0, 1, flow0OutPort, flow1InPort, 3, 1)
-
-	// Initialize upstream Done for flow0
-	flow0.InPort().SetDone(-1)
-
-	// Initialize downstream ready state
-	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
-		flow1InPortImpl.SetReadyUntil(10)
+	start := time.Now()
+	if err := link.Tick(2); err != nil {
+		t.Fatalf("link.Tick failed: %v", err)
+	}
+	if time.Since(start) > 100*time.Millisecond {
+		t.Errorf("Link.Tick(2) should not block when upstream done >= -1")
 	}
 
-	// Initialize upstream ready state for flow0OutPort (allows Flow0 to send packets)
-	flow0OutPort.SetReadyUntil(10)
+	sendPacket(t, upstream, 1, packet.Packet{SourceID: 0, TargetID: 1, Payload: "wait"})
+	upstream.SetDone(0)
 
-	// Send packet at cycle 0
-	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
-	env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
-	flow0OutPort.SendChan() <- env
-
-	// Process flow0 to send the packet
-	flow0.Tick(0)
-	flow0.InPort().SetDone(1)
-	flow0.Tick(1)
-	flow0.InPort().SetDone(2)
-
-	// At cycle 2, Link should wait for Done >= 2+1-3 = 0
-	// Since flow0OutPort.Done is already 2, it should proceed immediately
-	var wg sync.WaitGroup
-	wg.Add(1)
-	startTime := time.Now()
+	done := make(chan struct{})
 	go func() {
-		defer wg.Done()
-		// This should not block because Done(2) >= 0
-		link.Tick(2)
-	}()
-	wg.Wait()
-	elapsed := time.Since(startTime)
-
-	// Should complete quickly (no blocking)
-	if elapsed > 100*time.Millisecond {
-		t.Errorf("Link.Tick(2) should not block when Done(2) >= 0, but took %v", elapsed)
-	}
-
-	// Now test that it waits correctly when upstream is behind
-	// At cycle 5, Link should wait for Done >= 5+1-3 = 3
-	// But flow0OutPort.Done is only 2, so it should wait
-	flow0.InPort().SetDone(3)
-	flow0.Tick(3)
-	// flow0OutPort.Done is now 3
-
-	// Test blocking behavior
-	done := make(chan bool, 1)
-	startTime = time.Now()
-	go func() {
-		// At cycle 4, Link should wait for Done >= 4+1-3 = 2
-		// flow0OutPort.Done is 3, so it should proceed immediately
-		link.Tick(4)
-		done <- true
+		link.Tick(5)
+		close(done)
 	}()
 
 	select {
 	case <-done:
-		elapsed = time.Since(startTime)
-		if elapsed > 100*time.Millisecond {
-			t.Errorf("Link.Tick(4) should not block when Done(3) >= 2, but took %v", elapsed)
-		}
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Link.Tick(4) should complete immediately when Done(3) >= 2")
+		t.Fatal("Link.Tick(5) returned before upstream Done satisfied")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	upstream.SetDone(5)
+	select {
+	case <-done:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("Link.Tick(5) did not finish after upstream Done updated")
 	}
 }
 
@@ -99,44 +55,21 @@ func TestLinkWaitLogic(t *testing.T) {
 func TestLinkWaitLogicBoundary(t *testing.T) {
 	t.Parallel()
 
-	flow0 := pipeline.NewFIFO(0, 8)
-	flow1 := pipeline.NewFIFO(1, 8)
+	upstream := newTestAheadPort(8)
+	downstream := newTestAheadPort(8)
 
-	flow0OutPort := ahead_port.NewAheadPort(8)
-	flow1InPort := flow1.InPort()
+	link := NewLink(0, 1, upstream, downstream, 5, 1)
 
-	flow0.SetOutPort(flow0OutPort)
-
-	// Create Link with latency=5
-	link := NewLink(0, 1, flow0OutPort, flow1InPort, 5, 1)
-
-	// Initialize
-	flow0.InPort().SetDone(-1)
-	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
-		flow1InPortImpl.SetReadyUntil(10)
-	}
-
-	// Initialize upstream ready state for flow0OutPort (allows Flow0 to send packets)
-	flow0OutPort.SetReadyUntil(10)
-
-	// Test case: cycle=2, latency=5
-	// targetWaitCycle = 2+1-5 = -2, should clamp to 0
-	// At cycle 2, Link should wait for Done >= 0
-	flow0.Tick(0)
-	flow0.InPort().SetDone(1)
-
-	done := make(chan bool, 1)
+	upstream.SetDone(1)
+	done := make(chan struct{})
 	go func() {
-		// Should not block because Done(1) >= 0
 		link.Tick(2)
-		done <- true
+		close(done)
 	}()
-
 	select {
 	case <-done:
-		// Success
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Link.Tick(2) should complete when Done(1) >= 0 (clamped)")
+		t.Fatal("Link.Tick(2) should complete when wait cycle is negative")
 	}
 }
 
@@ -144,58 +77,26 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	t.Parallel()
 
-	flow0 := pipeline.NewFIFO(0, 8)
-	flow1 := pipeline.NewFIFO(1, 8)
+	upstream := newTestAheadPort(8)
+	downstream := newTestAheadPort(8)
 
-	flow0OutPort := ahead_port.NewAheadPort(8)
-	flow1InPort := flow1.InPort()
+	link := NewLink(0, 1, upstream, downstream, 4, 1)
 
-	flow0.SetOutPort(flow0OutPort)
+	sendPacket(t, upstream, 0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "early"})
+	upstream.SetDone(2)
 
-	// Create Link with latency=4
-	// This means packets sent at cycle N will arrive at cycle N+4
-	link := NewLink(0, 1, flow0OutPort, flow1InPort, 4, 1)
+	if err := link.Tick(2); err != nil {
+		t.Fatalf("link.Tick failed: %v", err)
+	}
+	ensureNoAdditionalPackets(t, downstream)
 
-	// Initialize
-	flow0.InPort().SetDone(-1)
-	if flow1InPortImpl, ok := flow1InPort.(*ahead_port.SinglePort); ok {
-		flow1InPortImpl.SetReadyUntil(10)
+	upstream.SetDone(5)
+	if err := link.Tick(4); err != nil {
+		t.Fatalf("link.Tick failed at cycle 4: %v", err)
 	}
 
-	// Initialize upstream ready state for flow0OutPort (allows Flow0 to send packets)
-	flow0OutPort.SetReadyUntil(10)
-
-	// Send packet at cycle 0
-	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
-	env := ahead_port.PacketWithCycle{Cycle: 0, Packet: pkt}
-	flow0OutPort.SendChan() <- env
-
-	// Process flow0
-	flow0.Tick(0)
-	flow0.InPort().SetDone(1)
-	flow0.Tick(1)
-	flow0.InPort().SetDone(2)
-	flow0.Tick(2)
-	// flow0OutPort.Done is now 3
-
-	// At cycle 2, Link should wait for Done >= 2+1-4 = -1 (clamped to 0)
-	// Since flow0OutPort.Done is 3, it should proceed
-	// The packet will be stored in slot for cycle 0+4=4
-	link.Tick(2)
-
-	// Verify packet is in the buffer (not yet sent, as targetCycle is 4)
-	if flow1.ProcessedCount() != 0 {
-		t.Errorf("expected 0 processed packets at cycle 2 (packet arrives at cycle 4), got %d", flow1.ProcessedCount())
-	}
-
-	// Process cycle 4 - packet should be sent
-	flow0.InPort().SetDone(4)
-	flow0.Tick(4)
-	link.Tick(4)
-	flow1.Tick(4)
-
-	// Verify packet was received
-	if flow1.ProcessedCount() != 1 {
-		t.Errorf("expected 1 processed packet at cycle 4, got %d", flow1.ProcessedCount())
+	received := receivePackets(t, downstream, 1)
+	if received[0].Packet.Payload != "early" {
+		t.Fatalf("expected payload 'early', got %q", received[0].Packet.Payload)
 	}
 }

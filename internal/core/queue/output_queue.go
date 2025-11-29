@@ -1,4 +1,4 @@
-package pipeline
+package queue
 
 import (
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
@@ -9,9 +9,10 @@ import (
 // It wraps Queue and uses its Tick method directly, skipping the receive step
 // since packets are injected via InjectPackets.
 type OutputQueue struct {
-	queue        *Queue
-	outPort      ahead_port.AheadPort
+	queue         *Queue
+	outPort       ahead_port.AheadPort
 	emptyUpstream ahead_port.AheadPort // Empty upstream port (no packets from channel)
+	onPacketSent  func(packet.Packet)
 }
 
 // NewOutputQueue creates a new OutputQueue with the specified buffer size.
@@ -30,8 +31,8 @@ func NewOutputQueue(bufferSize int) *OutputQueue {
 	queue.SetUpstreamPort(emptyUpstream)
 
 	return &OutputQueue{
-		queue:        queue,
-		outPort:      nil,
+		queue:         queue,
+		outPort:       nil,
 		emptyUpstream: emptyUpstream,
 	}
 }
@@ -39,14 +40,33 @@ func NewOutputQueue(bufferSize int) *OutputQueue {
 // SetOutPort sets the output port for downstream transmission.
 func (oq *OutputQueue) SetOutPort(port ahead_port.AheadPort) {
 	oq.outPort = port
-	if port != nil {
-		oq.queue.SetDownstreamPort(port)
-	}
+	oq.updateDownstreamPort()
 }
 
 // OutPort returns the output port.
 func (oq *OutputQueue) OutPort() ahead_port.AheadPort {
 	return oq.outPort
+}
+
+// SetPacketSentHook configures a hook invoked whenever a packet leaves OutputQueue.
+func (oq *OutputQueue) SetPacketSentHook(hook func(packet.Packet)) {
+	oq.onPacketSent = hook
+	oq.updateDownstreamPort()
+}
+
+func (oq *OutputQueue) updateDownstreamPort() {
+	if oq.queue == nil {
+		return
+	}
+	if oq.outPort == nil {
+		oq.queue.SetDownstreamPort(nil)
+		return
+	}
+	if oq.onPacketSent == nil {
+		oq.queue.SetDownstreamPort(oq.outPort)
+		return
+	}
+	oq.queue.SetDownstreamPort(newHookedDownstreamPort(oq.outPort, oq.onPacketSent))
 }
 
 // Tick processes a single cycle, sending packets from queue to outPort.
@@ -114,3 +134,69 @@ func (oq *OutputQueue) IsFull() bool {
 	return oq.queue.IsFull()
 }
 
+// hookedDownstreamPort wraps an AheadPort to intercept packets leaving OutputQueue.
+type hookedDownstreamPort struct {
+	target   ahead_port.AheadPort
+	hook     func(packet.Packet)
+	sendChan chan ahead_port.PacketWithCycle
+}
+
+func newHookedDownstreamPort(target ahead_port.AheadPort, hook func(packet.Packet)) ahead_port.AheadPort {
+	if hook == nil || target == nil {
+		return target
+	}
+
+	hp := &hookedDownstreamPort{
+		target:   target,
+		hook:     hook,
+		sendChan: make(chan ahead_port.PacketWithCycle),
+	}
+
+	go hp.forward()
+	return hp
+}
+
+func (hp *hookedDownstreamPort) forward() {
+	for pkt := range hp.sendChan {
+		if hp.hook != nil {
+			hp.hook(pkt.Packet)
+		}
+		hp.target.SendChan() <- pkt
+	}
+}
+
+func (hp *hookedDownstreamPort) SetDone(cycle int) {
+	hp.target.SetDone(cycle)
+}
+
+func (hp *hookedDownstreamPort) GetDone() int {
+	return hp.target.GetDone()
+}
+
+func (hp *hookedDownstreamPort) SendChan() chan<- ahead_port.PacketWithCycle {
+	return hp.sendChan
+}
+
+func (hp *hookedDownstreamPort) ReceiveChan() <-chan ahead_port.PacketWithCycle {
+	return hp.target.ReceiveChan()
+}
+
+func (hp *hookedDownstreamPort) Ready(cycle int) bool {
+	return hp.target.Ready(cycle)
+}
+
+func (hp *hookedDownstreamPort) ReadyNonBlocking(cycle int) (bool, bool) {
+	return hp.target.ReadyNonBlocking(cycle)
+}
+
+func (hp *hookedDownstreamPort) WaitForDone(targetCycle int) {
+	hp.target.WaitForDone(targetCycle)
+}
+
+func (hp *hookedDownstreamPort) SetPacketTypes(types []int) {
+	hp.target.SetPacketTypes(types)
+}
+
+func (hp *hookedDownstreamPort) PacketTypes() []int {
+	return hp.target.PacketTypes()
+}

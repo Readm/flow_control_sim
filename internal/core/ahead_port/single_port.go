@@ -47,6 +47,8 @@ type SinglePort struct {
 	// doneCond is a condition variable for waiting on Done changes.
 	// Used by WaitForDone to block goroutines until SetDone is called.
 	doneCond *sync.Cond
+
+	packetTypes []int
 }
 
 // NewAheadPort creates a new AheadPort with the specified channel buffer size.
@@ -205,6 +207,27 @@ func (p *SinglePort) UpdateReady(cycle int, ready bool) {
 	if p.cond != nil {
 		p.cond.Broadcast()
 	}
+}
+
+// SetPacketTypes configures logical packet type identifiers accepted by this port.
+func (p *SinglePort) SetPacketTypes(types []int) {
+	p.waiterMu.Lock()
+	defer p.waiterMu.Unlock()
+	if len(types) == 0 {
+		p.packetTypes = nil
+		return
+	}
+	p.packetTypes = append([]int(nil), types...)
+}
+
+// PacketTypes returns a copy of configured packet type identifiers.
+func (p *SinglePort) PacketTypes() []int {
+	p.waiterMu.Lock()
+	defer p.waiterMu.Unlock()
+	if len(p.packetTypes) == 0 {
+		return nil
+	}
+	return append([]int(nil), p.packetTypes...)
 }
 
 // SetChannel replaces the internal packet channel.
