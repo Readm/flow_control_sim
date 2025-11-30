@@ -47,6 +47,8 @@ type Node struct {
 	processBuffer []packet.Packet
 	processHook   ProcessHook
 	currentCycle  uint64
+	tickHookMu    sync.RWMutex
+	tickHook      func(cycle uint64)
 }
 
 // New creates a Node with the provided identifier.
@@ -132,6 +134,13 @@ func (n *Node) SetProcessHook(hook ProcessHook) {
 	n.processHook = hook
 }
 
+// SetTickHook registers a callback invoked after each successful Tick.
+func (n *Node) SetTickHook(hook func(cycle uint64)) {
+	n.tickHookMu.Lock()
+	defer n.tickHookMu.Unlock()
+	n.tickHook = hook
+}
+
 // ProcessBuffer returns the last stored buffer.
 func (n *Node) ProcessBuffer() []packet.Packet {
 	n.bufferMu.Lock()
@@ -156,7 +165,11 @@ func (n *Node) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
 	}
 
 	n.storeProcessBuffer(buffer)
-	return n.tickQueuesConcurrently(int(cycle))
+	if err := n.tickQueuesConcurrently(int(cycle)); err != nil {
+		return err
+	}
+	n.invokeTickHook(cycle)
+	return nil
 }
 
 func (n *Node) collectPackets() []packet.Packet {
@@ -179,6 +192,14 @@ func (n *Node) storeProcessBuffer(buffer []packet.Packet) {
 	n.bufferMu.Lock()
 	defer n.bufferMu.Unlock()
 	n.processBuffer = append(n.processBuffer[:0], buffer...)
+}
+
+func (n *Node) invokeTickHook(cycle uint64) {
+	n.tickHookMu.RLock()
+	defer n.tickHookMu.RUnlock()
+	if n.tickHook != nil {
+		n.tickHook(cycle)
+	}
 }
 
 func (n *Node) tickQueuesConcurrently(cycle int) error {

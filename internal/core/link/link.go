@@ -23,8 +23,7 @@ func (lcp *LinkCycleProcessor) Tick(cycle int) error {
 		panic("LinkCycleProcessor.processor is nil")
 	}
 
-	// Wait for upstream Done >= cycle-latency
-	// This allows Link to start processing earlier, utilizing the latency buffer
+	// Wait for upstream Done >= cycle-latency so Link respects configured delay.
 	targetWaitCycle := cycle - lcp.latency
 	lcp.upstreamPort.WaitForDone(targetWaitCycle)
 
@@ -89,6 +88,8 @@ type Link struct {
 	bandwidth         int
 	totalBackpressure int
 	currentCycle      int
+	tickHookMu        sync.RWMutex
+	tickHook          func(cycle int)
 }
 
 // LinkPacketProcessor implements PacketProcessor for Link.
@@ -273,7 +274,11 @@ func (l *Link) Bandwidth() int {
 
 // Tick processes a single cycle.
 func (l *Link) Tick(cycle int) error {
-	return l.processor.Tick(cycle)
+	if err := l.processor.Tick(cycle); err != nil {
+		return err
+	}
+	l.invokeTickHook(cycle)
+	return nil
 }
 
 // UpstreamPort returns the upstream port.
@@ -312,4 +317,19 @@ func (l *Link) Advance(cycles int) error {
 		l.currentCycle++
 	}
 	return nil
+}
+
+// SetTickHook registers a callback invoked after each successful Tick.
+func (l *Link) SetTickHook(hook func(cycle int)) {
+	l.tickHookMu.Lock()
+	defer l.tickHookMu.Unlock()
+	l.tickHook = hook
+}
+
+func (l *Link) invokeTickHook(cycle int) {
+	l.tickHookMu.RLock()
+	defer l.tickHookMu.RUnlock()
+	if l.tickHook != nil {
+		l.tickHook(cycle)
+	}
 }
