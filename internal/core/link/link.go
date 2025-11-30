@@ -88,6 +88,7 @@ type Link struct {
 	latency           int
 	bandwidth         int
 	totalBackpressure int
+	currentCycle      int
 }
 
 // LinkPacketProcessor implements PacketProcessor for Link.
@@ -233,6 +234,7 @@ func NewLink(sourceID int, targetID int, upstreamPort ahead_port.AheadPort, down
 		latency:           latency,
 		bandwidth:         bandwidth,
 		totalBackpressure: 0,
+		currentCycle:      0,
 	}
 
 	// Create packet processor
@@ -294,4 +296,20 @@ func (l *Link) SnapshotOccupancy() []int {
 		occupancy[i] = len(slot)
 	}
 	return occupancy
+}
+
+// Advance progresses the link by the specified number of cycles.
+func (l *Link) Advance(cycles int) error {
+	if cycles <= 0 {
+		return nil
+	}
+
+	for i := 0; i < cycles; i++ {
+		cycle := l.currentCycle
+		if err := l.Tick(cycle); err != nil {
+			return err
+		}
+		l.currentCycle++
+	}
+	return nil
 }

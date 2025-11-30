@@ -46,6 +46,7 @@ type Node struct {
 	bufferMu      sync.Mutex
 	processBuffer []packet.Packet
 	processHook   ProcessHook
+	currentCycle  uint64
 }
 
 // New creates a Node with the provided identifier.
@@ -57,6 +58,7 @@ func New(id int) *Node {
 		caches:        make([]cache.Cache, 0),
 		directories:   make([]directory.Directory, 0),
 		processBuffer: make([]packet.Packet, 0),
+		currentCycle:  0,
 	}
 }
 
@@ -210,6 +212,23 @@ func (n *Node) tickQueuesConcurrently(cycle int) error {
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// Advance executes the configured number of cycles sequentially using Background context.
+func (n *Node) Advance(cycles int) error {
+	if cycles <= 0 {
+		return nil
+	}
+
+	ctx := context.Background()
+	for i := 0; i < cycles; i++ {
+		cycle := n.currentCycle
+		if err := n.Tick(ctx, cycle, 0); err != nil {
+			return err
+		}
+		n.currentCycle++
 	}
 	return nil
 }

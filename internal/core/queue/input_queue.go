@@ -1,6 +1,10 @@
 package queue
 
 import (
+	"runtime"
+	"sync"
+	"time"
+
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
@@ -16,6 +20,7 @@ type InputQueue struct {
 	packetProc       *InputQueuePacketProcessor
 	lastCyclePackets []packet.Packet
 	onPacketReceived func(packet.Packet)
+	readyOnce        sync.Once
 }
 
 // InputQueuePacketProcessor implements AheadPort PacketProcessor for InputQueue.
@@ -43,6 +48,7 @@ func NewInputQueue(bufferSize int) *InputQueue {
 		inputQueue: iq,
 	}
 	iq.processor = ahead_port.NewCycleProcessor(iq.inPort, iq.dummyDownstream, iq.packetProc)
+	primePortReady(iq.inPort, bufferSize)
 
 	return iq
 }
@@ -56,6 +62,11 @@ func (iq *InputQueue) SetInPort(port ahead_port.AheadPort) {
 
 	iq.inPort = port
 	iq.processor = ahead_port.NewCycleProcessor(iq.inPort, iq.dummyDownstream, iq.packetProc)
+	capacity := 8
+	if iq.queue != nil {
+		capacity = iq.queue.Capacity()
+	}
+	primePortReady(iq.inPort, capacity)
 }
 
 // InPort returns the upstream AheadPort for receiving packets.
@@ -101,6 +112,36 @@ func (iq *InputQueue) GetReceivedPackets() []packet.Packet {
 // a packet is successfully stored in the InputQueue.
 func (iq *InputQueue) SetPacketReceivedHook(hook func(packet.Packet)) {
 	iq.onPacketReceived = hook
+}
+
+// EnableAlwaysReady configures the upstream port to stay ready for all future cycles.
+// This is useful for scenarios that do not model backpressure (e.g., simplified network tests).
+func (iq *InputQueue) EnableAlwaysReady() {
+	iq.readyOnce.Do(func() {
+		updater, ok := iq.inPort.(interface {
+			UpdateReady(int, bool)
+		})
+		if !ok {
+			return
+		}
+
+		capacity := 8
+		if iq.queue != nil {
+			capacity = iq.queue.Capacity()
+		}
+
+		go func(start int) {
+			cycle := start
+			for {
+				updater.UpdateReady(cycle, true)
+				cycle++
+				if cycle%128 == 0 {
+					runtime.Gosched()
+					time.Sleep(0)
+				}
+			}
+		}(capacity)
+	})
 }
 
 // Length returns the number of packets currently stored in the queue.
@@ -180,4 +221,15 @@ done:
 	}
 
 	updateUpstreamReady(cycle+1, hasCapacity)
+}
+
+func primePortReady(port ahead_port.AheadPort, limit int) {
+	if limit <= 0 {
+		limit = 8
+	}
+	if updater, ok := port.(interface{ UpdateReady(int, bool) }); ok {
+		for cycle := 0; cycle <= limit; cycle++ {
+			updater.UpdateReady(cycle, true)
+		}
+	}
 }
