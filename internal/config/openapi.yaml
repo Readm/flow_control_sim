@@ -1,0 +1,298 @@
+openapi: 3.0.3
+info:
+  title: Network Topology API
+  version: 1.0.0
+  description: OpenAPI schema for nodes, edges, and networks
+paths:
+  /load_networks:
+    get:
+      summary: 返回所有网络
+      responses:
+        "200":
+          description: Network 列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Network"
+
+  /add_network:
+    post:
+      summary: 添加一个新的 Network
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Network"
+      responses:
+        "201":
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+
+  /reset_network:
+    post:
+      summary: 重置仿真，把网络重置为给定 Network
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Network"
+      responses:
+        "200":
+          description: 重置后的 Network
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+
+  /advance_to:
+    post:
+      summary: 仿真到指定 cycle 并返回总体状态描述
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - cycle
+              properties:
+                cycle:
+                  type: integer
+                  description: 仿真 cycle
+      responses:
+        "200":
+          description: 仿真状态字符串
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    description: 总体统计状态描述
+
+components:
+  schemas:
+    Port:
+      type: object
+      properties:
+        port_id:
+          type: integer
+        packet_types:
+          type: array
+          items:
+            type: integer
+        buffer_size:
+          type: integer
+        in_bandwidth:
+          type: integer
+        out_bandwidth:
+          type: integer
+      required:
+        - buffer_size
+        - in_bandwidth
+        - out_bandwidth
+      additionalProperties: false
+
+    CacheConfig:
+      type: object
+      properties:
+        capacity:
+          type: integer
+          minimum: 0
+        num_sets:
+          type: integer
+          minimum: 0
+        replacement_policy:
+          type: string
+        states:
+          type: string
+      required:
+        - capacity
+        - num_sets
+        - replacement_policy
+        - states
+      additionalProperties: false
+
+    DirectoryConfig:
+      type: object
+      properties:
+        capacity:
+          type: integer
+          minimum: 0
+        num_sets:
+          type: integer
+          minimum: 0
+        replacement_policy:
+          type: string
+        states:
+          type: string
+      required:
+        - capacity
+        - num_sets
+        - replacement_policy
+        - states
+      additionalProperties: false
+
+    Node:
+      type: object
+      properties:
+        node_id:
+          type: integer
+        node_name:
+          type: string
+        node_features:
+          type: array
+          items:
+            type: string
+        cache:
+          $ref: '#/components/schemas/CacheConfig'
+        directory:
+          $ref: '#/components/schemas/DirectoryConfig'
+        coherence_domain_id:
+          type: integer
+        in_ports:
+          type: array
+          items:
+            $ref: '#/components/schemas/Port'
+        out_ports:
+          type: array
+          items:
+            $ref: '#/components/schemas/Port'
+        display:
+          type: object
+          properties:
+            type:
+              type: string
+            name:
+              type: string
+            resize:
+              type: boolean
+            bg:
+              type: string
+            width:
+              type: number
+            height:
+              type: number
+            id:
+              type: string
+            position:
+              type: object
+              properties:
+                x:
+                  type: number
+                y:
+                  type: number
+              required:
+                - x
+                - y
+          required:
+            - type
+            - width
+            - height
+            - id
+            - position
+          additionalProperties: true
+      required:
+        - node_id
+        - node_name
+        - node_features
+      additionalProperties: false
+
+    Edge:
+      type: object
+      description: "连接两个节点端口的边（Edge），包含逻辑信息和可视化信息"
+      required:
+        - edge_id
+        - src_node_id
+        - src_port_id
+        - dst_node_id
+        - dst_port_id
+      properties:
+        edge_id:
+          type: integer
+        src_node_id:
+          type: integer
+        src_port_id:
+          type: integer
+        dst_node_id:
+          type: integer
+        dst_port_id:
+          type: integer
+        packet_types:
+          type: array
+          items:
+            type: integer
+        display:
+          type: object
+          properties:
+            data:
+              type: object
+              properties:
+                source:
+                  type: string
+                target:
+                  type: string
+                lineType:
+                  type: string
+                id:
+                  type: string
+              required:
+                - source
+                - target
+                - lineType
+                - id
+            position:
+              type: object
+              properties:
+                x:
+                  type: number
+                y:
+                  type: number
+              required:
+                - x
+                - y
+            link_status:
+              type: array
+              description: "链路状态数组，每个 link_state 包含名称和整数数组"
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  values:
+                    type: array
+                    items:
+                      type: integer
+                required:
+                  - name
+                  - values
+          additionalProperties: true
+      additionalProperties: false
+
+    Network:
+      type: object
+      properties:
+        version:
+          type: string
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Node'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/Edge'
+      required:
+        - nodes
+        - edges
+      additionalProperties: false

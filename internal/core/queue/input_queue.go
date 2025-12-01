@@ -28,13 +28,20 @@ type InputQueuePacketProcessor struct {
 	inputQueue *InputQueue
 }
 
-// NewInputQueue creates a new InputQueue with the specified buffer size.
-func NewInputQueue(bufferSize int) *InputQueue {
+// NewInputQueue creates a new InputQueue with the specified buffer size and bandwidth parameters.
+// inBandwidth and outBandwidth must be positive, otherwise it panics.
+func NewInputQueue(bufferSize int, inBandwidth int, outBandwidth int) *InputQueue {
 	if bufferSize <= 0 {
 		bufferSize = 8
 	}
+	if inBandwidth <= 0 {
+		panic("inBandwidth must be positive")
+	}
+	if outBandwidth <= 0 {
+		panic("outBandwidth must be positive")
+	}
 
-	queue := NewQueue(bufferSize, bufferSize, bufferSize, 1)
+	queue := NewQueue(bufferSize, inBandwidth, outBandwidth, 1)
 	inPort := ahead_port.NewAheadPort(bufferSize)
 	dummyDownstream := ahead_port.NewAheadPort(1)
 

@@ -249,7 +249,7 @@ func newTestNodeHandle(t *testing.T, id int, inputCount, outputCount int) (*Node
 	outputs := make([]*queue.OutputQueue, outputCount)
 
 	for i := 0; i < inputCount; i++ {
-		iq := queue.NewInputQueue(8)
+		iq := queue.NewInputQueue(8, 8, 8)
 		inputs[i] = iq
 		if err := n.AddInputQueue(iq); err != nil {
 			t.Fatalf("AddInputQueue: %v", err)
@@ -257,7 +257,7 @@ func newTestNodeHandle(t *testing.T, id int, inputCount, outputCount int) (*Node
 	}
 
 	for i := 0; i < outputCount; i++ {
-		oq := queue.NewOutputQueue(8)
+		oq := queue.NewOutputQueue(8, 1, 1)
 		outputs[i] = oq
 		if err := n.AddOutputQueue(oq); err != nil {
 			t.Fatalf("AddOutputQueue: %v", err)

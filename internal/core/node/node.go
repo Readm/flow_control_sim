@@ -182,9 +182,17 @@ func (n *Node) collectPackets() []packet.Packet {
 	return collected
 }
 
+// defaultProcessHook is a no-op hook that returns the input buffer unchanged.
+func defaultProcessHook(_ context.Context, _ uint64, buffer []packet.Packet) ([]packet.Packet, error) {
+	return buffer, nil
+}
+
 func (n *Node) getProcessHook() ProcessHook {
 	n.bufferMu.Lock()
 	defer n.bufferMu.Unlock()
+	if n.processHook == nil {
+		return defaultProcessHook
+	}
 	return n.processHook
 }
 

@@ -15,15 +15,21 @@ type OutputQueue struct {
 	onPacketSent  func(packet.Packet)
 }
 
-// NewOutputQueue creates a new OutputQueue with the specified buffer size.
-func NewOutputQueue(bufferSize int) *OutputQueue {
+// NewOutputQueue creates a new OutputQueue with the specified buffer size and bandwidth parameters.
+// inBandwidth and outBandwidth must be positive, otherwise it panics.
+func NewOutputQueue(bufferSize int, inBandwidth int, outBandwidth int) *OutputQueue {
 	if bufferSize <= 0 {
 		bufferSize = 8
 	}
+	if inBandwidth <= 0 {
+		panic("inBandwidth must be positive")
+	}
+	if outBandwidth <= 0 {
+		panic("outBandwidth must be positive")
+	}
 
 	// Create internal queue for out_queue logic
-	// outBandwidth is set to 1 to match typical Link bandwidth limits
-	queue := NewQueue(bufferSize, 1, 1, 1)
+	queue := NewQueue(bufferSize, inBandwidth, outBandwidth, 1)
 
 	// Create empty upstream port (packets are injected directly, not from channel)
 	emptyUpstream := ahead_port.NewAheadPort(1)
