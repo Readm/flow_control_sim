@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
+	"github.com/Readm/flow_sim/internal/core/capability/cache"
+	"github.com/Readm/flow_sim/internal/core/capability/directory"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -26,12 +28,32 @@ type PortSchema struct {
 	OutBandwidth int   `json:"out_bandwidth"`
 }
 
+// CacheConfigSchema represents cache configuration in the OpenAPI schema.
+type CacheConfigSchema struct {
+	Capacity          int    `json:"capacity"`
+	NumSets           int    `json:"num_sets"`
+	ReplacementPolicy string `json:"replacement_policy"`
+	States            string `json:"states"`
+}
+
+// DirectoryConfigSchema represents directory configuration in the OpenAPI schema.
+type DirectoryConfigSchema struct {
+	Capacity          int    `json:"capacity"`
+	NumSets           int    `json:"num_sets"`
+	ReplacementPolicy string `json:"replacement_policy"`
+	States            string `json:"states"`
+}
+
 // NodeSchema represents a node in the OpenAPI schema.
 type NodeSchema struct {
-	NodeID   int          `json:"node_id"`
-	NodeName string       `json:"node_name,omitempty"`
-	InPorts  []PortSchema `json:"in_ports,omitempty"`
-	OutPorts []PortSchema `json:"out_ports,omitempty"`
+	NodeID            int                    `json:"node_id"`
+	NodeName          string                 `json:"node_name,omitempty"`
+	NodeFeatures      []string               `json:"node_features,omitempty"`
+	Cache             *CacheConfigSchema     `json:"cache,omitempty"`
+	Directory         *DirectoryConfigSchema `json:"directory,omitempty"`
+	CoherenceDomainID *int                   `json:"coherence_domain_id,omitempty"`
+	InPorts           []PortSchema           `json:"in_ports,omitempty"`
+	OutPorts          []PortSchema           `json:"out_ports,omitempty"`
 }
 
 // EdgeSchema represents an edge in the OpenAPI schema.
@@ -143,6 +165,20 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 	for _, nodeSchema := range schema.Nodes {
 		// Create node
 		newNode := node.New(nodeSchema.NodeID)
+
+		// Create cache if configured
+		// TODO: adapt cache configs
+		if nodeSchema.Cache != nil {
+			cacheInstance := cache.NewFullyAssociativeCache(nodeSchema.Cache.Capacity)
+			newNode.AddCache(cacheInstance)
+		}
+
+		// Create directory if configured
+		// TODO: adapt cache configs
+		if nodeSchema.Directory != nil {
+			directoryInstance := directory.NewFullyAssociativeDirectory(nodeSchema.Directory.Capacity)
+			newNode.AddDirectory(directoryInstance)
+		}
 
 		// Create input queues
 		inputs := make([]*queue.InputQueue, 0, len(nodeSchema.InPorts))

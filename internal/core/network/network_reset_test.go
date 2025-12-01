@@ -650,6 +650,94 @@ func TestNewOutputQueuePanicOnZeroOutBandwidth(t *testing.T) {
 	queue.NewOutputQueue(8, 4, 0)
 }
 
+func TestNetworkResetWithCacheAndDirectory(t *testing.T) {
+	t.Parallel()
+
+	net := New()
+
+	schema := &NetworkSchema{
+		Nodes: []NodeSchema{
+			{
+				NodeID: 0,
+				InPorts: []PortSchema{
+					{
+						BufferSize:  16,
+						InBandwidth: 4,
+						OutBandwidth: 4,
+					},
+				},
+				OutPorts: []PortSchema{
+					{
+						BufferSize:  16,
+						InBandwidth: 2,
+						OutBandwidth: 2,
+					},
+				},
+				Cache: &CacheConfigSchema{
+					Capacity:         64,
+					NumSets:          1,
+					ReplacementPolicy: "random",
+					States:           "MESI",
+				},
+				Directory: &DirectoryConfigSchema{
+					Capacity:         128,
+					NumSets:          1,
+					ReplacementPolicy: "random",
+					States:           "MESI",
+				},
+			},
+			{
+				NodeID: 1,
+				InPorts: []PortSchema{
+					{
+						BufferSize:  16,
+						InBandwidth: 4,
+						OutBandwidth: 4,
+					},
+				},
+				OutPorts: []PortSchema{},
+				// No cache or directory for node 1
+			},
+		},
+		Edges: []EdgeSchema{},
+	}
+
+	if err := net.Reset(schema); err != nil {
+		t.Fatalf("Reset failed: %v", err)
+	}
+
+	// Verify node 0 has cache and directory
+	node0 := net.nodes[0]
+	caches := node0.Node.Caches()
+	if len(caches) != 1 {
+		t.Fatalf("Expected 1 cache for node 0, got %d", len(caches))
+	}
+	// Verify cache is not nil
+	if caches[0] == nil {
+		t.Fatalf("Cache should not be nil")
+	}
+
+	directories := node0.Node.Directories()
+	if len(directories) != 1 {
+		t.Fatalf("Expected 1 directory for node 0, got %d", len(directories))
+	}
+	// Verify directory is not nil
+	if directories[0] == nil {
+		t.Fatalf("Directory should not be nil")
+	}
+
+	// Verify node 1 has no cache or directory
+	node1 := net.nodes[1]
+	caches1 := node1.Node.Caches()
+	if len(caches1) != 0 {
+		t.Fatalf("Expected 0 caches for node 1, got %d", len(caches1))
+	}
+	directories1 := node1.Node.Directories()
+	if len(directories1) != 0 {
+		t.Fatalf("Expected 0 directories for node 1, got %d", len(directories1))
+	}
+}
+
 func TestNetworkResetFunctional(t *testing.T) {
 	t.Parallel()
 
