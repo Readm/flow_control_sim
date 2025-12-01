@@ -190,7 +190,9 @@ func (p *SinglePort) waitForReady(cycle int) bool {
 // UpdateReady updates the ready status for a specific cycle and wakes up waiting goroutines.
 // Called by downstream (via CycleProcessor) when it determines readiness for a cycle.
 // This is an internal method, not part of the AheadPort interface.
-// It updates both readyMap and readyUntil, and wakes up all goroutines waiting in waitForReady.
+// It updates readyMap and wakes up all goroutines waiting in waitForReady.
+// Note: This does NOT automatically update readyUntil to allow sparse/jumped ready settings.
+// readyUntil should be managed explicitly via SetReadyUntil.
 func (p *SinglePort) UpdateReady(cycle int, ready bool) {
 	p.waiterMu.Lock()
 	defer p.waiterMu.Unlock()
@@ -198,14 +200,9 @@ func (p *SinglePort) UpdateReady(cycle int, ready bool) {
 	// Update readyMap with the cycle's ready status
 	p.readyMap[cycle] = ready
 
-	// Update readyUntil if ready and cycle is ahead of current readyUntil
-	// This extends the fast path: cycles < readyUntil will return true immediately
-	if ready {
-		currentReadyUntil := atomic.LoadInt64(&p.readyUntil)
-		if int64(cycle) >= currentReadyUntil {
-			atomic.StoreInt64(&p.readyUntil, int64(cycle)+1)
-		}
-	}
+	// Do NOT automatically update readyUntil here.
+	// This allows setting readyMap[8]=true without affecting readyMap[5-7]=false.
+	// readyUntil should only be updated via SetReadyUntil.
 
 	// Wake up all goroutines waiting in waitForReady
 	// They will re-check readyMap and return if their cycle is now configured
@@ -260,8 +257,20 @@ func (p *SinglePort) RemoveReadyBefore(cycle int) {
 // Called by downstream to indicate it can execute ahead up to a certain cycle.
 // This extends the fast path: cycles < readyUntil will return true immediately in Ready().
 // Useful for initialization or when downstream knows it can process many cycles ahead.
+// Only updates if the new value is greater than the current value to maintain forward progress.
 func (p *SinglePort) SetReadyUntil(cycle int) {
-	atomic.StoreInt64(&p.readyUntil, int64(cycle))
+	for {
+		current := atomic.LoadInt64(&p.readyUntil)
+		if int64(cycle) <= current {
+			// New value is not greater than current, skip update
+			return
+		}
+		if atomic.CompareAndSwapInt64(&p.readyUntil, current, int64(cycle)) {
+			// Successfully updated
+			return
+		}
+		// CAS failed, retry
+	}
 }
 
 // GetReadyUntil returns the current readyUntil value.

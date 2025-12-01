@@ -126,88 +126,116 @@ func TestFanoutPortGetDone(t *testing.T) {
 func TestFanoutPortReadyAnyReady(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewAheadPort(8)
-	downstreamPort1 := NewAheadPort(8)
-	downstreamPort2 := NewAheadPort(8)
-	downstreamPort3 := NewAheadPort(8)
-
 	router := func(ctx RouterContext) int { return 0 }
-	fanout := NewFanoutPort(upstreamPort, []AheadPort{downstreamPort1, downstreamPort2, downstreamPort3}, router, nil)
 
-	// Set all downstreams to ready for cycle 0
-	downstreamPort1.SetReadyUntil(1)
-	downstreamPort2.SetReadyUntil(1)
-	downstreamPort3.SetReadyUntil(1)
+	t.Run("AllReady", func(t *testing.T) {
+		upstreamPort := NewAheadPort(8)
+		downstreamPort1 := NewAheadPort(8)
+		downstreamPort2 := NewAheadPort(8)
+		downstreamPort3 := NewAheadPort(8)
+		fanout := NewFanoutPort(upstreamPort, []AheadPort{downstreamPort1, downstreamPort2, downstreamPort3}, router, nil)
 
-	// AnyReady should return true
-	if !fanout.Ready(0) {
-		t.Fatal("expected Ready(0) to return true when all downstreams are ready")
-	}
+		// Set all downstreams to ready for cycle 0
+		downstreamPort1.SetReadyUntil(1)
+		downstreamPort2.SetReadyUntil(1)
+		downstreamPort3.SetReadyUntil(1)
 
-	// Set only one downstream to ready
-	downstreamPort1.SetReadyUntil(1)
-	downstreamPort2.SetReadyUntil(-1)
-	downstreamPort2.UpdateReady(0, false)
-	downstreamPort3.SetReadyUntil(-1)
-	downstreamPort3.UpdateReady(0, false)
+		// AnyReady should return true
+		if !fanout.Ready(0) {
+			t.Fatal("expected Ready(0) to return true when all downstreams are ready")
+		}
+	})
 
-	// AnyReady should still return true (at least one is ready)
-	if !fanout.Ready(0) {
-		t.Fatal("expected Ready(0) to return true when at least one downstream is ready")
-	}
+	t.Run("OneReady", func(t *testing.T) {
+		upstreamPort := NewAheadPort(8)
+		downstreamPort1 := NewAheadPort(8)
+		downstreamPort2 := NewAheadPort(8)
+		downstreamPort3 := NewAheadPort(8)
+		fanout := NewFanoutPort(upstreamPort, []AheadPort{downstreamPort1, downstreamPort2, downstreamPort3}, router, nil)
 
-	// Set all to not ready
-	downstreamPort1.SetReadyUntil(-1)
-	downstreamPort1.UpdateReady(0, false)
+		// Set only one downstream to ready
+		downstreamPort1.SetReadyUntil(1)
+		downstreamPort2.UpdateReady(0, false)
+		downstreamPort3.UpdateReady(0, false)
 
-	// AnyReady should return false (none are ready)
-	// Note: This will block, so we use ReadyNonBlocking for testing
-	ready, configured := fanout.ReadyNonBlocking(0)
-	if ready {
-		t.Fatal("expected ReadyNonBlocking(0) to return ready=false when no downstreams are ready")
-	}
-	if !configured {
-		t.Fatal("expected ReadyNonBlocking(0) to return configured=true")
-	}
+		// AnyReady should return true (at least one is ready)
+		if !fanout.Ready(0) {
+			t.Fatal("expected Ready(0) to return true when at least one downstream is ready")
+		}
+	})
+
+	t.Run("NoneReady", func(t *testing.T) {
+		upstreamPort := NewAheadPort(8)
+		downstreamPort1 := NewAheadPort(8)
+		downstreamPort2 := NewAheadPort(8)
+		downstreamPort3 := NewAheadPort(8)
+		fanout := NewFanoutPort(upstreamPort, []AheadPort{downstreamPort1, downstreamPort2, downstreamPort3}, router, nil)
+
+		// Set all to not ready
+		downstreamPort1.UpdateReady(0, false)
+		downstreamPort2.UpdateReady(0, false)
+		downstreamPort3.UpdateReady(0, false)
+
+		// AnyReady should return false (none are ready)
+		// Note: This will block, so we use ReadyNonBlocking for testing
+		ready, configured := fanout.ReadyNonBlocking(0)
+		if ready {
+			t.Fatal("expected ReadyNonBlocking(0) to return ready=false when no downstreams are ready")
+		}
+		if !configured {
+			t.Fatal("expected ReadyNonBlocking(0) to return configured=true")
+		}
+	})
 }
 
 // TestFanoutPortAllReady tests AllReady returns true only if all downstreams are ready.
 func TestFanoutPortAllReady(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewAheadPort(8)
-	downstreamPort1 := NewAheadPort(8)
-	downstreamPort2 := NewAheadPort(8)
-	downstreamPort3 := NewAheadPort(8)
-
 	router := func(ctx RouterContext) int { return 0 }
-	fanout := NewFanoutPort(upstreamPort, []AheadPort{downstreamPort1, downstreamPort2, downstreamPort3}, router, nil)
 
-	// Set all downstreams to ready
-	downstreamPort1.SetReadyUntil(1)
-	downstreamPort2.SetReadyUntil(1)
-	downstreamPort3.SetReadyUntil(1)
+	t.Run("AllReady", func(t *testing.T) {
+		upstreamPort := NewAheadPort(8)
+		downstreamPort1 := NewAheadPort(8)
+		downstreamPort2 := NewAheadPort(8)
+		downstreamPort3 := NewAheadPort(8)
+		fanout := NewFanoutPort(upstreamPort, []AheadPort{downstreamPort1, downstreamPort2, downstreamPort3}, router, nil)
 
-	// AllReady should return true
-	if !fanout.AllReady(0) {
-		t.Fatal("expected AllReady(0) to return true when all downstreams are ready")
-	}
+		// Set all downstreams to ready
+		downstreamPort1.SetReadyUntil(1)
+		downstreamPort2.SetReadyUntil(1)
+		downstreamPort3.SetReadyUntil(1)
 
-	// Set one downstream to not ready
-	downstreamPort2.SetReadyUntil(-1)
-	downstreamPort2.UpdateReady(0, false)
+		// AllReady should return true
+		if !fanout.AllReady(0) {
+			t.Fatal("expected AllReady(0) to return true when all downstreams are ready")
+		}
+	})
 
-	// AllReady should return false (not all are ready)
-	ready, configured, readyMap := fanout.AllReadyNonBlocking(0)
-	if ready {
-		t.Fatal("expected AllReadyNonBlocking(0) to return ready=false when not all downstreams are ready")
-	}
-	if !configured {
-		t.Fatal("expected AllReadyNonBlocking(0) to return configured=true")
-	}
-	if readyMap[0] != true || readyMap[1] != false || readyMap[2] != true {
-		t.Fatalf("unexpected readyMap: %v", readyMap)
-	}
+	t.Run("OneNotReady", func(t *testing.T) {
+		upstreamPort := NewAheadPort(8)
+		downstreamPort1 := NewAheadPort(8)
+		downstreamPort2 := NewAheadPort(8)
+		downstreamPort3 := NewAheadPort(8)
+		fanout := NewFanoutPort(upstreamPort, []AheadPort{downstreamPort1, downstreamPort2, downstreamPort3}, router, nil)
+
+		// Set two ready, one not ready
+		downstreamPort1.SetReadyUntil(1)
+		downstreamPort2.UpdateReady(0, false)
+		downstreamPort3.SetReadyUntil(1)
+
+		// AllReady should return false (not all are ready)
+		ready, configured, readyMap := fanout.AllReadyNonBlocking(0)
+		if ready {
+			t.Fatal("expected AllReadyNonBlocking(0) to return ready=false when not all downstreams are ready")
+		}
+		if !configured {
+			t.Fatal("expected AllReadyNonBlocking(0) to return configured=true")
+		}
+		if readyMap[0] != true || readyMap[1] != false || readyMap[2] != true {
+			t.Fatalf("unexpected readyMap: %v", readyMap)
+		}
+	})
 }
 
 // TestFanoutPortReadyNonBlocking tests ReadyNonBlocking (AnyReady).
@@ -246,44 +274,55 @@ func TestFanoutPortReadyNonBlocking(t *testing.T) {
 func TestFanoutPortAllReadyNonBlocking(t *testing.T) {
 	t.Parallel()
 
-	upstreamPort := NewAheadPort(8)
-	downstreamPort1 := NewAheadPort(8)
-	downstreamPort2 := NewAheadPort(8)
-	downstreamPort3 := NewAheadPort(8)
-
 	router := func(ctx RouterContext) int { return 0 }
-	fanout := NewFanoutPort(upstreamPort, []AheadPort{downstreamPort1, downstreamPort2, downstreamPort3}, router, nil)
 
-	// All ready
-	downstreamPort1.SetReadyUntil(1)
-	downstreamPort2.SetReadyUntil(1)
-	downstreamPort3.SetReadyUntil(1)
+	t.Run("AllReady", func(t *testing.T) {
+		upstreamPort := NewAheadPort(8)
+		downstreamPort1 := NewAheadPort(8)
+		downstreamPort2 := NewAheadPort(8)
+		downstreamPort3 := NewAheadPort(8)
+		fanout := NewFanoutPort(upstreamPort, []AheadPort{downstreamPort1, downstreamPort2, downstreamPort3}, router, nil)
 
-	ready, configured, readyMap := fanout.AllReadyNonBlocking(0)
-	if !ready {
-		t.Fatal("expected ready=true when all downstreams are ready")
-	}
-	if !configured {
-		t.Fatal("expected configured=true when all downstreams are configured")
-	}
-	if len(readyMap) != 3 || !readyMap[0] || !readyMap[1] || !readyMap[2] {
-		t.Fatalf("unexpected readyMap: %v", readyMap)
-	}
+		// All ready
+		downstreamPort1.SetReadyUntil(1)
+		downstreamPort2.SetReadyUntil(1)
+		downstreamPort3.SetReadyUntil(1)
 
-	// One not ready
-	downstreamPort2.SetReadyUntil(-1)
-	downstreamPort2.UpdateReady(0, false)
+		ready, configured, readyMap := fanout.AllReadyNonBlocking(0)
+		if !ready {
+			t.Fatal("expected ready=true when all downstreams are ready")
+		}
+		if !configured {
+			t.Fatal("expected configured=true when all downstreams are configured")
+		}
+		if len(readyMap) != 3 || !readyMap[0] || !readyMap[1] || !readyMap[2] {
+			t.Fatalf("unexpected readyMap: %v", readyMap)
+		}
+	})
 
-	ready, configured, readyMap = fanout.AllReadyNonBlocking(0)
-	if ready {
-		t.Fatal("expected ready=false when not all downstreams are ready")
-	}
-	if !configured {
-		t.Fatal("expected configured=true when all downstreams are configured")
-	}
-	if readyMap[1] {
-		t.Fatal("expected readyMap[1]=false")
-	}
+	t.Run("OneNotReady", func(t *testing.T) {
+		upstreamPort := NewAheadPort(8)
+		downstreamPort1 := NewAheadPort(8)
+		downstreamPort2 := NewAheadPort(8)
+		downstreamPort3 := NewAheadPort(8)
+		fanout := NewFanoutPort(upstreamPort, []AheadPort{downstreamPort1, downstreamPort2, downstreamPort3}, router, nil)
+
+		// Two ready, one not ready
+		downstreamPort1.SetReadyUntil(1)
+		downstreamPort2.UpdateReady(0, false)
+		downstreamPort3.SetReadyUntil(1)
+
+		ready, configured, readyMap := fanout.AllReadyNonBlocking(0)
+		if ready {
+			t.Fatal("expected ready=false when not all downstreams are ready")
+		}
+		if !configured {
+			t.Fatal("expected configured=true when all downstreams are configured")
+		}
+		if readyMap[1] {
+			t.Fatal("expected readyMap[1]=false")
+		}
+	})
 }
 
 // TestFanoutPortWaitForDone tests WaitForDone waits for upstream.
