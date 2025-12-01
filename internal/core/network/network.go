@@ -7,6 +7,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/capability/cache"
 	"github.com/Readm/flow_sim/internal/core/capability/directory"
+	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -290,6 +291,8 @@ func (n *Network) Advance(cycles int) error {
 		return nil
 	}
 
+	debug.Logf("Network.Advance: starting, cycles=%d", cycles)
+
 	n.mu.RLock()
 	nodes := make([]*NodeHandle, 0, len(n.nodes))
 	for _, handle := range n.nodes {
@@ -298,36 +301,63 @@ func (n *Network) Advance(cycles int) error {
 	links := append([]*link.Link(nil), n.links...)
 	n.mu.RUnlock()
 
+	debug.Logf("Network.Advance: nodes=%d, links=%d", len(nodes), len(links))
+
+	// Initialize readyUntil for all links before starting parallel execution.
+	// This prevents deadlock in cyclic topologies where nodes might wait for
+	// Ready() on links that haven't started their Advance() yet.
+	// Link is ready for the first 'latency' cycles because packets are still in transit.
+	for _, lk := range links {
+		if upPort := lk.UpstreamPort(); upPort != nil {
+			if setter, ok := upPort.(interface{ SetReadyUntil(int) }); ok {
+				readyUntil := lk.Latency()
+				setter.SetReadyUntil(readyUntil)
+				debug.Logf("Network.Advance: pre-initialized link %d->%d ready until %d (latency=%d)",
+					lk.SourceID(), lk.TargetID(), readyUntil, lk.Latency())
+			}
+		}
+	}
+
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(nodes)+len(links))
 
 	for _, handle := range nodes {
 		wg.Add(1)
+		nodeID := handle.Node.ID()
 		go func(h *NodeHandle) {
 			defer wg.Done()
+			debug.Logf("Network.Advance: node %d starting Advance(%d)", nodeID, cycles)
 			if err := h.Node.Advance(cycles); err != nil {
-				errCh <- fmt.Errorf("node %d advance failed: %w", h.Node.ID(), err)
+				errCh <- fmt.Errorf("node %d advance failed: %w", nodeID, err)
 			}
+			debug.Logf("Network.Advance: node %d completed Advance(%d)", nodeID, cycles)
 		}(handle)
 	}
 
 	for _, lk := range links {
 		wg.Add(1)
+		srcID := lk.SourceID()
+		tgtID := lk.TargetID()
 		go func(l *link.Link) {
 			defer wg.Done()
+			debug.Logf("Network.Advance: link %d->%d starting Advance(%d)", srcID, tgtID, cycles)
 			if err := l.Advance(cycles); err != nil {
-				errCh <- fmt.Errorf("link %d->%d advance failed: %w", l.SourceID(), l.TargetID(), err)
+				errCh <- fmt.Errorf("link %d->%d advance failed: %w", srcID, tgtID, err)
 			}
+			debug.Logf("Network.Advance: link %d->%d completed Advance(%d)", srcID, tgtID, cycles)
 		}(lk)
 	}
 
+	debug.Logf("Network.Advance: waiting for all components to complete")
 	wg.Wait()
 	close(errCh)
 
 	for err := range errCh {
 		if err != nil {
+			debug.Logf("Network.Advance: error occurred: %v", err)
 			return err
 		}
 	}
+	debug.Logf("Network.Advance: completed successfully")
 	return nil
 }

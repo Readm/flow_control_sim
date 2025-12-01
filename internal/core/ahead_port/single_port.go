@@ -3,6 +3,8 @@ package ahead_port
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/Readm/flow_sim/internal/core/debug"
 )
 
 // SinglePort implements AheadPort interface.
@@ -57,8 +59,8 @@ func NewAheadPort(bufferSize int) *SinglePort {
 		bufferSize = 8
 	}
 	return &SinglePort{
-		done:       -1,
-		readyUntil: -1,
+		done:       0,
+		readyUntil: 0,
 		readyMap:   make(map[int]bool),
 		packetChan: make(chan PacketWithCycle, bufferSize),
 	}
@@ -72,7 +74,10 @@ func NewAheadPort(bufferSize int) *SinglePort {
 //
 // This wakes up all goroutines waiting in WaitForDone for Done to reach a certain value.
 func (p *SinglePort) SetDone(cycle int) {
+	oldDone := atomic.LoadInt64(&p.done)
 	atomic.StoreInt64(&p.done, int64(cycle))
+
+	debug.Logf("SetDone: port=%p, cycle=%d, oldDone=%d", p, cycle, oldDone)
 
 	// Wake up all goroutines waiting for Done changes
 	p.doneMu.Lock()
@@ -271,10 +276,14 @@ func (p *SinglePort) GetReadyUntil() int {
 // upstream calls SetDone with a value >= targetCycle.
 // Returns immediately if Done >= targetCycle (no blocking needed).
 func (p *SinglePort) WaitForDone(targetCycle int) {
+	currentDone := p.GetDone()
 	// Fast path: check if already satisfied
-	if p.GetDone() >= targetCycle {
+	if currentDone >= targetCycle {
+		debug.Logf("WaitForDone: port=%p, targetCycle=%d, currentDone=%d, immediate return", p, targetCycle, currentDone)
 		return
 	}
+
+	debug.Logf("WaitForDone: port=%p, targetCycle=%d, currentDone=%d, blocking...", p, targetCycle, currentDone)
 
 	p.doneMu.Lock()
 	defer p.doneMu.Unlock()
@@ -285,11 +294,19 @@ func (p *SinglePort) WaitForDone(targetCycle int) {
 	}
 
 	// Wait until condition is satisfied
+	waitCount := 0
 	for p.GetDone() < targetCycle {
+		waitCount++
+		if waitCount > 1 {
+			debug.Logf("WaitForDone: port=%p, targetCycle=%d, currentDone=%d, still waiting (waitCount=%d)", p, targetCycle, p.GetDone(), waitCount)
+		}
 		// Wait() will:
 		// 1. Unlock doneMu
 		// 2. Block the goroutine
 		// 3. When Broadcast() is called in SetDone, re-lock doneMu and continue
 		p.doneCond.Wait()
 	}
+
+	finalDone := p.GetDone()
+	debug.Logf("WaitForDone: port=%p, targetCycle=%d, finalDone=%d, unblocked", p, targetCycle, finalDone)
 }

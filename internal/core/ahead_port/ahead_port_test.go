@@ -16,8 +16,8 @@ func TestSetDoneAtomic(t *testing.T) {
 	port := NewAheadPort(8)
 
 	// Test initial value
-	if port.GetDone() != -1 {
-		t.Fatalf("expected initial Done -1, got %d", port.GetDone())
+	if port.GetDone() != 0 {
+		t.Fatalf("expected initial Done 0, got %d", port.GetDone())
 	}
 
 	// Test setting value

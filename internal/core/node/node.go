@@ -8,6 +8,7 @@ import (
 
 	"github.com/Readm/flow_sim/internal/core/capability/cache"
 	"github.com/Readm/flow_sim/internal/core/capability/directory"
+	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -251,13 +252,19 @@ func (n *Node) Advance(cycles int) error {
 		return nil
 	}
 
+	debug.Logf("Node.Advance: node=%d, cycles=%d, starting from cycle=%d", n.id, cycles, n.currentCycle)
+
 	ctx := context.Background()
 	for i := 0; i < cycles; i++ {
 		cycle := n.currentCycle
+		debug.Logf("Node.Advance: node=%d, executing cycle=%d (%d/%d)", n.id, cycle, i+1, cycles)
 		if err := n.Tick(ctx, cycle, 0); err != nil {
+			debug.Logf("Node.Advance: node=%d, cycle=%d failed: %v", n.id, cycle, err)
 			return err
 		}
 		n.currentCycle++
+		debug.Logf("Node.Advance: node=%d, cycle=%d completed", n.id, cycle)
 	}
+	debug.Logf("Node.Advance: node=%d, all cycles completed", n.id)
 	return nil
 }

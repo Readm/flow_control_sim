@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
+	"github.com/Readm/flow_sim/internal/core/debug"
 )
 
 // LinkCycleProcessor is a custom cycle processor for Link that waits for Done(cycle-latency)
@@ -309,13 +310,22 @@ func (l *Link) Advance(cycles int) error {
 		return nil
 	}
 
+	debug.Logf("Link.Advance: link=%d->%d, cycles=%d, starting from cycle=%d", l.sourceID, l.targetID, cycles, l.currentCycle)
+
+	// Note: readyUntil initialization is handled by Network.Advance before parallel execution.
+	// This prevents overwriting dynamically updated readyUntil values from updateUpstreamReady.
+
 	for i := 0; i < cycles; i++ {
 		cycle := l.currentCycle
+		debug.Logf("Link.Advance: link=%d->%d, executing cycle=%d (%d/%d)", l.sourceID, l.targetID, cycle, i+1, cycles)
 		if err := l.Tick(cycle); err != nil {
+			debug.Logf("Link.Advance: link=%d->%d, cycle=%d failed: %v", l.sourceID, l.targetID, cycle, err)
 			return err
 		}
 		l.currentCycle++
+		debug.Logf("Link.Advance: link=%d->%d, cycle=%d completed", l.sourceID, l.targetID, cycle)
 	}
+	debug.Logf("Link.Advance: link=%d->%d, all cycles completed", l.sourceID, l.targetID)
 	return nil
 }
 
