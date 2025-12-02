@@ -248,3 +248,28 @@ func (d *FullyAssociativeDirectory) GetSize() int {
 	return len(d.entries)
 }
 
+// MustWaitForWriteback implements Directory.MustWaitForWriteback
+func (d *FullyAssociativeDirectory) MustWaitForWriteback(addr uint64) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	entry, exists := d.entries[addr]
+	if !exists {
+		return false
+	}
+
+	// Need to wait for writeback if line is Modified
+	return entry.State == StateModified
+}
+
+// HasPendingRequest implements Directory.HasPendingRequest
+func (d *FullyAssociativeDirectory) HasPendingRequest(addr uint64) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	// TODO: This requires tracking pending requests
+	// For now, return false (no conflict detection)
+	// Can be enhanced later with a pending request map
+	return false
+}
+

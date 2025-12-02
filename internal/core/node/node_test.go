@@ -206,3 +206,135 @@ func (m *mockOutputQueue) IsFull() bool  { return false }
 type fakeCache struct{ cache.Cache }
 
 type fakeDirectory struct{ directory.Directory }
+
+func TestNodeDataMap(t *testing.T) {
+	t.Parallel()
+
+	n := New(1)
+
+	// Test SetData and GetData
+	n.SetData("test_key", "test_value")
+	val := n.GetData("test_key")
+	if val == nil {
+		t.Fatal("expected non-nil value")
+	}
+	if str, ok := val.(string); !ok || str != "test_value" {
+		t.Errorf("expected 'test_value', got %v", val)
+	}
+
+	// Test HasData
+	if !n.HasData("test_key") {
+		t.Error("expected HasData to return true")
+	}
+	if n.HasData("nonexistent_key") {
+		t.Error("expected HasData to return false for nonexistent key")
+	}
+
+	// Test GetData for nonexistent key
+	val = n.GetData("nonexistent_key")
+	if val != nil {
+		t.Errorf("expected nil for nonexistent key, got %v", val)
+	}
+
+	// Test overwriting existing key
+	n.SetData("test_key", "new_value")
+	val = n.GetData("test_key")
+	if str, ok := val.(string); !ok || str != "new_value" {
+		t.Errorf("expected 'new_value', got %v", val)
+	}
+
+	// Test DeleteData
+	n.DeleteData("test_key")
+	if n.HasData("test_key") {
+		t.Error("expected HasData to return false after delete")
+	}
+	val = n.GetData("test_key")
+	if val != nil {
+		t.Errorf("expected nil after delete, got %v", val)
+	}
+
+	// Test multiple keys
+	n.SetData("key1", 123)
+	n.SetData("key2", true)
+	n.SetData("key3", []byte{1, 2, 3})
+
+	if !n.HasData("key1") || !n.HasData("key2") || !n.HasData("key3") {
+		t.Error("expected all keys to be present")
+	}
+
+	// Test GetAllData
+	allData := n.GetAllData()
+	if len(allData) != 3 {
+		t.Errorf("expected 3 keys, got %d", len(allData))
+	}
+	if allData["key1"].(int) != 123 {
+		t.Error("key1 value mismatch")
+	}
+	if allData["key2"].(bool) != true {
+		t.Error("key2 value mismatch")
+	}
+
+	// Test that GetAllData returns a copy (isolation)
+	allData["key1"] = 999
+	if n.GetData("key1").(int) != 123 {
+		t.Error("GetAllData should return a copy, not reference")
+	}
+}
+
+func TestNodeDataMap_DifferentTypes(t *testing.T) {
+	t.Parallel()
+
+	n := New(2)
+
+	// Test storing different types
+	type CustomStruct struct {
+		Field1 string
+		Field2 int
+	}
+
+	n.SetData("string", "value")
+	n.SetData("int", 42)
+	n.SetData("bool", false)
+	n.SetData("slice", []int{1, 2, 3})
+	n.SetData("map", map[string]int{"a": 1})
+	n.SetData("struct", CustomStruct{"test", 100})
+
+	// Verify all types can be retrieved
+	if n.GetData("string").(string) != "value" {
+		t.Error("string type mismatch")
+	}
+	if n.GetData("int").(int) != 42 {
+		t.Error("int type mismatch")
+	}
+	if n.GetData("bool").(bool) != false {
+		t.Error("bool type mismatch")
+	}
+	if len(n.GetData("slice").([]int)) != 3 {
+		t.Error("slice type mismatch")
+	}
+	if n.GetData("map").(map[string]int)["a"] != 1 {
+		t.Error("map type mismatch")
+	}
+	cs := n.GetData("struct").(CustomStruct)
+	if cs.Field1 != "test" || cs.Field2 != 100 {
+		t.Error("struct type mismatch")
+	}
+}
+
+func TestNodeDataMap_DeleteNonexistent(t *testing.T) {
+	t.Parallel()
+
+	n := New(3)
+
+	// Deleting nonexistent key should not panic
+	n.DeleteData("nonexistent")
+
+	// Multiple deletes should be safe
+	n.SetData("key", "value")
+	n.DeleteData("key")
+	n.DeleteData("key")
+
+	if n.HasData("key") {
+		t.Error("key should not exist after delete")
+	}
+}

@@ -45,5 +45,15 @@ type Directory interface {
 
 	// SetEvictCallback sets the callback function to be called when a directory entry is evicted.
 	SetEvictCallback(callback EvictCallback)
+
+	// MustWaitForWriteback checks if a writeback must be awaited before processing
+	// a request for the given address. Returns true if the line is in Modified state
+	// and needs writeback.
+	MustWaitForWriteback(addr uint64) bool
+
+	// HasPendingRequest checks if there are pending requests for the given address.
+	// Used for conflict detection and request serialization.
+	// Returns true if another transaction is already processing this address.
+	HasPendingRequest(addr uint64) bool
 }
 

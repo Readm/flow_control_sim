@@ -168,3 +168,106 @@ func TestFullyAssociativeDirectory_SetState(t *testing.T) {
 	}
 }
 
+func TestFullyAssociativeDirectory_MustWaitForWriteback(t *testing.T) {
+	dir := NewFullyAssociativeDirectory(4)
+	addr := uint64(0x1000)
+
+	// Non-present entry should not require writeback
+	if dir.MustWaitForWriteback(addr) {
+		t.Error("non-present entry should not require writeback")
+	}
+
+	// Shared state should not require writeback
+	dir.SetState(addr, StateShared)
+	if dir.MustWaitForWriteback(addr) {
+		t.Error("Shared state should not require writeback")
+	}
+
+	// Exclusive state should not require writeback
+	dir.SetState(addr, StateExclusive)
+	if dir.MustWaitForWriteback(addr) {
+		t.Error("Exclusive state should not require writeback")
+	}
+
+	// Modified state should require writeback
+	dir.SetState(addr, StateModified)
+	if !dir.MustWaitForWriteback(addr) {
+		t.Error("Modified state should require writeback")
+	}
+
+	// After clearing state, should not require writeback
+	dir.SetState(addr, StateNotPresent)
+	if dir.MustWaitForWriteback(addr) {
+		t.Error("NotPresent state should not require writeback")
+	}
+}
+
+func TestFullyAssociativeDirectory_HasPendingRequest(t *testing.T) {
+	dir := NewFullyAssociativeDirectory(4)
+	addr := uint64(0x2000)
+
+	// Current implementation always returns false
+	// This test documents the expected behavior
+	if dir.HasPendingRequest(addr) {
+		t.Error("HasPendingRequest should return false (not yet implemented)")
+	}
+
+	// Add an entry
+	dir.AddSharer(addr, 1)
+
+	// Still should return false in current implementation
+	if dir.HasPendingRequest(addr) {
+		t.Error("HasPendingRequest should return false (not yet implemented)")
+	}
+}
+
+func TestFullyAssociativeDirectory_StateTransitions(t *testing.T) {
+	dir := NewFullyAssociativeDirectory(8)
+	addr := uint64(0x3000)
+
+	// Test state transitions for writeback requirement
+	tests := []struct {
+		state           State
+		needsWriteback bool
+	}{
+		{StateNotPresent, false},
+		{StateShared, false},
+		{StateExclusive, false},
+		{StateModified, true},
+	}
+
+	for _, tt := range tests {
+		dir.SetState(addr, tt.state)
+		result := dir.MustWaitForWriteback(addr)
+		if result != tt.needsWriteback {
+			t.Errorf("state %v: expected MustWaitForWriteback=%v, got %v",
+				tt.state, tt.needsWriteback, result)
+		}
+	}
+}
+
+func TestFullyAssociativeDirectory_ModifiedStateScenario(t *testing.T) {
+	dir := NewFullyAssociativeDirectory(4)
+	addr := uint64(0x4000)
+
+	// Scenario: Node gets exclusive access and modifies data
+	dir.AddSharer(addr, 10)
+	dir.SetOwner(addr, 10)
+	dir.SetState(addr, StateModified)
+
+	// Directory should indicate writeback is needed
+	if !dir.MustWaitForWriteback(addr) {
+		t.Error("Modified state should require writeback")
+	}
+
+	// Owner should be set
+	if dir.GetOwner(addr) != 10 {
+		t.Errorf("expected owner 10, got %d", dir.GetOwner(addr))
+	}
+
+	// State should be Modified
+	if dir.GetState(addr) != StateModified {
+		t.Errorf("expected StateModified, got %v", dir.GetState(addr))
+	}
+}
+

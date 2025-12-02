@@ -195,3 +195,61 @@ func (c *FullyAssociativeCache) GetSize() int {
 	return len(c.lines)
 }
 
+// HandleSnoop implements Cache.HandleSnoop
+func (c *FullyAssociativeCache) HandleSnoop(snoopOpcode int, addr uint64) (*SnoopResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	line, exists := c.lines[addr]
+	if !exists || line.State == StateInvalid {
+		// No data to provide
+		return &SnoopResponse{
+			ResponseOpcode: 0, // Protocol-specific: no data response
+			Data:           nil,
+			HasData:        false,
+		}, nil
+	}
+
+	// Determine if we should provide data based on state
+	// Modified, Exclusive, and Owned states provide data
+	// Shared and Invalid do not provide data
+	shouldProvideData := line.State == StateModified ||
+		line.State == StateExclusive ||
+		line.State == StateOwned
+
+	response := &SnoopResponse{
+		ResponseOpcode: 1,    // Protocol-specific: data response
+		Data:           nil,
+		HasData:        false,
+	}
+
+	if shouldProvideData {
+		response.Data = line.Data
+		response.HasData = true
+	}
+
+	// Downgrade state if needed (simplified logic)
+	// Modified, Exclusive, and Owned all downgrade to Shared
+	if line.State == StateModified || line.State == StateExclusive || line.State == StateOwned {
+		line.State = StateShared
+	}
+
+	return response, nil
+}
+
+// CanForward implements Cache.CanForward
+func (c *FullyAssociativeCache) CanForward(addr uint64) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	line, exists := c.lines[addr]
+	if !exists {
+		return false
+	}
+
+	// Can forward if in Modified, Owned, or Exclusive state
+	return line.State == StateModified ||
+		line.State == StateExclusive ||
+		line.State == StateOwned
+}
+

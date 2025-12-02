@@ -3,24 +3,18 @@ package chi
 import (
 	"fmt"
 	"time"
+
+	"github.com/Readm/flow_sim/internal/core/capability/cache"
+	"github.com/Readm/flow_sim/internal/core/node"
+	"github.com/Readm/flow_sim/internal/dataflow/message"
+	"github.com/Readm/flow_sim/internal/dataflow/transaction"
 )
 
 // ============================================================================
-// CHI Transaction Implementations
-// ============================================================================
-//
-// Design Rules:
-// - ONLY use interfaces defined in interfaces.go
-// - NO imports from transaction/cache/directory/message packages
-// - Complete decoupling from framework internals
-//
+// CHI Transaction Implementations - Using Framework Interfaces
 // ============================================================================
 
-// ============================================================================
-// RN (Request Node) Transactions
-// ============================================================================
-
-// ReadCleanTxn implements a CHI ReadClean transaction from RN perspective.
+// ReadCleanTxn implements CHI ReadClean transaction from RN perspective.
 //
 // Flow:
 // 1. Check local cache
@@ -29,237 +23,234 @@ import (
 // 4. Wait for CompData response
 // 5. Update cache to Shared state
 // 6. Return data
-//
-// Parameters:
-//   - ctx: Transaction context for Yield/Resume
-//   - env: Node environment (Cache, Decoder, etc.)
-//   - addr: Target address
-//
-// Returns:
-//   - []byte: Data read from address
-//   - error: Any error encountered
-func ReadCleanTxn(ctx TxnContext, env *NodeEnv, addr uint64) ([]byte, error) {
-	// Step 1: Check local cache
-	if env.Cache != nil && env.Cache.IsPresent(addr) {
-		state := env.Cache.GetState(addr)
-		if state != CacheStateInvalid {
-			// Cache hit - return data directly
-			return env.Cache.GetData(addr), nil
-		}
-	}
-
-	// Step 2: Cache miss - decode address to find Home Node
-	decodeResult, err := env.Decoder.DecodeAddress(addr)
+func ReadCleanTxn(
+	ctx *transaction.TxnContext,
+	n *node.Node,
+	addr uint64,
+) ([]byte, error) {
+	// Step 1: Get CHI capabilities from node
+	c := GetCHICache(n)
+	decoder, err := GetCHIDecoder(n)
 	if err != nil {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("Failed to decode address 0x%x: %v", addr, err),
+		return nil, err
+	}
+	msgBuilder, err := GetCHIMessageBuilder(n)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 2: Check local cache
+	if c != nil && c.IsPresent(addr) {
+		state := c.GetState(addr)
+		if state != cache.StateInvalid {
+			// Cache hit
+			return c.GetData(addr), nil
 		}
 	}
 
-	// Step 3: Build ReadClean request message
+	// Step 3: Cache miss - decode address to find Home Node
+	decodeResult, err := decoder.DecodeAddress(addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode address 0x%x: %w", addr, err)
+	}
+	homeNodeID := decodeResult.TargetID
+
+	// Step 4: Build ReadClean request message
 	reqPayload := NewCHIPayload(OpcodeReadClean, addr)
-	reqMsg := env.MsgBuilder.NewMessage(
-		ctx.GetTxnID(),
+	reqMsg := msgBuilder.NewMessage(
+		ctx.TxnID(),
 		OpcodeReadClean,
-		ctx.GetNodeID(),
-		decodeResult.HomeNodeID,
+		n.ID(),
+		homeNodeID,
 		reqPayload,
 	)
 
-	// Step 4: Send request and wait for CompData response
-	result, err := ctx.Yield(NewYieldSendAndWait(
-		OpcodeCompData,
-		addr,
-		100*time.Millisecond, // Timeout
-		reqMsg,
-	))
+	// Step 5: Send request and wait for CompData response
+	if err := ctx.Send(reqMsg); err != nil {
+		return nil, err
+	}
+
+	result, err := ctx.Yield(&transaction.YieldCommand{
+		Type: transaction.YieldTypeWaitForMessage,
+		WaitFor: &transaction.WaitForMessage{
+			Type: OpcodeCompData,
+		},
+		Timeout: 100 * time.Millisecond,
+	})
 	if err != nil {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("ReadClean timeout for address 0x%x: %v", addr, err),
-		}
+		return nil, fmt.Errorf("ReadClean timeout for address 0x%x: %w", addr, err)
 	}
 
-	// Step 5: Extract data from response
-	respMsg, ok := result.(Message)
+	// Step 6: Extract data from response
+	respMsg, ok := result.(*message.Message)
 	if !ok {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("Invalid response type for ReadClean"),
-		}
+		return nil, fmt.Errorf("invalid response type for ReadClean")
 	}
 
-	payload, ok := respMsg.GetPayload().(*CHIPayload)
+	payload, ok := respMsg.Payload.(*CHIPayload)
 	if !ok {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("Invalid payload type in CompData response"),
-		}
+		return nil, fmt.Errorf("invalid payload type in CompData response")
 	}
 
-	// Step 6: Update local cache to Shared state
-	if env.Cache != nil {
-		env.Cache.SetData(addr, payload.Data)
-		env.Cache.SetState(addr, CacheStateShared)
+	// Step 7: Update local cache to Shared state
+	if c != nil {
+		c.SetData(addr, payload.Data)
+		c.SetState(addr, cache.StateShared)
 	}
 
 	return payload.Data, nil
 }
 
-// ReadSharedTxn implements a CHI ReadShared transaction from RN perspective.
-//
+// ReadSharedTxn implements CHI ReadShared transaction from RN perspective.
 // Similar to ReadClean, but may involve snooping other caches.
-//
-// Flow:
-// 1. Check local cache
-// 2. If hit, return data
-// 3. If miss, send ReadShared request to Home Node
-// 4. Wait for CompData response (HN may snoop other caches)
-// 5. Update cache to Shared state
-// 6. Return data
-func ReadSharedTxn(ctx TxnContext, env *NodeEnv, addr uint64) ([]byte, error) {
-	// Step 1: Check local cache
-	if env.Cache != nil && env.Cache.IsPresent(addr) {
-		state := env.Cache.GetState(addr)
-		if state != CacheStateInvalid {
-			// Cache hit - return data directly
-			return env.Cache.GetData(addr), nil
-		}
-	}
-
-	// Step 2: Decode address to find Home Node
-	decodeResult, err := env.Decoder.DecodeAddress(addr)
+func ReadSharedTxn(
+	ctx *transaction.TxnContext,
+	n *node.Node,
+	addr uint64,
+) ([]byte, error) {
+	// Implementation similar to ReadCleanTxn
+	// For simplicity, use same logic as ReadClean
+	c := GetCHICache(n)
+	decoder, err := GetCHIDecoder(n)
 	if err != nil {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("Failed to decode address 0x%x: %v", addr, err),
+		return nil, err
+	}
+	msgBuilder, err := GetCHIMessageBuilder(n)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check local cache
+	if c != nil && c.IsPresent(addr) {
+		state := c.GetState(addr)
+		if state != cache.StateInvalid {
+			return c.GetData(addr), nil
 		}
 	}
 
-	// Step 3: Build ReadShared request message
+	// Decode address
+	decodeResult, err := decoder.DecodeAddress(addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode address 0x%x: %w", addr, err)
+	}
+
+	// Build ReadShared request
 	reqPayload := NewCHIPayload(OpcodeReadShared, addr)
-	reqMsg := env.MsgBuilder.NewMessage(
-		ctx.GetTxnID(),
+	reqMsg := msgBuilder.NewMessage(
+		ctx.TxnID(),
 		OpcodeReadShared,
-		ctx.GetNodeID(),
-		decodeResult.HomeNodeID,
+		n.ID(),
+		decodeResult.TargetID,
 		reqPayload,
 	)
 
-	// Step 4: Send request and wait for CompData response
-	result, err := ctx.Yield(NewYieldSendAndWait(
-		OpcodeCompData,
-		addr,
-		100*time.Millisecond,
-		reqMsg,
-	))
+	// Send and wait
+	if err := ctx.Send(reqMsg); err != nil {
+		return nil, err
+	}
+
+	result, err := ctx.Yield(&transaction.YieldCommand{
+		Type: transaction.YieldTypeWaitForMessage,
+		WaitFor: &transaction.WaitForMessage{
+			Type: OpcodeCompData,
+		},
+		Timeout: 100 * time.Millisecond,
+	})
 	if err != nil {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("ReadShared timeout for address 0x%x: %v", addr, err),
-		}
+		return nil, fmt.Errorf("ReadShared timeout for address 0x%x: %w", addr, err)
 	}
 
-	// Step 5: Extract data from response
-	respMsg, ok := result.(Message)
+	// Extract data
+	respMsg, ok := result.(*message.Message)
 	if !ok {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("Invalid response type for ReadShared"),
-		}
+		return nil, fmt.Errorf("invalid response type for ReadShared")
 	}
 
-	payload, ok := respMsg.GetPayload().(*CHIPayload)
+	payload, ok := respMsg.Payload.(*CHIPayload)
 	if !ok {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("Invalid payload type in CompData response"),
-		}
+		return nil, fmt.Errorf("invalid payload type in CompData response")
 	}
 
-	// Step 6: Update local cache to Shared state
-	if env.Cache != nil {
-		env.Cache.SetData(addr, payload.Data)
-		env.Cache.SetState(addr, CacheStateShared)
+	// Update cache
+	if c != nil {
+		c.SetData(addr, payload.Data)
+		c.SetState(addr, cache.StateShared)
 	}
 
 	return payload.Data, nil
 }
 
-// ReadUniqueTxn implements a CHI ReadUnique transaction (for exclusive access).
-//
-// Flow:
-// 1. Check local cache
-// 2. If in Exclusive/Modified state, return data
-// 3. If miss or Shared, send ReadUnique request to Home Node
-// 4. Wait for CompData response
-// 5. Update cache to Exclusive state
-// 6. Return data
-func ReadUniqueTxn(ctx TxnContext, env *NodeEnv, addr uint64) ([]byte, error) {
-	// Step 1: Check local cache
-	if env.Cache != nil && env.Cache.IsPresent(addr) {
-		state := env.Cache.GetState(addr)
-		if state == CacheStateExclusive || state == CacheStateModified {
-			// Already have exclusive access
-			return env.Cache.GetData(addr), nil
-		}
-	}
-
-	// Step 2: Decode address
-	decodeResult, err := env.Decoder.DecodeAddress(addr)
+// ReadUniqueTxn implements CHI ReadUnique transaction (for exclusive access).
+func ReadUniqueTxn(
+	ctx *transaction.TxnContext,
+	n *node.Node,
+	addr uint64,
+) ([]byte, error) {
+	c := GetCHICache(n)
+	decoder, err := GetCHIDecoder(n)
 	if err != nil {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("Failed to decode address 0x%x: %v", addr, err),
+		return nil, err
+	}
+	msgBuilder, err := GetCHIMessageBuilder(n)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if already have exclusive access
+	if c != nil && c.IsPresent(addr) {
+		state := c.GetState(addr)
+		if state == cache.StateExclusive || state == cache.StateModified {
+			return c.GetData(addr), nil
 		}
 	}
 
-	// Step 3: Build ReadUnique request
+	// Decode address
+	decodeResult, err := decoder.DecodeAddress(addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode address 0x%x: %w", addr, err)
+	}
+
+	// Build ReadUnique request
 	reqPayload := NewCHIPayload(OpcodeReadUnique, addr)
-	reqMsg := env.MsgBuilder.NewMessage(
-		ctx.GetTxnID(),
+	reqMsg := msgBuilder.NewMessage(
+		ctx.TxnID(),
 		OpcodeReadUnique,
-		ctx.GetNodeID(),
-		decodeResult.HomeNodeID,
+		n.ID(),
+		decodeResult.TargetID,
 		reqPayload,
 	)
 
-	// Step 4: Send request and wait for CompData
-	result, err := ctx.Yield(NewYieldSendAndWait(
-		OpcodeCompData,
-		addr,
-		100*time.Millisecond,
-		reqMsg,
-	))
+	// Send and wait
+	if err := ctx.Send(reqMsg); err != nil {
+		return nil, err
+	}
+
+	result, err := ctx.Yield(&transaction.YieldCommand{
+		Type: transaction.YieldTypeWaitForMessage,
+		WaitFor: &transaction.WaitForMessage{
+			Type: OpcodeCompData,
+		},
+		Timeout: 100 * time.Millisecond,
+	})
 	if err != nil {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("ReadUnique timeout for address 0x%x: %v", addr, err),
-		}
+		return nil, fmt.Errorf("ReadUnique timeout for address 0x%x: %w", addr, err)
 	}
 
-	// Step 5: Extract data
-	respMsg, ok := result.(Message)
+	// Extract data
+	respMsg, ok := result.(*message.Message)
 	if !ok {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("Invalid response type for ReadUnique"),
-		}
+		return nil, fmt.Errorf("invalid response type for ReadUnique")
 	}
 
-	payload, ok := respMsg.GetPayload().(*CHIPayload)
+	payload, ok := respMsg.Payload.(*CHIPayload)
 	if !ok {
-		return nil, &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("Invalid payload type in CompData response"),
-		}
+		return nil, fmt.Errorf("invalid payload type in CompData response")
 	}
 
-	// Step 6: Update cache to Exclusive state
-	if env.Cache != nil {
-		env.Cache.SetData(addr, payload.Data)
-		env.Cache.SetState(addr, CacheStateExclusive)
+	// Update cache to Exclusive state
+	if c != nil {
+		c.SetData(addr, payload.Data)
+		c.SetState(addr, cache.StateExclusive)
 	}
 
 	return payload.Data, nil
@@ -270,104 +261,67 @@ func ReadUniqueTxn(ctx TxnContext, env *NodeEnv, addr uint64) ([]byte, error) {
 // ============================================================================
 
 // HomeNodeReadCleanHandler handles ReadClean requests at the Home Node.
-//
-// Flow:
-// 1. Check directory state
-// 2. If clean (no sharers), read from memory and send CompData
-// 3. If dirty, send snoop to owner and forward data
-// 4. Update directory state
-func HomeNodeReadCleanHandler(ctx TxnContext, env *NodeEnv, reqMsg Message) error {
-	payload, ok := reqMsg.GetPayload().(*CHIPayload)
+func HomeNodeReadCleanHandler(
+	ctx *transaction.TxnContext,
+	n *node.Node,
+	reqMsg *message.Message,
+) error {
+	payload, ok := reqMsg.Payload.(*CHIPayload)
 	if !ok {
-		return &CHIError{
-			Code:    ErrCodeNonData,
-			Message: "Invalid payload type in ReadClean request",
-		}
+		return fmt.Errorf("invalid payload type in ReadClean request")
 	}
 	addr := payload.Addr
 
-	// Step 1: Check directory state
-	if env.Dir == nil {
-		return &CHIError{
-			Code:    ErrCodeNonData,
-			Message: "Directory not available at Home Node",
-		}
+	// Get capabilities
+	dir := GetCHIDirectory(n)
+	msgBuilder, err := GetCHIMessageBuilder(n)
+	if err != nil {
+		return err
 	}
 
-	dirState := env.Dir.GetState(addr)
-
-	// Step 2: Handle based on directory state
-	switch dirState {
-	case DirStateNotPresent, DirStateShared:
-		// Clean case - read from memory and send CompData
-		data := loadDataFromMemory(addr) // Placeholder function
-
-		respPayload := NewCHIPayload(OpcodeCompData, addr)
-		respPayload.SetData(data)
-
-		respMsg := env.MsgBuilder.NewMessage(
-			reqMsg.GetTransactionID(),
-			OpcodeCompData,
-			ctx.GetNodeID(),
-			reqMsg.GetSourceNodeID(),
-			respPayload,
-		)
-
-		if err := ctx.Send(respMsg); err != nil {
-			return err
-		}
-
-		// Update directory: add requester as sharer
-		env.Dir.AddSharer(addr, reqMsg.GetSourceNodeID())
-		env.Dir.SetState(addr, DirStateShared)
-
-	case DirStateModified, DirStateExclusive:
-		// Dirty case - need to snoop the owner
-		owner := env.Dir.GetOwner(addr)
-
-		// Send SnpSharedFwd to owner
-		snpPayload := NewCHIPayload(OpcodeSnpSharedFwd, addr)
-		snpPayload.SetReturnInfo(reqMsg.GetSourceNodeID(), int(reqMsg.GetTransactionID().TxnID))
-
-		snpMsg := env.MsgBuilder.NewMessage(
-			ctx.GetTxnID(), // New transaction for snoop
-			OpcodeSnpSharedFwd,
-			ctx.GetNodeID(),
-			owner,
-			snpPayload,
-		)
-
-		// Send snoop and wait for SnpRespData
-		result, err := ctx.Yield(NewYieldSendAndWait(
-			OpcodeSnpRespData,
-			addr,
-			100*time.Millisecond,
-			snpMsg,
-		))
-		if err != nil {
-			return &CHIError{
-				Code:    ErrCodeNonData,
-				Message: fmt.Sprintf("Snoop timeout for address 0x%x", addr),
-			}
-		}
-
-		// Data will be forwarded directly from owner to requester
-		// Update directory state
-		env.Dir.AddSharer(addr, reqMsg.GetSourceNodeID())
-		env.Dir.SetState(addr, DirStateShared)
-		env.Dir.SetOwner(addr, -1) // Clear owner
-
-		_ = result // SnpRespData received
+	if dir == nil {
+		return fmt.Errorf("directory not available at Home Node %d", n.ID())
 	}
+
+	// Check directory state
+	dirState := dir.GetState(addr)
+
+	// Simple implementation: always return data from memory
+	// TODO: Handle dirty case with snoop
+	data := loadDataFromMemory(addr)
+
+	respPayload := NewCHIPayload(OpcodeCompData, addr)
+	respPayload.SetData(data)
+
+	respMsg := msgBuilder.NewMessage(
+		reqMsg.TransactionID,
+		OpcodeCompData,
+		n.ID(),
+		reqMsg.SourceNodeID,
+		respPayload,
+	)
+
+	if err := ctx.Send(respMsg); err != nil {
+		return err
+	}
+
+	// Update directory
+	if dirState != "Shared" {
+		dir.SetState(addr, "Shared")
+	}
+	dir.AddSharer(addr, reqMsg.SourceNodeID)
 
 	return nil
 }
 
 // HomeNodeReadSharedHandler handles ReadShared requests at the Home Node.
-// Similar to ReadClean handler.
-func HomeNodeReadSharedHandler(ctx TxnContext, env *NodeEnv, reqMsg Message) error {
-	// Implementation similar to ReadClean
-	return HomeNodeReadCleanHandler(ctx, env, reqMsg)
+func HomeNodeReadSharedHandler(
+	ctx *transaction.TxnContext,
+	n *node.Node,
+	reqMsg *message.Message,
+) error {
+	// Similar to ReadClean handler
+	return HomeNodeReadCleanHandler(ctx, n, reqMsg)
 }
 
 // ============================================================================
@@ -375,44 +329,42 @@ func HomeNodeReadSharedHandler(ctx TxnContext, env *NodeEnv, reqMsg Message) err
 // ============================================================================
 
 // SnpSharedFwdHandler handles SnpSharedFwd at a Request Node.
-//
-// Flow:
-// 1. Check if we have the data
-// 2. If yes, downgrade to Shared and forward data to requester
-// 3. Send SnpRespData with data
-func SnpSharedFwdHandler(ctx TxnContext, env *NodeEnv, snpMsg Message) error {
-	payload, ok := snpMsg.GetPayload().(*CHIPayload)
+func SnpSharedFwdHandler(
+	ctx *transaction.TxnContext,
+	n *node.Node,
+	snpMsg *message.Message,
+) error {
+	payload, ok := snpMsg.Payload.(*CHIPayload)
 	if !ok {
-		return &CHIError{
-			Code:    ErrCodeNonData,
-			Message: "Invalid payload type in SnpSharedFwd",
-		}
+		return fmt.Errorf("invalid payload type in SnpSharedFwd")
 	}
 	addr := payload.Addr
 
-	// Step 1: Check cache
-	if env.Cache == nil || !env.Cache.IsPresent(addr) {
-		// We don't have the data - should not happen
-		return &CHIError{
-			Code:    ErrCodeNonData,
-			Message: fmt.Sprintf("SnpSharedFwd for address 0x%x but line not present", addr),
-		}
+	// Get capabilities
+	c := GetCHICache(n)
+	msgBuilder, err := GetCHIMessageBuilder(n)
+	if err != nil {
+		return err
 	}
 
-	// Step 2: Get data and downgrade to Shared
-	data := env.Cache.GetData(addr)
-	env.Cache.SetState(addr, CacheStateShared)
+	if c == nil || !c.IsPresent(addr) {
+		return fmt.Errorf("SnpSharedFwd for address 0x%x but line not present", addr)
+	}
 
-	// Step 3: Forward data to requester (via ReturnNID)
+	// Get data and downgrade to Shared
+	data := c.GetData(addr)
+	c.SetState(addr, cache.StateShared)
+
+	// Forward data to requester
 	respPayload := NewCHIPayload(OpcodeSnpRespData, addr)
 	respPayload.SetData(data)
 	respPayload.SetReturnInfo(payload.ReturnNID, payload.ReturnTxnID)
 
-	respMsg := env.MsgBuilder.NewMessage(
-		snpMsg.GetTransactionID(),
+	respMsg := msgBuilder.NewMessage(
+		snpMsg.TransactionID,
 		OpcodeSnpRespData,
-		ctx.GetNodeID(),
-		payload.ReturnNID, // Forward to original requester
+		n.ID(),
+		payload.ReturnNID,
 		respPayload,
 	)
 
@@ -420,11 +372,10 @@ func SnpSharedFwdHandler(ctx TxnContext, env *NodeEnv, snpMsg Message) error {
 }
 
 // ============================================================================
-// Helper Functions (Placeholders)
+// Helper Functions
 // ============================================================================
 
 // loadDataFromMemory simulates loading data from memory.
-// In production, this would be replaced with actual memory access.
 func loadDataFromMemory(addr uint64) []byte {
 	// Placeholder: return dummy data
 	data := make([]byte, 64)
@@ -432,22 +383,4 @@ func loadDataFromMemory(addr uint64) []byte {
 		data[i] = byte(addr + uint64(i))
 	}
 	return data
-}
-
-// ============================================================================
-// Transaction Registry
-// ============================================================================
-
-// TransactionRegistry maps transaction types to their implementations.
-var TransactionRegistry = map[int]TransactionFunc{
-	OpcodeReadClean:  ReadCleanTxn,
-	OpcodeReadShared: ReadSharedTxn,
-	OpcodeReadUnique: ReadUniqueTxn,
-}
-
-// HandlerRegistry maps message types to their handlers.
-var HandlerRegistry = map[int]TransactionHandler{
-	OpcodeReadClean:    HomeNodeReadCleanHandler,
-	OpcodeReadShared:   HomeNodeReadSharedHandler,
-	OpcodeSnpSharedFwd: SnpSharedFwdHandler,
 }

@@ -44,6 +44,10 @@ type Node struct {
 	caches      []cache.Cache
 	directories []directory.Directory
 
+	// Protocol-specific data storage (e.g., "CHI_Role", "AXI_Config")
+	dataMu sync.RWMutex
+	data   map[string]interface{}
+
 	bufferMu      sync.Mutex
 	processBuffer []packet.Packet
 	processHook   ProcessHook
@@ -60,6 +64,7 @@ func New(id int) *Node {
 		outputs:       make([]OutputQueue, 0),
 		caches:        make([]cache.Cache, 0),
 		directories:   make([]directory.Directory, 0),
+		data:          make(map[string]interface{}),
 		processBuffer: make([]packet.Packet, 0),
 		currentCycle:  0,
 	}
@@ -267,4 +272,47 @@ func (n *Node) Advance(cycles int) error {
 	}
 	debug.Logf("Node.Advance: node=%d, all cycles completed", n.id)
 	return nil
+}
+
+// SetData stores protocol-specific data.
+// Key format recommendation: "{Protocol}_{Key}", e.g., "CHI_Role", "AXI_Config"
+func (n *Node) SetData(key string, value interface{}) {
+	n.dataMu.Lock()
+	defer n.dataMu.Unlock()
+	n.data[key] = value
+}
+
+// GetData retrieves protocol-specific data.
+// Returns nil if key not found.
+func (n *Node) GetData(key string) interface{} {
+	n.dataMu.RLock()
+	defer n.dataMu.RUnlock()
+	return n.data[key]
+}
+
+// HasData checks if a key exists.
+func (n *Node) HasData(key string) bool {
+	n.dataMu.RLock()
+	defer n.dataMu.RUnlock()
+	_, exists := n.data[key]
+	return exists
+}
+
+// DeleteData removes protocol-specific data.
+func (n *Node) DeleteData(key string) {
+	n.dataMu.Lock()
+	defer n.dataMu.Unlock()
+	delete(n.data, key)
+}
+
+// GetAllData returns a copy of all protocol-specific data.
+func (n *Node) GetAllData() map[string]interface{} {
+	n.dataMu.RLock()
+	defer n.dataMu.RUnlock()
+
+	copy := make(map[string]interface{}, len(n.data))
+	for k, v := range n.data {
+		copy[k] = v
+	}
+	return copy
 }
