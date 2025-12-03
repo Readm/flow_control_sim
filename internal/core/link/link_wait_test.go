@@ -12,13 +12,16 @@ import (
 func TestLinkWaitLogic(t *testing.T) {
 	t.Parallel()
 
-	upstream := newTestAheadPort(8)
-	downstream := newTestAheadPort(8)
+	link, linkIn, linkOut := NewLink(0, 1, 3, 1) // latency=3, bandwidth=1
+	downstreamInPort, upstreamOutPort := createTestPorts(8)
+	linkIn.Plug(upstreamOutPort)
+	linkOut.Plug(downstreamInPort)
 
-	link := NewLink(0, 1, upstream, downstream, 3, 1)
+	// Type assert to access SetDone for testing
+	mockOut := upstreamOutPort.(*mockOutPort)
 
-	sendPacket(t, upstream, 0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"})
-	upstream.SetDone(2)
+	sendPacketToOutPort(t, upstreamOutPort, 0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"})
+	mockOut.SetDone(2)
 
 	start := time.Now()
 	if err := link.Tick(2); err != nil {
@@ -28,8 +31,8 @@ func TestLinkWaitLogic(t *testing.T) {
 		t.Errorf("Link.Tick(2) should not block when upstream done >= -1")
 	}
 
-	sendPacket(t, upstream, 1, packet.Packet{SourceID: 0, TargetID: 1, Payload: "wait"})
-	upstream.SetDone(0)
+	sendPacketToOutPort(t, upstreamOutPort, 1, packet.Packet{SourceID: 0, TargetID: 1, Payload: "wait"})
+	mockOut.SetDone(0)
 
 	done := make(chan struct{})
 	go func() {
@@ -43,7 +46,7 @@ func TestLinkWaitLogic(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	upstream.SetDone(5)
+	mockOut.SetDone(5)
 	select {
 	case <-done:
 	case <-time.After(300 * time.Millisecond):
@@ -55,12 +58,15 @@ func TestLinkWaitLogic(t *testing.T) {
 func TestLinkWaitLogicBoundary(t *testing.T) {
 	t.Parallel()
 
-	upstream := newTestAheadPort(8)
-	downstream := newTestAheadPort(8)
+	link, linkIn, linkOut := NewLink(0, 1, 5, 1) // latency=5, bandwidth=1
+	downstreamInPort, upstreamOutPort := createTestPorts(8)
+	linkIn.Plug(upstreamOutPort)
+	linkOut.Plug(downstreamInPort)
 
-	link := NewLink(0, 1, upstream, downstream, 5, 1)
+	// Type assert to access SetDone for testing
+	mockOut := upstreamOutPort.(*mockOutPort)
 
-	upstream.SetDone(1)
+	mockOut.SetDone(1)
 	done := make(chan struct{})
 	go func() {
 		link.Tick(2)
@@ -77,25 +83,28 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	t.Parallel()
 
-	upstream := newTestAheadPort(8)
-	downstream := newTestAheadPort(8)
+	link, linkIn, linkOut := NewLink(0, 1, 4, 1) // latency=4, bandwidth=1
+	downstreamInPort, upstreamOutPort := createTestPorts(8)
+	linkIn.Plug(upstreamOutPort)
+	linkOut.Plug(downstreamInPort)
 
-	link := NewLink(0, 1, upstream, downstream, 4, 1)
+	// Type assert to access SetDone for testing
+	mockOut := upstreamOutPort.(*mockOutPort)
 
-	sendPacket(t, upstream, 0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "early"})
-	upstream.SetDone(2)
+	sendPacketToOutPort(t, upstreamOutPort, 0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "early"})
+	mockOut.SetDone(2)
 
 	if err := link.Tick(2); err != nil {
 		t.Fatalf("link.Tick failed: %v", err)
 	}
-	ensureNoAdditionalPackets(t, downstream)
+	ensureNoAdditionalPacketsInPort(t, downstreamInPort)
 
-	upstream.SetDone(5)
+	mockOut.SetDone(5)
 	if err := link.Tick(4); err != nil {
 		t.Fatalf("link.Tick failed at cycle 4: %v", err)
 	}
 
-	received := receivePackets(t, downstream, 1)
+	received := receivePacketsFromInPort(t, downstreamInPort, 1)
 	if received[0].Packet.Payload != "early" {
 		t.Fatalf("expected payload 'early', got %q", received[0].Packet.Payload)
 	}

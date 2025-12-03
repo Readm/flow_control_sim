@@ -3,6 +3,7 @@ package link
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
@@ -12,10 +13,9 @@ import (
 // instead of Done(cycle-1). This allows Link to process packets earlier, taking advantage
 // of the latency buffer.
 type LinkCycleProcessor struct {
-	upstreamPort   ahead_port.AheadPort
-	downstreamPort ahead_port.AheadPort
-	processor      ahead_port.PacketProcessor
-	latency        int
+	link      *Link                        // Reference to Link
+	processor ahead_port.PacketProcessor   // Packet processing logic
+	latency   int                          // Latency in cycles
 }
 
 // Tick implements the cycle processing workflow with custom wait logic.
@@ -24,65 +24,98 @@ func (lcp *LinkCycleProcessor) Tick(cycle int) error {
 		panic("LinkCycleProcessor.processor is nil")
 	}
 
-	// Wait for upstream Done >= cycle-latency so Link respects configured delay.
-	targetWaitCycle := cycle - lcp.latency
-	lcp.upstreamPort.WaitForDone(targetWaitCycle)
+	link := lcp.link
 
-	// Prepare updateUpstreamReady function
-	var updateUpstreamReady func(cycle int, ready bool)
-	if lcp.upstreamPort != nil {
-		if updater, ok := lcp.upstreamPort.(interface{ UpdateReady(int, bool) }); ok && updater != nil {
-			updateUpstreamReady = updater.UpdateReady
-		} else {
-			panic("upstreamPort does not implement UpdateReady interface")
-		}
-	} else {
-		updateUpstreamReady = func(cycle int, ready bool) {}
+	// ===== 1. Wait for upstream completion =====
+	// Link at cycle N needs to wait for upstream to complete cycle - latency
+	targetWaitCycle := cycle - lcp.latency
+	if link.inPort.UpstreamOut != nil {
+		link.inPort.UpstreamOut.WaitDone(targetWaitCycle)
 	}
 
-	// Process all packets
+	// ===== 2. Prepare updateUpstreamReady function =====
+	// This function notifies upstream of Link's ready status
+	updateUpstreamReady := func(cycle int, ready bool) {
+		link.updateReady(cycle, ready)
+	}
+
+	// ===== 3. Process packets =====
+	// Get upstream's output channel (if plugged)
+	var receiveChan <-chan ahead_port.PacketWithCycle
+	if link.inPort.InputChan != nil {
+		receiveChan = link.inPort.InputChan
+	} else {
+		// If not plugged, use empty channel
+		receiveChan = make(chan ahead_port.PacketWithCycle)
+	}
+
+	// Get downstream's Ready check function
+	checkReady := func(cycle int) bool {
+		if link.outPort.DownstreamIn != nil {
+			return link.outPort.DownstreamIn.Ready(cycle)
+		}
+		return true // If not plugged, default to ready
+	}
+
+	// Get send function
+	sendPacket := func(pkt ahead_port.PacketWithCycle) {
+		if link.outPort.OutputChan != nil {
+			link.outPort.OutputChan <- pkt
+		}
+	}
+
+	// Get setDone function (sets Link's own done state)
+	setDone := func(cycle int) {
+		link.setDone(cycle)
+	}
+
+	// Call PacketProcessor to process packets
 	lcp.processor.ProcessPackets(
-		lcp.upstreamPort.ReceiveChan(),
+		receiveChan,
 		cycle,
-		lcp.downstreamPort.Ready,
-		lcp.sendPacket,
-		lcp.downstreamPort.SetDone,
+		checkReady,
+		sendPacket,
+		setDone,
 		updateUpstreamReady,
 	)
 
-	// SetDone after processing all packets
-	currentDone := lcp.downstreamPort.GetDone()
+	// ===== 4. Ensure Link's Done state is correct =====
+	currentDone := link.getDone()
 	if currentDone < cycle {
-		lcp.downstreamPort.SetDone(cycle)
+		link.setDone(cycle)
 	}
 
-	// Assert that cycle+1 has been configured in upstream port
-	if lcp.upstreamPort != nil {
-		if checker, ok := lcp.upstreamPort.(interface{ ReadyNonBlocking(int) (bool, bool) }); ok && checker != nil {
-			_, configured := checker.ReadyNonBlocking(cycle + 1)
-			if !configured {
-				panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not configured in upstream port. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
-			}
-		}
+	// ===== 5. Assert cycle+1 is decided (optional, for debugging) =====
+	_, decided := link.readyNonBlocking(cycle + 1)
+	if !decided {
+		panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not decided in Link. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 	}
 
 	return nil
 }
 
-// sendPacket sends a packet to downstream.
-func (lcp *LinkCycleProcessor) sendPacket(pkt ahead_port.PacketWithCycle) {
-	lcp.downstreamPort.SendChan() <- pkt
-}
-
-// Link represents a directed edge in the topology using AheadPort.
-// Link receives packets from an upstream AheadPort (which can be a single port or an aggregator)
-// and forwards them to a single downstream Pipeline.
-// It implements latency and bandwidth constraints.
+// Link represents a directed edge in the topology.
+// Link receives packets from upstream and forwards them to downstream with latency and bandwidth constraints.
+// Link manages its own synchronization state and exposes InPort and OutPort interfaces.
 type Link struct {
 	sourceID          int
 	targetID          int
-	upstreamPort      ahead_port.AheadPort // Single upstream port (may be an aggregator)
-	downstreamPort    ahead_port.AheadPort // Single downstream port to target Pipeline
+
+	// Port references (set by NewLink, used internally)
+	inPort            *linkInPort
+	outPort           *linkOutPort
+
+	// Link's own synchronization state
+	done              int64         // Link's done cycle (atomic)
+	readyUntil        int64         // Link's ready until cycle (atomic)
+	readyMap          map[int]bool  // Specific cycle ready status
+
+	// Synchronization primitives
+	doneMu            sync.Mutex
+	doneCond          *sync.Cond
+	waiterMu          sync.Mutex
+	cond              *sync.Cond
+
 	processor         *LinkCycleProcessor
 	packetProc        *LinkPacketProcessor
 	latency           int
@@ -210,47 +243,54 @@ doneProcessing:
 	wg.Wait()
 }
 
-// NewLink creates a link with the specified upstream port and downstream port.
+// NewLink creates a Link with InPort and OutPort interfaces.
+// Returns the Link instance, its InPort (for upstream to write), and its OutPort (for downstream to read).
+// Use Plug() to connect the ports to upstream and downstream components.
+//
+// Parameters:
 // - sourceID: ID of the source node
 // - targetID: ID of the target node
-// - upstreamPort: AheadPort from source Flows (can be a single port or an aggregator)
-// - downstreamPort: AheadPort to target Pipeline (single)
-// - latency: number of cycles for packet delivery (defaults to 1 if 0)
-// - bandwidth: maximum packets per cycle (defaults to 1 if 0)
-func NewLink(sourceID int, targetID int, upstreamPort ahead_port.AheadPort, downstreamPort ahead_port.AheadPort, latency int, bandwidth int) *Link {
+// - latency: number of cycles for packet delivery (must be >= 0)
+// - bandwidth: maximum packets per cycle (must be > 0)
+func NewLink(sourceID, targetID, latency, bandwidth int) (*Link, ahead_port.InPort, ahead_port.OutPort) {
 	if latency < 0 {
 		panic("latency must not be negative")
 	}
 	if bandwidth <= 0 {
 		panic("bandwidth must be positive")
 	}
-	if upstreamPort == nil {
-		panic("Link requires an upstream port")
-	}
 
 	link := &Link{
 		sourceID:          sourceID,
 		targetID:          targetID,
-		upstreamPort:      upstreamPort,
-		downstreamPort:    downstreamPort,
 		latency:           latency,
 		bandwidth:         bandwidth,
 		totalBackpressure: 0,
 		currentCycle:      0,
+		done:              -1,
+		readyUntil:        0,
+		readyMap:          make(map[int]bool),
 	}
+
+	// Create ports
+	inPort := &linkInPort{link: link}
+	outPort := &linkOutPort{link: link}
+
+	// Link holds port references
+	link.inPort = inPort
+	link.outPort = outPort
 
 	// Create packet processor
 	link.packetProc = NewLinkPacketProcessor(link)
 
-	// Create custom cycle processor with latency-aware wait logic
+	// Create cycle processor
 	link.processor = &LinkCycleProcessor{
-		upstreamPort:   upstreamPort,
-		downstreamPort: downstreamPort,
-		processor:      link.packetProc,
-		latency:        latency,
+		link:      link,
+		processor: link.packetProc,
+		latency:   latency,
 	}
 
-	return link
+	return link, inPort, outPort
 }
 
 // SourceID returns the ID of the upstream node.
@@ -280,16 +320,6 @@ func (l *Link) Tick(cycle int) error {
 	}
 	l.invokeTickHook(cycle)
 	return nil
-}
-
-// UpstreamPort returns the upstream port.
-func (l *Link) UpstreamPort() ahead_port.AheadPort {
-	return l.upstreamPort
-}
-
-// DownstreamPort returns the downstream port.
-func (l *Link) DownstreamPort() ahead_port.AheadPort {
-	return l.downstreamPort
 }
 
 // SnapshotOccupancy reports the pending packet count per slot.
@@ -342,4 +372,176 @@ func (l *Link) invokeTickHook(cycle int) {
 	if l.tickHook != nil {
 		l.tickHook(cycle)
 	}
+}
+
+// ===== Link synchronization methods (internal) =====
+
+// setDone sets Link's done state (internal method).
+func (l *Link) setDone(cycle int) {
+	atomic.StoreInt64(&l.done, int64(cycle))
+
+	// Wake up waiting goroutines
+	l.doneMu.Lock()
+	if l.doneCond != nil {
+		l.doneCond.Broadcast()
+	}
+	l.doneMu.Unlock()
+}
+
+// getDone gets Link's done state (internal method).
+func (l *Link) getDone() int {
+	return int(atomic.LoadInt64(&l.done))
+}
+
+// waitDone waits for Link to complete targetCycle (internal method).
+func (l *Link) waitDone(targetCycle int) {
+	currentDone := l.getDone()
+	if currentDone >= targetCycle {
+		return
+	}
+
+	l.doneMu.Lock()
+	defer l.doneMu.Unlock()
+
+	if l.doneCond == nil {
+		l.doneCond = sync.NewCond(&l.doneMu)
+	}
+
+	for l.getDone() < targetCycle {
+		l.doneCond.Wait()
+	}
+}
+
+// ready checks if Link is ready to receive data for the given cycle (internal method).
+func (l *Link) ready(cycle int) bool {
+	// Fast path: if cycle < readyUntil, return true immediately
+	readyUntil := atomic.LoadInt64(&l.readyUntil)
+	if int64(cycle) < readyUntil {
+		return true
+	}
+
+	// Check readyMap
+	l.waiterMu.Lock()
+	ready, exists := l.readyMap[cycle]
+	l.waiterMu.Unlock()
+
+	if exists {
+		return ready
+	}
+
+	// Block and wait
+	return l.waitForReady(cycle)
+}
+
+// readyNonBlocking checks ready state without blocking (internal method).
+func (l *Link) readyNonBlocking(cycle int) (bool, bool) {
+	readyUntil := atomic.LoadInt64(&l.readyUntil)
+	if int64(cycle) < readyUntil {
+		return true, true
+	}
+
+	l.waiterMu.Lock()
+	ready, exists := l.readyMap[cycle]
+	l.waiterMu.Unlock()
+
+	if exists {
+		return ready, true
+	}
+
+	return false, false
+}
+
+// waitForReady blocks until ready (internal method).
+func (l *Link) waitForReady(cycle int) bool {
+	l.waiterMu.Lock()
+	defer l.waiterMu.Unlock()
+
+	if l.cond == nil {
+		l.cond = sync.NewCond(&l.waiterMu)
+	}
+
+	for {
+		if ready, exists := l.readyMap[cycle]; exists {
+			return ready
+		}
+		l.cond.Wait()
+	}
+}
+
+// updateReady updates Link's ready state (internal method).
+func (l *Link) updateReady(cycle int, ready bool) {
+	l.waiterMu.Lock()
+	defer l.waiterMu.Unlock()
+
+	l.readyMap[cycle] = ready
+
+	if l.cond != nil {
+		l.cond.Broadcast()
+	}
+}
+
+// setReadyUntil sets readyUntil (internal method).
+func (l *Link) setReadyUntil(cycle int) {
+	// Atomically update readyUntil
+	for {
+		current := atomic.LoadInt64(&l.readyUntil)
+		if int64(cycle) <= current {
+			return
+		}
+		if atomic.CompareAndSwapInt64(&l.readyUntil, current, int64(cycle)) {
+			break
+		}
+	}
+
+	// Wake up all waiting goroutines
+	// Because readyUntil increased, previously blocked cycles may now be ready
+	l.waiterMu.Lock()
+	if l.cond != nil {
+		l.cond.Broadcast()
+	}
+	l.waiterMu.Unlock()
+}
+
+// ===== Port implementations =====
+
+// linkInPort implements InPort interface for Link.
+type linkInPort struct {
+	ahead_port.BaseInPort
+	link *Link
+}
+
+// Ready checks if Link is ready to receive data for the given cycle.
+func (p *linkInPort) Ready(cycle int) bool {
+	return p.link.ready(cycle)
+}
+
+// ReadyNonBlocking checks Link's ready state without blocking.
+func (p *linkInPort) ReadyNonBlocking(cycle int) (bool, bool) {
+	return p.link.readyNonBlocking(cycle)
+}
+
+// Plug overrides BaseInPort.Plug to pass self.
+func (p *linkInPort) Plug(out ahead_port.OutPort) chan ahead_port.PacketWithCycle {
+	return p.BaseInPort.PlugWithSelf(p, out)
+}
+
+// linkOutPort implements OutPort interface for Link.
+type linkOutPort struct {
+	ahead_port.BaseOutPort
+	link *Link
+}
+
+// WaitDone waits for Link to complete the given cycle.
+func (p *linkOutPort) WaitDone(cycle int) {
+	p.link.waitDone(cycle)
+}
+
+// GetDone gets Link's current done cycle.
+func (p *linkOutPort) GetDone() int {
+	return p.link.getDone()
+}
+
+// Plug overrides BaseOutPort.Plug to pass self.
+func (p *linkOutPort) Plug(in ahead_port.InPort) chan ahead_port.PacketWithCycle {
+	return p.BaseOutPort.PlugWithSelf(p, in)
 }
