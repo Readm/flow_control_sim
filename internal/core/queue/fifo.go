@@ -93,8 +93,8 @@ func NewFIFO(id int, bufferSize int) *FIFO {
 	}
 
 	inPort := ahead_port.NewAheadPort(bufferSize)
-	inQueue := NewQueue(bufferSize, 1, 1, 1)
-	outQueue := NewQueue(bufferSize, 1, 1, 1)
+	inQueue, _, _ := NewQueue(bufferSize, 1, 1, 1)
+	outQueue, _, _ := NewQueue(bufferSize, 1, 1, 1)
 
 	f := &FIFO{
 		id:        id,

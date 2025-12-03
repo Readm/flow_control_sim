@@ -41,7 +41,7 @@ func NewInputQueue(bufferSize int, inBandwidth int, outBandwidth int) *InputQueu
 		panic("outBandwidth must be positive")
 	}
 
-	queue := NewQueue(bufferSize, inBandwidth, outBandwidth, 1)
+	queue, _, _ := NewQueue(bufferSize, inBandwidth, outBandwidth, 1)
 	inPort := ahead_port.NewAheadPort(bufferSize)
 	dummyDownstream := ahead_port.NewAheadPort(1)
 

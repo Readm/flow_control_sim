@@ -29,12 +29,11 @@ func NewOutputQueue(bufferSize int, inBandwidth int, outBandwidth int) *OutputQu
 	}
 
 	// Create internal queue for out_queue logic
-	queue := NewQueue(bufferSize, inBandwidth, outBandwidth, 1)
+	queue, _, _ := NewQueue(bufferSize, inBandwidth, outBandwidth, 1)
 
 	// Create empty upstream port (packets are injected directly, not from channel)
 	emptyUpstream := ahead_port.NewAheadPort(1)
-	// Set upstream port to empty port so Queue won't receive from channel
-	queue.SetUpstreamPort(emptyUpstream)
+	// TODO: Need to refactor OutputQueue to work with new port design
 
 	return &OutputQueue{
 		queue:         queue,
@@ -61,18 +60,14 @@ func (oq *OutputQueue) SetPacketSentHook(hook func(packet.Packet)) {
 }
 
 func (oq *OutputQueue) updateDownstreamPort() {
+	// TODO: Need to refactor this to work with new port design
+	// Old code used SetDownstreamPort which no longer exists
 	if oq.queue == nil {
 		return
 	}
-	if oq.outPort == nil {
-		oq.queue.SetDownstreamPort(nil)
-		return
-	}
-	if oq.onPacketSent == nil {
-		oq.queue.SetDownstreamPort(oq.outPort)
-		return
-	}
-	oq.queue.SetDownstreamPort(newHookedDownstreamPort(oq.outPort, oq.onPacketSent))
+	// Temporarily disabled until OutputQueue is refactored
+	_ = oq.outPort
+	_ = oq.onPacketSent
 }
 
 // Tick processes a single cycle, sending packets from queue to outPort.
