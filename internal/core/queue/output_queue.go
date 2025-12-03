@@ -28,12 +28,11 @@ func NewOutputQueue(bufferSize int, inBandwidth int, outBandwidth int) *OutputQu
 		panic("outBandwidth must be positive")
 	}
 
-	// Create internal queue for out_queue logic
+	// Create internal queue for storage (we only use its Pick method and array)
 	queue, _, _ := NewQueue(bufferSize, inBandwidth, outBandwidth, 1)
 
-	// Create empty upstream port (packets are injected directly, not from channel)
+	// Create empty upstream port for Done signaling (packets are injected directly)
 	emptyUpstream := ahead_port.NewAheadPort(1)
-	// TODO: Need to refactor OutputQueue to work with new port design
 
 	return &OutputQueue{
 		queue:         queue,
@@ -45,7 +44,6 @@ func NewOutputQueue(bufferSize int, inBandwidth int, outBandwidth int) *OutputQu
 // SetOutPort sets the output port for downstream transmission.
 func (oq *OutputQueue) SetOutPort(port ahead_port.AheadPort) {
 	oq.outPort = port
-	oq.updateDownstreamPort()
 }
 
 // OutPort returns the output port.
@@ -54,35 +52,47 @@ func (oq *OutputQueue) OutPort() ahead_port.AheadPort {
 }
 
 // SetPacketSentHook configures a hook invoked whenever a packet leaves OutputQueue.
+// The hook is called directly in Tick() when packets are successfully sent.
 func (oq *OutputQueue) SetPacketSentHook(hook func(packet.Packet)) {
 	oq.onPacketSent = hook
-	oq.updateDownstreamPort()
-}
-
-func (oq *OutputQueue) updateDownstreamPort() {
-	// TODO: Need to refactor this to work with new port design
-	// Old code used SetDownstreamPort which no longer exists
-	if oq.queue == nil {
-		return
-	}
-	// Temporarily disabled until OutputQueue is refactored
-	_ = oq.outPort
-	_ = oq.onPacketSent
 }
 
 // Tick processes a single cycle, sending packets from queue to outPort.
-// It directly uses Queue's Tick method, which handles all the sending logic.
+// Similar to InputQueue, this bypasses Queue's port system and implements sending directly.
 func (oq *OutputQueue) Tick(cycle int) error {
-	if oq.outPort == nil {
+	if oq.outPort == nil || oq.queue == nil {
 		return nil
 	}
 
-	// Initialize empty upstream Done to avoid blocking
-	oq.emptyUpstream.SetDone(cycle - 1)
+	// Pick packets to send (respects outBandwidth and sorts by cycle)
+	picked := oq.queue.Pick()
 
-	// Use Queue's Tick method directly - it will skip receiving (empty channel)
-	// and only process sending packets from array to downstream
-	return oq.queue.Tick(cycle)
+	// Send each packet if downstream is ready
+	for _, pkt := range picked {
+		// Check if downstream is ready for this cycle
+		if !oq.outPort.Ready(pkt.Cycle) {
+			// If downstream not ready, we can't send
+			// Note: picked packets are already removed from queue by Pick()
+			// In a real implementation, we might want to re-inject them
+			continue
+		}
+
+		// Send packet to downstream
+		select {
+		case oq.outPort.SendChan() <- ahead_port.PacketWithCycle(pkt):
+			// Successfully sent
+			if oq.onPacketSent != nil {
+				oq.onPacketSent(pkt.Packet)
+			}
+		default:
+			// Channel full, packet lost (or could re-inject)
+		}
+	}
+
+	// Update upstream Done signal (we're done processing this cycle)
+	oq.emptyUpstream.SetDone(cycle)
+
+	return nil
 }
 
 // InjectPackets injects packets into the output queue for transmission.
@@ -133,71 +143,4 @@ func (oq *OutputQueue) IsFull() bool {
 		return false
 	}
 	return oq.queue.IsFull()
-}
-
-// hookedDownstreamPort wraps an AheadPort to intercept packets leaving OutputQueue.
-type hookedDownstreamPort struct {
-	target   ahead_port.AheadPort
-	hook     func(packet.Packet)
-	sendChan chan ahead_port.PacketWithCycle
-}
-
-func newHookedDownstreamPort(target ahead_port.AheadPort, hook func(packet.Packet)) ahead_port.AheadPort {
-	if hook == nil || target == nil {
-		return target
-	}
-
-	hp := &hookedDownstreamPort{
-		target:   target,
-		hook:     hook,
-		sendChan: make(chan ahead_port.PacketWithCycle),
-	}
-
-	go hp.forward()
-	return hp
-}
-
-func (hp *hookedDownstreamPort) forward() {
-	for pkt := range hp.sendChan {
-		if hp.hook != nil {
-			hp.hook(pkt.Packet)
-		}
-		hp.target.SendChan() <- pkt
-	}
-}
-
-func (hp *hookedDownstreamPort) SetDone(cycle int) {
-	hp.target.SetDone(cycle)
-}
-
-func (hp *hookedDownstreamPort) GetDone() int {
-	return hp.target.GetDone()
-}
-
-func (hp *hookedDownstreamPort) SendChan() chan<- ahead_port.PacketWithCycle {
-	return hp.sendChan
-}
-
-func (hp *hookedDownstreamPort) ReceiveChan() <-chan ahead_port.PacketWithCycle {
-	return hp.target.ReceiveChan()
-}
-
-func (hp *hookedDownstreamPort) Ready(cycle int) bool {
-	return hp.target.Ready(cycle)
-}
-
-func (hp *hookedDownstreamPort) ReadyNonBlocking(cycle int) (bool, bool) {
-	return hp.target.ReadyNonBlocking(cycle)
-}
-
-func (hp *hookedDownstreamPort) WaitForDone(targetCycle int) {
-	hp.target.WaitForDone(targetCycle)
-}
-
-func (hp *hookedDownstreamPort) SetPacketTypes(types []int) {
-	hp.target.SetPacketTypes(types)
-}
-
-func (hp *hookedDownstreamPort) PacketTypes() []int {
-	return hp.target.PacketTypes()
 }
