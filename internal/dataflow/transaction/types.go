@@ -14,6 +14,10 @@ const (
 	YieldTypeWaitForTimeout YieldType = "WaitForTimeout"
 	YieldTypeSendOnly       YieldType = "SendOnly" // Send messages without waiting
 	YieldTypeComplete       YieldType = "Complete"
+
+	// YieldTypeMigrateTo requests migration to another node.
+	// This enables continuous-style transactions that span multiple nodes.
+	YieldTypeMigrateTo      YieldType = "MigrateTo"
 )
 
 // WaitForMessage describes what message a transaction is waiting for.
@@ -32,6 +36,16 @@ type YieldCommand struct {
 	SendQueue []*message.Message
 	// Operations to be executed in Node.Tick (e.g., cache updates)
 	Operations []Operation
+
+	// MigrateToNodeID specifies the target node for migration (used with YieldTypeMigrateTo).
+	MigrateToNodeID int
+}
+
+// MigrationResult is returned when a Transaction is resumed after migration.
+// It contains the NodeAccessor for the new node and any triggering message.
+type MigrationResult struct {
+	NodeAccessor NodeAccessor
+	Message      *message.Message
 }
 
 // Operation represents an operation to be executed in Node.Tick.
@@ -56,12 +70,17 @@ func (op *CacheUpdateOperation) Execute(nodeID int) error {
 // Addr represents a memory address (simplified as string for now).
 type Addr string
 
-// NodeCtx provides safe access to Node state from Transaction.
-// All methods must be called from Transaction goroutine and will communicate
-// with TxnManager via YieldCommand.
-type NodeCtx interface {
-	GetCacheState(addr Addr) string
-	ReadCache(addr Addr) []byte
-	UpdateCache(addr Addr, state string, data []byte)
+// Migration message types
+const (
+	// MsgTypeMigrationRequest is a special message type for transaction migration.
+	// This is a framework-level message type, not a protocol-specific opcode.
+	MsgTypeMigrationRequest = -1
+)
+
+// MigrationPayload is the payload for migration request messages.
+type MigrationPayload struct {
+	TxnID    string // TransactionID string representation
+	YieldCh  chan *YieldCommand
+	ResumeCh chan interface{}
 }
 

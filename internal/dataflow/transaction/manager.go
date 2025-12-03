@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/dataflow"
 	"github.com/Readm/flow_sim/internal/dataflow/message"
 )
@@ -21,30 +22,43 @@ type activeTxn struct {
 
 // TxnManager manages transactions for a node.
 type TxnManager struct {
-	nodeID        int
+	node          *node.Node
 	activeTxns    map[dataflow.TransactionID]*activeTxn
 	pendingByAddr map[Addr][]*activeTxn
 	nextTxnID     int
 	mu            sync.Mutex
-	nodeCtx       NodeCtx
+
+	// migratedTxns tracks transactions that have migrated to this node
+	migratedTxns map[dataflow.TransactionID]*migratedTxn
+}
+
+// migratedTxn represents a transaction that has migrated to this node.
+type migratedTxn struct {
+	txnID        dataflow.TransactionID
+	yieldCh      chan *YieldCommand
+	resumeCh     chan interface{}
+	sourceNodeID int
+	waiting      *WaitForMessage
 }
 
 // NewTxnManager creates a new TxnManager.
-func NewTxnManager(nodeID int, nodeCtx NodeCtx) *TxnManager {
+func NewTxnManager(n *node.Node) *TxnManager {
 	return &TxnManager{
-		nodeID:        nodeID,
+		node:          n,
 		activeTxns:    make(map[dataflow.TransactionID]*activeTxn),
 		pendingByAddr: make(map[Addr][]*activeTxn),
+		migratedTxns:  make(map[dataflow.TransactionID]*migratedTxn),
 		nextTxnID:     1,
-		nodeCtx:       nodeCtx,
 	}
 }
 
 // Start starts a new transaction by running txnFunc in a goroutine.
 func (tm *TxnManager) Start(ctx context.Context, txnFunc func(*TxnContext)) dataflow.TransactionID {
+	nodeID := tm.node.ID()
+
 	tm.mu.Lock()
 	txnID := dataflow.TransactionID{
-		NodeID: tm.nodeID,
+		NodeID: nodeID,
 		TxnID:  tm.nextTxnID,
 	}
 	tm.nextTxnID++
@@ -55,13 +69,16 @@ func (tm *TxnManager) Start(ctx context.Context, txnFunc func(*TxnContext)) data
 	resumeCh := make(chan interface{}, 10)   // Buffered to avoid blocking
 	done := make(chan struct{})
 
+	// Create NodeAccessor for this node
+	nodeAccessor := NewLocalNodeAccessor(tm.node)
+
 	// Create TxnContext
-	txnCtx := NewTxnContext(tm.nodeID, txnID, yieldCh, resumeCh, ctx, tm.nodeCtx)
+	txnCtx := NewTxnContext(nodeID, txnID, yieldCh, resumeCh, ctx, nodeAccessor)
 
 	// Create Transaction record
 	txn := &Transaction{
 		ID:              txnID,
-		InitiatorNodeID: tm.nodeID,
+		InitiatorNodeID: nodeID,
 		State:           TransactionStateInProgress,
 	}
 
@@ -114,12 +131,18 @@ func (tm *TxnManager) Start(ctx context.Context, txnFunc func(*TxnContext)) data
 func (tm *TxnManager) Tick(cycle uint64, incoming []*message.Message) ([]*message.Message, error) {
 	var outgoing []*message.Message
 
-	// Step 1: Process incoming messages - route to waiting transactions
+	// Step 1: Process incoming messages
 	for _, msg := range incoming {
-		tm.routeMessage(msg)
+		if msg.Type == MsgTypeMigrationRequest {
+			// Handle migration request
+			tm.handleMigrationRequest(msg, &outgoing)
+		} else {
+			// Route to waiting transactions
+			tm.routeMessage(msg)
+		}
 	}
 
-	// Step 2: Process yield commands from active transactions (non-blocking)
+	// Step 2: Process yield commands from local transactions (non-blocking)
 	tm.mu.Lock()
 	activeList := make([]*activeTxn, 0, len(tm.activeTxns))
 	for _, active := range tm.activeTxns {
@@ -131,12 +154,15 @@ func (tm *TxnManager) Tick(cycle uint64, incoming []*message.Message) ([]*messag
 		tm.processYields(active, &outgoing)
 	}
 
+	// Step 3: Process yield commands from migrated transactions (non-blocking)
+	tm.processMigratedYields(&outgoing)
+
 	return outgoing, nil
 }
 
 // routeMessage routes an incoming message to waiting transactions.
 func (tm *TxnManager) routeMessage(msg *message.Message) {
-	// First, collect matching transactions without holding locks
+	// First, collect matching local transactions
 	var matchingTxns []*activeTxn
 	tm.mu.Lock()
 	for _, active := range tm.activeTxns {
@@ -149,7 +175,7 @@ func (tm *TxnManager) routeMessage(msg *message.Message) {
 	}
 	tm.mu.Unlock()
 
-	// Then process matches and remove from pendingByAddr
+	// Process matches for local transactions
 	for _, active := range matchingTxns {
 		// Non-blocking send to resume channel
 		select {
@@ -186,6 +212,27 @@ func (tm *TxnManager) routeMessage(msg *message.Message) {
 			// Channel full, skip (should not happen with buffered channel)
 		}
 	}
+
+	// Also check migrated transactions
+	var matchingMigrated []*migratedTxn
+	tm.mu.Lock()
+	for _, mtxn := range tm.migratedTxns {
+		if mtxn.waiting != nil && tm.matchesWait(msg, mtxn.waiting) {
+			matchingMigrated = append(matchingMigrated, mtxn)
+		}
+	}
+	tm.mu.Unlock()
+
+	// Process matches for migrated transactions
+	for _, mtxn := range matchingMigrated {
+		select {
+		case mtxn.resumeCh <- msg:
+			// Clear waiting state
+			mtxn.waiting = nil
+		default:
+			// Channel full, skip
+		}
+	}
 }
 
 // matchesWait checks if a message matches the wait condition.
@@ -219,6 +266,28 @@ func (tm *TxnManager) processYields(active *activeTxn, outgoing *[]*message.Mess
 // handleYieldCommand handles a yield command from a transaction.
 func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, outgoing *[]*message.Message) {
 	switch cmd.Type {
+	case YieldTypeMigrateTo:
+		// Transaction wants to migrate to another node
+		// Build migration request message
+		migMsg := &message.Message{
+			TransactionID: active.txnID,
+			Type:          MsgTypeMigrationRequest,
+			SourceNodeID:  tm.node.ID(),
+			TargetNodeID:  cmd.MigrateToNodeID,
+			Payload: &MigrationPayload{
+				YieldCh:  active.context.yieldCh,
+				ResumeCh: active.context.resumeCh,
+			},
+		}
+
+		*outgoing = append(*outgoing, migMsg)
+
+		// Remove from local active transactions (it's migrating out)
+		// The transaction will be resumed on the target node
+		tm.mu.Lock()
+		delete(tm.activeTxns, active.txnID)
+		tm.mu.Unlock()
+
 	case YieldTypeWaitForMessage:
 		// Transaction is waiting for a message
 		active.mu.Lock()
@@ -261,8 +330,9 @@ func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, o
 		*outgoing = append(*outgoing, cmd.SendQueue...)
 
 		// Execute operations (e.g., cache updates)
+		nodeID := tm.node.ID()
 		for _, op := range cmd.Operations {
-			if err := op.Execute(tm.nodeID); err != nil {
+			if err := op.Execute(nodeID); err != nil {
 				// Log error but continue
 			}
 		}
@@ -274,8 +344,9 @@ func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, o
 		*outgoing = append(*outgoing, cmd.SendQueue...)
 
 		// Execute operations (e.g., cache updates)
+		nodeID := tm.node.ID()
 		for _, op := range cmd.Operations {
-			if err := op.Execute(tm.nodeID); err != nil {
+			if err := op.Execute(nodeID); err != nil {
 				// Log error but continue
 			}
 		}
@@ -290,8 +361,9 @@ func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, o
 		*outgoing = append(*outgoing, cmd.SendQueue...)
 
 		// Execute operations
+		nodeID := tm.node.ID()
 		for _, op := range cmd.Operations {
-			if err := op.Execute(tm.nodeID); err != nil {
+			if err := op.Execute(nodeID); err != nil {
 				// Log error but continue
 			}
 		}
@@ -299,8 +371,9 @@ func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, o
 	default:
 		// Unknown yield type, just collect messages and operations
 		*outgoing = append(*outgoing, cmd.SendQueue...)
+		nodeID := tm.node.ID()
 		for _, op := range cmd.Operations {
-			if err := op.Execute(tm.nodeID); err != nil {
+			if err := op.Execute(nodeID); err != nil {
 				// Log error but continue
 			}
 		}
@@ -324,5 +397,119 @@ func (tm *TxnManager) ActiveCount() int {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	return len(tm.activeTxns)
+}
+
+// ===========================================================================
+// Migration Support
+// ===========================================================================
+
+// handleMigrationRequest handles a migration request from another node.
+func (tm *TxnManager) handleMigrationRequest(msg *message.Message, outgoing *[]*message.Message) {
+	payload, ok := msg.Payload.(*MigrationPayload)
+	if !ok {
+		// Invalid payload, ignore
+		return
+	}
+
+	// Parse transaction ID
+	var txnID dataflow.TransactionID
+	// Simple parsing: assume format "NodeID:TxnID"
+	// For now, we'll reconstruct from message's TransactionID field
+	txnID = msg.TransactionID
+
+	// Register migrated transaction
+	tm.mu.Lock()
+	tm.migratedTxns[txnID] = &migratedTxn{
+		txnID:        txnID,
+		yieldCh:      payload.YieldCh,
+		resumeCh:     payload.ResumeCh,
+		sourceNodeID: msg.SourceNodeID,
+	}
+	tm.mu.Unlock()
+
+	// Build resume value with NodeAccessor for this node
+	resumeVal := &MigrationResult{
+		NodeAccessor: NewLocalNodeAccessor(tm.node),
+		Message:      msg,
+	}
+
+	// Resume the transaction (non-blocking send)
+	select {
+	case payload.ResumeCh <- resumeVal:
+		// Transaction resumed successfully
+	default:
+		// Resume channel full, log error (should not happen with buffered channel)
+	}
+}
+
+// processMigratedYields processes yield commands from migrated transactions.
+func (tm *TxnManager) processMigratedYields(outgoing *[]*message.Message) {
+	tm.mu.Lock()
+	migratedList := make([]*migratedTxn, 0, len(tm.migratedTxns))
+	for _, mtxn := range tm.migratedTxns {
+		migratedList = append(migratedList, mtxn)
+	}
+	tm.mu.Unlock()
+
+	for _, mtxn := range migratedList {
+		select {
+		case yieldCmd := <-mtxn.yieldCh:
+			tm.handleMigratedYield(mtxn, yieldCmd, outgoing)
+		default:
+			// No yield command available
+		}
+	}
+}
+
+// handleMigratedYield handles a yield command from a migrated transaction.
+func (tm *TxnManager) handleMigratedYield(mtxn *migratedTxn, cmd *YieldCommand, outgoing *[]*message.Message) {
+	switch cmd.Type {
+	case YieldTypeMigrateTo:
+		// Transaction wants to migrate to another node
+		tm.handleMigrationOut(mtxn, cmd, outgoing)
+
+	case YieldTypeWaitForMessage:
+		// Transaction is waiting for a message on this node
+		mtxn.waiting = cmd.WaitFor
+		*outgoing = append(*outgoing, cmd.SendQueue...)
+
+	case YieldTypeComplete:
+		// Transaction complete, remove from migrated map
+		tm.mu.Lock()
+		delete(tm.migratedTxns, mtxn.txnID)
+		tm.mu.Unlock()
+
+		*outgoing = append(*outgoing, cmd.SendQueue...)
+
+	case YieldTypeSendOnly:
+		// Just send messages
+		*outgoing = append(*outgoing, cmd.SendQueue...)
+
+	default:
+		// Unknown type, just collect messages
+		*outgoing = append(*outgoing, cmd.SendQueue...)
+	}
+}
+
+// handleMigrationOut handles a transaction migrating out to another node.
+func (tm *TxnManager) handleMigrationOut(mtxn *migratedTxn, cmd *YieldCommand, outgoing *[]*message.Message) {
+	// Build migration request message
+	migMsg := &message.Message{
+		TransactionID: mtxn.txnID,
+		Type:          MsgTypeMigrationRequest,
+		SourceNodeID:  tm.node.ID(),
+		TargetNodeID:  cmd.MigrateToNodeID,
+		Payload: &MigrationPayload{
+			YieldCh:  mtxn.yieldCh,
+			ResumeCh: mtxn.resumeCh,
+		},
+	}
+
+	*outgoing = append(*outgoing, migMsg)
+
+	// Remove from this node's migrated map (it's migrating out)
+	tm.mu.Lock()
+	delete(tm.migratedTxns, mtxn.txnID)
+	tm.mu.Unlock()
 }
 
