@@ -216,40 +216,10 @@ func (n *Node) invokeTickHook(cycle uint64) {
 	}
 }
 
-func (n *Node) tickQueuesConcurrently(cycle int) error {
-	var wg sync.WaitGroup
-	errCh := make(chan error, len(n.inputs)+len(n.outputs))
-
-	for _, input := range n.inputs {
-		wg.Add(1)
-		go func(q InputQueue) {
-			defer wg.Done()
-			if err := q.Tick(cycle); err != nil {
-				errCh <- err
-			}
-		}(input)
-	}
-
-	for _, output := range n.outputs {
-		wg.Add(1)
-		go func(q OutputQueue) {
-			defer wg.Done()
-			if err := q.Tick(cycle); err != nil {
-				errCh <- err
-			}
-		}(output)
-	}
-
-	wg.Wait()
-	close(errCh)
-
-	for err := range errCh {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// tickQueuesConcurrently executes queue Tick operations.
+// The implementation is controlled by build tags:
+// - Default (no tags): synchronous/serial execution (defined in node_queues.go)
+// - With -tags async: concurrent execution with goroutines (defined in node_queues_async.go)
 
 // Advance executes the configured number of cycles sequentially using Background context.
 func (n *Node) Advance(cycles int) error {
