@@ -1,0 +1,87 @@
+# Binaries and executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+flow_sim
+main
+
+# Go build artifacts
+vendor/
+*.a
+*.o
+
+# Test coverage
+*.cov
+coverage.html
+coverage.txt
+*.coverprofile
+
+# Performance profiling
+*.prof
+*.pprof
+*.trace
+
+# Performance analysis output
+internal/core/network/perf_analysis/output/
+**/perf_analysis/output/
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+
+# IDE and editor files
+.vscode/
+.idea/
+*.iml
+.sor/*
+
+# Python cache (for analysis scripts)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Logs
+*.log
+logs/
+
+# Build directories
+build/
+dist/
+bin/
+pkg/
+
+# Configuration files with secrets (if any)
+*.env
+.env.local
+secrets.yaml
+credentials.json
+
+# OS specific
+Thumbs.db
+Desktop.ini
+
+# Web/Node (if frontend gets added)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Generated documentation
+docs/_build/
+site/
+
+# Benchmark results
+benchmark_*.txt
+
+# Local test data
+testdata/output/
+testdata/tmp/
