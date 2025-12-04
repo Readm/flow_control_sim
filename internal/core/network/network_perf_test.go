@@ -91,9 +91,10 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 
 			// Setup forwarding: nodes 1 to nodeCount-2 forward from input to output with random delay
 			// Node0 and last node will have custom hooks set later
+			// Delay: 2-20us per node, simulating GEM5 O3CPU execution time
 			for i := 1; i < nodeCount-1; i++ {
 				output := allOutputs[i]
-				nodeHandles[i].Node.SetProcessHook(forwardWithDelayHook(output, 0, 0))
+				nodeHandles[i].Node.SetProcessHook(forwardWithDelayHook(output, 2, 20))
 			}
 
 			// Connect nodes in a ring: 0->1->2->...->49->0
