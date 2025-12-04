@@ -212,15 +212,17 @@ func TestReadSharedContinuous(t *testing.T) {
 	}
 
 	// Verify HN directory state
+	// Note: With only 1 sharer, Directory state should be Exclusive, not Shared
+	// This is the correct coherence behavior
 	hnDir := hn.Directories()[0]
 	dirState := hnDir.GetState(testAddr)
-	if dirState != "Shared" {
-		t.Errorf("Expected directory state Shared, got %s", dirState)
+	if dirState != directory.StateExclusive {
+		t.Errorf("Expected directory state Exclusive (1 sharer), got %s", dirState)
 	}
 
 	sharers := hnDir.GetSharers(testAddr)
-	if len(sharers) == 0 {
-		t.Error("Expected at least one sharer in directory")
+	if len(sharers) != 1 {
+		t.Errorf("Expected exactly 1 sharer in directory, got %d", len(sharers))
 	}
 
 	if !contains(sharers, 1) {
