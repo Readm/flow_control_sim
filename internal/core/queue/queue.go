@@ -97,11 +97,11 @@ func (p *queueOutPort) Plug(in ahead_port.InPort) chan ahead_port.PacketWithCycl
 
 // QueueCycleProcessor is a custom cycle processor for Queue.
 type QueueCycleProcessor struct {
-	processor ahead_port.PacketProcessor
+	processor *QueuePacketProcessor
 	queue     *Queue
 }
 
-// QueuePacketProcessor implements PacketProcessor for Queue.
+// QueuePacketProcessor handles packet processing for Queue.
 type QueuePacketProcessor struct {
 	queue *Queue
 }

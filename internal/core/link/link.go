@@ -13,9 +13,9 @@ import (
 // instead of Done(cycle-1). This allows Link to process packets earlier, taking advantage
 // of the latency buffer.
 type LinkCycleProcessor struct {
-	link      *Link                        // Reference to Link
-	processor ahead_port.PacketProcessor   // Packet processing logic
-	latency   int                          // Latency in cycles
+	link      *Link                 // Reference to Link
+	processor *LinkPacketProcessor  // Packet processing logic
+	latency   int                   // Latency in cycles
 }
 
 // Tick implements the cycle processing workflow with custom wait logic.
@@ -126,7 +126,7 @@ type Link struct {
 	tickHook          func(cycle int)
 }
 
-// LinkPacketProcessor implements PacketProcessor for Link.
+// LinkPacketProcessor handles packet processing for Link.
 // It handles latency (delaying packets) and bandwidth constraints.
 type LinkPacketProcessor struct {
 	link           *Link
@@ -289,6 +289,14 @@ func NewLink(sourceID, targetID, latency, bandwidth int) (*Link, ahead_port.InPo
 		processor: link.packetProc,
 		latency:   latency,
 	}
+
+	// Initialize readyUntil for the first 'latency' cycles.
+	// Rationale: Link is ready for the first 'latency' cycles because packets
+	// are still in transit (haven't reached downstream yet).
+	// This prevents deadlock in cyclic topologies during initialization.
+	link.readyUntil = int64(latency)
+	debug.Logf("Link.NewLink: link %d->%d initialized with readyUntil=%d (latency=%d)",
+		sourceID, targetID, latency, latency)
 
 	return link, inPort, outPort
 }

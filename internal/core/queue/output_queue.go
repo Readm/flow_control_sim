@@ -1,22 +1,65 @@
 package queue
 
 import (
+	"sync"
+	"sync/atomic"
+
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// OutputQueue handles packet transmission from processed packets to downstream.
-// It wraps Queue and uses its Tick method directly, skipping the receive step
-// since packets are injected via InjectPackets.
+// OutputQueue is a simple wrapper for buffering and sending packets to downstream.
+// It acts as a bridge between Node's packet generation and the network's OutPort interface.
+// This is NOT a full Queue component - it only handles output direction.
+//
+// Design:
+// - Packets are injected via InjectPackets() by the Node
+// - Packets are stored in a simple array with capacity limit
+// - Tick() sends packets to downstream respecting bandwidth limits
+// - Exposes an OutPort interface for network connections
 type OutputQueue struct {
-	queue         *Queue
-	outPort       ahead_port.AheadPort
-	emptyUpstream ahead_port.AheadPort // Empty upstream port (no packets from channel)
-	onPacketSent  func(packet.Packet)
+	// Storage
+	slots    []packet.PacketWithCycle // Array storage for packets
+	capacity int                      // Maximum capacity
+
+	// Bandwidth control
+	outBandwidth int // Max packets per cycle to send
+
+	// Port for downstream connection
+	outPort *outputQueueOutPort
+
+	// Hooks
+	onPacketSent func(packet.Packet)
+
+	// Synchronization
+	done     int64      // Done cycle (atomic)
+	doneMu   sync.Mutex // Protects done updates
+	doneCond *sync.Cond // Condition variable for WaitDone
 }
 
-// NewOutputQueue creates a new OutputQueue with the specified buffer size and bandwidth parameters.
-// inBandwidth and outBandwidth must be positive, otherwise it panics.
+// outputQueueOutPort implements OutPort interface for OutputQueue.
+type outputQueueOutPort struct {
+	ahead_port.BaseOutPort
+	outputQueue *OutputQueue
+}
+
+// WaitDone waits for OutputQueue to complete the target cycle.
+func (p *outputQueueOutPort) WaitDone(targetCycle int) {
+	p.outputQueue.waitDone(targetCycle)
+}
+
+// GetDone returns OutputQueue's current done cycle.
+func (p *outputQueueOutPort) GetDone() int {
+	return p.outputQueue.getDone()
+}
+
+// Plug overrides BaseOutPort.Plug to pass self.
+func (p *outputQueueOutPort) Plug(in ahead_port.InPort) chan ahead_port.PacketWithCycle {
+	return p.BaseOutPort.PlugWithSelf(p, in)
+}
+
+// NewOutputQueue creates a new OutputQueue with the specified buffer size and bandwidth.
+// inBandwidth is not used internally but validated for API consistency.
 func NewOutputQueue(bufferSize int, inBandwidth int, outBandwidth int) *OutputQueue {
 	if bufferSize <= 0 {
 		bufferSize = 8
@@ -28,119 +71,131 @@ func NewOutputQueue(bufferSize int, inBandwidth int, outBandwidth int) *OutputQu
 		panic("outBandwidth must be positive")
 	}
 
-	// Create internal queue for storage (we only use its Pick method and array)
-	queue, _, _ := NewQueue(bufferSize, inBandwidth, outBandwidth, 1)
-
-	// Create empty upstream port for Done signaling (packets are injected directly)
-	emptyUpstream := ahead_port.NewAheadPort(1)
-
-	return &OutputQueue{
-		queue:         queue,
-		outPort:       nil,
-		emptyUpstream: emptyUpstream,
+	oq := &OutputQueue{
+		slots:        make([]packet.PacketWithCycle, 0, bufferSize),
+		capacity:     bufferSize,
+		outBandwidth: outBandwidth,
+		done:         -1,
 	}
+	oq.doneCond = sync.NewCond(&oq.doneMu)
+
+	oq.outPort = &outputQueueOutPort{
+		outputQueue: oq,
+	}
+
+	return oq
 }
 
-// SetOutPort sets the output port for downstream transmission.
-func (oq *OutputQueue) SetOutPort(port ahead_port.AheadPort) {
-	oq.outPort = port
+// QueueInPort returns nil - OutputQueue doesn't have an input port.
+// This method exists for API compatibility but should not be used.
+func (oq *OutputQueue) QueueInPort() ahead_port.InPort {
+	return nil
 }
 
-// OutPort returns the output port.
-func (oq *OutputQueue) OutPort() ahead_port.AheadPort {
+// QueueOutPort returns the OutPort for downstream connections.
+func (oq *OutputQueue) QueueOutPort() ahead_port.OutPort {
 	return oq.outPort
 }
 
-// SetPacketSentHook configures a hook invoked whenever a packet leaves OutputQueue.
-// The hook is called directly in Tick() when packets are successfully sent.
-func (oq *OutputQueue) SetPacketSentHook(hook func(packet.Packet)) {
-	oq.onPacketSent = hook
-}
-
-// Tick processes a single cycle, sending packets from queue to outPort.
-// Similar to InputQueue, this bypasses Queue's port system and implements sending directly.
+// Tick sends up to outBandwidth packets to downstream.
 func (oq *OutputQueue) Tick(cycle int) error {
-	if oq.outPort == nil || oq.queue == nil {
+	// If no downstream connected, just mark done
+	if oq.outPort.BaseOutPort.DownstreamIn == nil || oq.outPort.BaseOutPort.OutputChan == nil {
+		oq.setDone(cycle)
 		return nil
 	}
 
-	// Pick packets to send (respects outBandwidth and sorts by cycle)
-	picked := oq.queue.Pick()
+	// Send up to outBandwidth packets
+	sent := 0
+	newSlots := make([]packet.PacketWithCycle, 0, len(oq.slots))
 
-	// Send each packet if downstream is ready
-	for _, pkt := range picked {
-		// Check if downstream is ready for this cycle
-		if !oq.outPort.Ready(pkt.Cycle) {
-			// If downstream not ready, we can't send
-			// Note: picked packets are already removed from queue by Pick()
-			// In a real implementation, we might want to re-inject them
+	for _, pkt := range oq.slots {
+		if sent >= oq.outBandwidth {
+			// Reached bandwidth limit, keep remaining packets
+			newSlots = append(newSlots, pkt)
 			continue
 		}
 
-		// Send packet to downstream
+		// Check downstream ready
+		if !oq.outPort.BaseOutPort.DownstreamIn.Ready(pkt.Cycle) {
+			// Not ready, keep packet for next cycle
+			newSlots = append(newSlots, pkt)
+			continue
+		}
+
+		// Try to send (use BaseOutPort.OutputChan which was set by Plug)
 		select {
-		case oq.outPort.SendChan() <- ahead_port.PacketWithCycle(pkt):
-			// Successfully sent
+		case oq.outPort.BaseOutPort.OutputChan <- pkt:
+			sent++
 			if oq.onPacketSent != nil {
 				oq.onPacketSent(pkt.Packet)
 			}
 		default:
-			// Channel full, packet lost (or could re-inject)
+			// Channel full, keep packet
+			newSlots = append(newSlots, pkt)
 		}
 	}
 
-	// Update upstream Done signal (we're done processing this cycle)
-	oq.emptyUpstream.SetDone(cycle)
-
+	oq.slots = newSlots
+	oq.setDone(cycle)
 	return nil
 }
 
 // InjectPackets injects packets into the output queue for transmission.
-// Packets will be sent in subsequent Tick calls, respecting bandwidth limits and downstream readiness.
 func (oq *OutputQueue) InjectPackets(cycle int, packets []packet.Packet) error {
-	if oq.queue == nil {
-		return nil
-	}
-
 	for _, pkt := range packets {
-		env := packet.PacketWithCycle{
+		if len(oq.slots) >= oq.capacity {
+			// Queue full, drop packet
+			continue
+		}
+
+		oq.slots = append(oq.slots, packet.PacketWithCycle{
 			Cycle:  cycle,
 			Packet: pkt,
-		}
-		// Find a free slot in queue
-		slot := oq.queue.findFreeSlot()
-		if slot >= 0 {
-			oq.queue.arrayMu.Lock()
-			oq.queue.slots[slot] = env
-			oq.queue.freeBitmap[slot] = false
-			oq.queue.blockReasons[slot] = 0
-			oq.queue.arrayMu.Unlock()
-		}
-		// If no free slot, packet is dropped (silently)
+		})
 	}
 	return nil
 }
 
-// Length returns the current number of packets in the output queue.
+// Length returns the current number of packets in the queue.
 func (oq *OutputQueue) Length() int {
-	if oq.queue == nil {
-		return 0
-	}
-	return oq.queue.Length()
+	return len(oq.slots)
 }
 
-// Capacity returns the maximum capacity of the output queue.
+// Capacity returns the maximum capacity.
 func (oq *OutputQueue) Capacity() int {
-	if oq.queue == nil {
-		return 0
-	}
-	return oq.queue.Capacity()
+	return oq.capacity
 }
 
-// IsFull checks if the output queue is at capacity.
+// IsFull checks if the queue is at capacity.
 func (oq *OutputQueue) IsFull() bool {
-	if oq.queue == nil {
-		return false
+	return len(oq.slots) >= oq.capacity
+}
+
+// SetPacketSentHook configures a hook invoked when packets are sent.
+func (oq *OutputQueue) SetPacketSentHook(hook func(packet.Packet)) {
+	oq.onPacketSent = hook
+}
+
+// setDone sets the done cycle and broadcasts to waiters.
+func (oq *OutputQueue) setDone(cycle int) {
+	oq.doneMu.Lock()
+	atomic.StoreInt64(&oq.done, int64(cycle))
+	oq.doneCond.Broadcast()
+	oq.doneMu.Unlock()
+}
+
+// getDone returns the current done cycle.
+func (oq *OutputQueue) getDone() int {
+	return int(atomic.LoadInt64(&oq.done))
+}
+
+// waitDone blocks until done >= targetCycle using condition variable.
+func (oq *OutputQueue) waitDone(targetCycle int) {
+	oq.doneMu.Lock()
+	defer oq.doneMu.Unlock()
+
+	for oq.getDone() < targetCycle {
+		oq.doneCond.Wait()
 	}
-	return oq.queue.IsFull()
 }

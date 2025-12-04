@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/capability/cache"
 	"github.com/Readm/flow_sim/internal/core/capability/directory"
 	"github.com/Readm/flow_sim/internal/core/debug"
@@ -74,28 +73,40 @@ type NetworkSchema struct {
 	Edges   []EdgeSchema `json:"edges"`
 }
 
+// Network manages a collection of nodes and links.
+// Design assumptions:
+// - Network topology is built once (via AddNode/Connect or FromSchema)
+// - After construction, topology is immutable during Advance
+// - No concurrent modifications during Advance (single-threaded execution model)
+// - Advance can be called multiple times sequentially
 type Network struct {
-	mu    sync.RWMutex
 	nodes map[int]*NodeHandle
 	links []*link.Link
+
+	// Cached slices for Advance (built once during first Advance or explicit finalization)
+	nodeList []*NodeHandle
+	frozen   bool // True after first Advance or explicit Finalize
 }
 
 // New creates an empty network.
 func New() *Network {
 	return &Network{
-		nodes: make(map[int]*NodeHandle),
-		links: make([]*link.Link, 0),
+		nodes:    make(map[int]*NodeHandle),
+		links:    make([]*link.Link, 0),
+		nodeList: nil,
+		frozen:   false,
 	}
 }
 
 // AddNode registers a node handle in the network.
+// Must be called before Advance. Panics if network is frozen.
 func (n *Network) AddNode(handle *NodeHandle) error {
+	if n.frozen {
+		panic("cannot add node after network is frozen (Advance called)")
+	}
 	if handle == nil || handle.Node == nil {
 		return fmt.Errorf("node handle cannot be nil")
 	}
-
-	n.mu.Lock()
-	defer n.mu.Unlock()
 
 	id := handle.Node.ID()
 	if _, exists := n.nodes[id]; exists {
@@ -107,9 +118,11 @@ func (n *Network) AddNode(handle *NodeHandle) error {
 }
 
 // Connect wires a source output queue to a target input queue with a Link.
+// Must be called before Advance. Panics if network is frozen.
 func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targetInputIdx int, latency int, bandwidth int) (*link.Link, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	if n.frozen {
+		panic("cannot connect after network is frozen (Advance called)")
+	}
 
 	source, ok := n.nodes[sourceID]
 	if !ok {
@@ -133,34 +146,39 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 		return nil, fmt.Errorf("queues for connection %d->%d must not be nil", sourceID, targetID)
 	}
 
-	upstreamPort := ahead_port.NewAheadPort(bandwidth)
-	sourceOutput.SetOutPort(upstreamPort)
-
-	linkInstance := link.NewLink(
+	// Create Link with new API (returns 3 values)
+	linkInstance, linkIn, linkOut := link.NewLink(
 		sourceID,
 		targetID,
-		upstreamPort,
-		targetInput.InPort(),
 		latency,
 		bandwidth,
 	)
+
+	// Connect using Plug pattern
+	// Link.InPort (receives) plugs OutputQueue's internal Queue.OutPort (sends)
+	// Link.OutPort (sends) plugs InputQueue (receives via its InPort)
+	linkIn.Plug(sourceOutput.QueueOutPort())
+	linkOut.Plug(targetInput.AsInPort())
 
 	n.links = append(n.links, linkInstance)
 	return linkInstance, nil
 }
 
 // Reset clears the network and rebuilds it from the provided schema.
+// Must be called before any Advance. Panics if network is frozen.
 func (n *Network) Reset(schema *NetworkSchema) error {
+	if n.frozen {
+		panic("cannot reset after network is frozen (Advance called)")
+	}
 	if schema == nil {
 		return fmt.Errorf("schema cannot be nil")
 	}
 
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
 	// Clear existing nodes and links
 	n.nodes = make(map[int]*NodeHandle)
 	n.links = make([]*link.Link, 0)
+	n.nodeList = nil
+	n.frozen = false
 
 	// Create nodes from schema
 	for _, nodeSchema := range schema.Nodes {
@@ -267,17 +285,17 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 		latency := 1
 		bandwidth := 1
 
-		upstreamPort := ahead_port.NewAheadPort(bandwidth)
-		sourceOutput.SetOutPort(upstreamPort)
-
-		linkInstance := link.NewLink(
+		// Create Link with new API (returns 3 values)
+		linkInstance, linkIn, linkOut := link.NewLink(
 			edgeSchema.SrcNodeID,
 			edgeSchema.DstNodeID,
-			upstreamPort,
-			targetInput.InPort(),
 			latency,
 			bandwidth,
 		)
+
+		// Connect using Plug pattern
+		linkIn.Plug(sourceOutput.QueueOutPort())
+		linkOut.Plug(targetInput.AsInPort())
 
 		n.links = append(n.links, linkInstance)
 	}
@@ -286,42 +304,30 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 }
 
 // Advance runs all registered nodes and links in parallel for the given number of cycles.
+// On first call, freezes the network topology (no more AddNode/Connect allowed).
+// Can be called multiple times sequentially.
 func (n *Network) Advance(cycles int) error {
 	if cycles <= 0 {
 		return nil
 	}
 
-	debug.Logf("Network.Advance: starting, cycles=%d", cycles)
-
-	n.mu.RLock()
-	nodes := make([]*NodeHandle, 0, len(n.nodes))
-	for _, handle := range n.nodes {
-		nodes = append(nodes, handle)
-	}
-	links := append([]*link.Link(nil), n.links...)
-	n.mu.RUnlock()
-
-	debug.Logf("Network.Advance: nodes=%d, links=%d", len(nodes), len(links))
-
-	// Initialize readyUntil for all links before starting parallel execution.
-	// This prevents deadlock in cyclic topologies where nodes might wait for
-	// Ready() on links that haven't started their Advance() yet.
-	// Link is ready for the first 'latency' cycles because packets are still in transit.
-	for _, lk := range links {
-		if upPort := lk.UpstreamPort(); upPort != nil {
-			if setter, ok := upPort.(interface{ SetReadyUntil(int) }); ok {
-				readyUntil := lk.Latency()
-				setter.SetReadyUntil(readyUntil)
-				debug.Logf("Network.Advance: pre-initialized link %d->%d ready until %d (latency=%d)",
-					lk.SourceID(), lk.TargetID(), readyUntil, lk.Latency())
-			}
+	// Freeze and build node list on first Advance
+	if !n.frozen {
+		n.nodeList = make([]*NodeHandle, 0, len(n.nodes))
+		for _, handle := range n.nodes {
+			n.nodeList = append(n.nodeList, handle)
 		}
+		n.frozen = true
+		debug.Logf("Network.Advance: network frozen, nodes=%d, links=%d", len(n.nodeList), len(n.links))
 	}
 
-	var wg sync.WaitGroup
-	errCh := make(chan error, len(nodes)+len(links))
+	debug.Logf("Network.Advance: starting cycles=%d", cycles)
 
-	for _, handle := range nodes {
+	// Run all nodes and links in parallel
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(n.nodeList)+len(n.links))
+
+	for _, handle := range n.nodeList {
 		wg.Add(1)
 		nodeID := handle.Node.ID()
 		go func(h *NodeHandle) {
@@ -334,7 +340,7 @@ func (n *Network) Advance(cycles int) error {
 		}(handle)
 	}
 
-	for _, lk := range links {
+	for _, lk := range n.links {
 		wg.Add(1)
 		srcID := lk.SourceID()
 		tgtID := lk.TargetID()

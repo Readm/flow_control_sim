@@ -10,20 +10,20 @@ import (
 )
 
 // InputQueue handles packet reception from upstream components.
-// It mirrors OutputQueue but focuses on receiving packets via AheadPort
-// and exposing them through Pick/GetReceivedPackets without sending downstream.
+// It wraps an internal Queue and provides InPort interface for upstream connections.
+// Exposes received packets through Pick/GetReceivedPackets without sending downstream.
 type InputQueue struct {
 	queue            *Queue
-	inPort           ahead_port.AheadPort
-	dummyDownstream  ahead_port.AheadPort
-	processor        *ahead_port.CycleProcessor
+	queueInPort      ahead_port.InPort   // Internal Queue's InPort (for receiving from upstream)
+	queueOutPort     ahead_port.OutPort  // Internal Queue's OutPort (for Network connections)
+	processor        *InputQueueCycleProcessor
 	packetProc       *InputQueuePacketProcessor
 	lastCyclePackets []packet.Packet
 	onPacketReceived func(packet.Packet)
 	readyOnce        sync.Once
 }
 
-// InputQueuePacketProcessor implements AheadPort PacketProcessor for InputQueue.
+// InputQueuePacketProcessor handles packet processing for InputQueue.
 type InputQueuePacketProcessor struct {
 	inputQueue *InputQueue
 }
@@ -41,50 +41,50 @@ func NewInputQueue(bufferSize int, inBandwidth int, outBandwidth int) *InputQueu
 		panic("outBandwidth must be positive")
 	}
 
-	queue, _, _ := NewQueue(bufferSize, inBandwidth, outBandwidth, 1)
-	inPort := ahead_port.NewAheadPort(bufferSize)
-	dummyDownstream := ahead_port.NewAheadPort(1)
+	queue, queueIn, queueOut := NewQueue(bufferSize, inBandwidth, outBandwidth, 1)
 
 	iq := &InputQueue{
 		queue:            queue,
-		inPort:           inPort,
-		dummyDownstream:  dummyDownstream,
+		queueInPort:      queueIn,
+		queueOutPort:     queueOut,
 		lastCyclePackets: make([]packet.Packet, 0),
 	}
 	iq.packetProc = &InputQueuePacketProcessor{
 		inputQueue: iq,
 	}
-	iq.processor = ahead_port.NewCycleProcessor(iq.inPort, iq.dummyDownstream, iq.packetProc)
-	primePortReady(iq.inPort, bufferSize)
+	iq.processor = &InputQueueCycleProcessor{
+		inputQueue: iq,
+		processor:  iq.packetProc,
+	}
+
+	// Initialize Queue's ready state for initial cycles
+	primeQueueReady(queue, bufferSize)
 
 	return iq
 }
 
-// SetInPort overrides the default upstream AheadPort.
-// Recreates the internal processor to use the new port.
-func (iq *InputQueue) SetInPort(port ahead_port.AheadPort) {
-	if port == nil {
-		return
-	}
-
-	iq.inPort = port
-	iq.processor = ahead_port.NewCycleProcessor(iq.inPort, iq.dummyDownstream, iq.packetProc)
-	capacity := 8
-	if iq.queue != nil {
-		capacity = iq.queue.Capacity()
-	}
-	primePortReady(iq.inPort, capacity)
+// QueueInPort returns the internal Queue's InPort for Network connections.
+// This is used by Network to connect Link's output to InputQueue's input.
+func (iq *InputQueue) QueueInPort() ahead_port.InPort {
+	return iq.queueInPort
 }
 
-// InPort returns the upstream AheadPort for receiving packets.
-func (iq *InputQueue) InPort() ahead_port.AheadPort {
-	return iq.inPort
+// QueueOutPort returns the internal Queue's OutPort for Network connections.
+// This is used by Network to connect InputQueue's output to other components.
+func (iq *InputQueue) QueueOutPort() ahead_port.OutPort {
+	return iq.queueOutPort
+}
+
+// AsInPort is a convenience method that returns QueueInPort.
+// Kept for backward compatibility with Network code.
+func (iq *InputQueue) AsInPort() ahead_port.InPort {
+	return iq.queueInPort
 }
 
 // Tick processes a cycle by receiving packets from upstream and storing them internally.
 func (iq *InputQueue) Tick(cycle int) error {
 	if iq.processor == nil {
-		iq.processor = ahead_port.NewCycleProcessor(iq.inPort, iq.dummyDownstream, iq.packetProc)
+		return nil
 	}
 
 	return iq.processor.Tick(cycle)
@@ -121,26 +121,20 @@ func (iq *InputQueue) SetPacketReceivedHook(hook func(packet.Packet)) {
 	iq.onPacketReceived = hook
 }
 
-// EnableAlwaysReady configures the upstream port to stay ready for all future cycles.
+// EnableAlwaysReady configures the queue to stay ready for all future cycles.
 // This is useful for scenarios that do not model backpressure (e.g., simplified network tests).
 func (iq *InputQueue) EnableAlwaysReady() {
 	iq.readyOnce.Do(func() {
-		updater, ok := iq.inPort.(interface {
-			UpdateReady(int, bool)
-		})
-		if !ok {
+		if iq.queue == nil {
 			return
 		}
 
-		capacity := 8
-		if iq.queue != nil {
-			capacity = iq.queue.Capacity()
-		}
+		capacity := iq.queue.Capacity()
 
 		go func(start int) {
 			cycle := start
 			for {
-				updater.UpdateReady(cycle, true)
+				iq.queue.updateReady(cycle, true)
 				cycle++
 				if cycle%128 == 0 {
 					runtime.Gosched()
@@ -175,7 +169,7 @@ func (iq *InputQueue) IsFull() bool {
 	return iq.queue.IsFull()
 }
 
-// ProcessPackets implements the AheadPort PacketProcessor for InputQueue.
+// ProcessPackets processes packets for InputQueue.
 func (iqpp *InputQueuePacketProcessor) ProcessPackets(
 	receiveChan <-chan ahead_port.PacketWithCycle,
 	cycle int,
@@ -230,13 +224,91 @@ done:
 	updateUpstreamReady(cycle+1, hasCapacity)
 }
 
-func primePortReady(port ahead_port.AheadPort, limit int) {
+// primeQueueReady initializes the queue's ready state for initial cycles.
+func primeQueueReady(queue *Queue, limit int) {
+	if queue == nil {
+		return
+	}
 	if limit <= 0 {
 		limit = 8
 	}
-	if updater, ok := port.(interface{ UpdateReady(int, bool) }); ok {
-		for cycle := 0; cycle <= limit; cycle++ {
-			updater.UpdateReady(cycle, true)
+	for cycle := 0; cycle <= limit; cycle++ {
+		queue.updateReady(cycle, true)
+	}
+}
+
+// InputQueueCycleProcessor is a custom cycle processor for InputQueue.
+type InputQueueCycleProcessor struct {
+	inputQueue *InputQueue
+	processor  *InputQueuePacketProcessor
+}
+
+// Tick implements the cycle processing workflow for InputQueue.
+func (iqcp *InputQueueCycleProcessor) Tick(cycle int) error {
+	if iqcp.processor == nil {
+		panic("InputQueueCycleProcessor.processor is nil")
+	}
+
+	iq := iqcp.inputQueue
+	queue := iq.queue
+
+	// Wait for upstream Done >= cycle-1
+	if iq.queueInPort != nil {
+		if baseIn, ok := iq.queueInPort.(*queueInPort); ok && baseIn.UpstreamOut != nil {
+			baseIn.UpstreamOut.WaitDone(cycle - 1)
 		}
 	}
+
+	// Prepare updateUpstreamReady function
+	updateUpstreamReady := func(c int, ready bool) {
+		if queue != nil {
+			queue.updateReady(c, ready)
+		}
+	}
+
+	// Get receive channel
+	var receiveChan <-chan ahead_port.PacketWithCycle
+	if iq.queueInPort != nil {
+		if baseIn, ok := iq.queueInPort.(*queueInPort); ok && baseIn.InputChan != nil {
+			receiveChan = baseIn.InputChan
+		}
+	}
+	if receiveChan == nil {
+		receiveChan = make(chan ahead_port.PacketWithCycle)
+	}
+
+	// checkReady - InputQueue doesn't send downstream, always ready
+	checkReady := func(int) bool {
+		return true
+	}
+
+	// sendPacket - InputQueue doesn't send packets downstream
+	sendPacket := func(ahead_port.PacketWithCycle) {}
+
+	// setDone function
+	setDone := func(c int) {
+		if queue != nil {
+			queue.setDone(c)
+		}
+	}
+
+	// Call PacketProcessor
+	iqcp.processor.ProcessPackets(
+		receiveChan,
+		cycle,
+		checkReady,
+		sendPacket,
+		setDone,
+		updateUpstreamReady,
+	)
+
+	// Ensure Done state is correct
+	if queue != nil {
+		currentDone := queue.getDone()
+		if currentDone < cycle {
+			queue.setDone(cycle)
+		}
+	}
+
+	return nil
 }

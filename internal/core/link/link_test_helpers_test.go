@@ -9,17 +9,6 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// newTestAheadPort creates a SinglePort for testing (legacy support).
-func newTestAheadPort(buffer int) ahead_port.AheadPort {
-	var port ahead_port.AheadPort = ahead_port.NewAheadPort(buffer)
-	if sp, ok := port.(*ahead_port.SinglePort); ok {
-		sp.SetReadyUntil(1024)
-		sp.UpdateReady(0, true)
-	}
-	port.SetDone(-1)
-	return port
-}
-
 // createTestPorts creates a pair of InPort and OutPort.
 // Returns (inPort, outPort) that need to be plugged.
 func createTestPorts(buffer int) (ahead_port.InPort, ahead_port.OutPort) {
@@ -101,19 +90,6 @@ func (m *mockInPort) SetInChannel(ch chan ahead_port.PacketWithCycle, upstream a
 	m.ch = ch
 }
 
-func sendPacket(t *testing.T, port ahead_port.AheadPort, cycle int, pkt packet.Packet) {
-	t.Helper()
-	env := ahead_port.PacketWithCycle{
-		Cycle:  cycle,
-		Packet: pkt,
-	}
-	select {
-	case port.SendChan() <- env:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatalf("timeout sending packet %+v", pkt)
-	}
-}
-
 func sendPacketToOutPort(t *testing.T, port ahead_port.OutPort, cycle int, pkt packet.Packet) {
 	t.Helper()
 	env := ahead_port.PacketWithCycle{
@@ -130,20 +106,6 @@ func sendPacketToOutPort(t *testing.T, port ahead_port.OutPort, cycle int, pkt p
 	} else {
 		t.Fatalf("sendPacketToOutPort requires mockOutPort")
 	}
-}
-
-func receivePackets(t *testing.T, port ahead_port.AheadPort, expected int) []ahead_port.PacketWithCycle {
-	t.Helper()
-	results := make([]ahead_port.PacketWithCycle, 0, expected)
-	for i := 0; i < expected; i++ {
-		select {
-		case pkt := <-port.ReceiveChan():
-			results = append(results, pkt)
-		case <-time.After(200 * time.Millisecond):
-			t.Fatalf("timeout waiting for packet %d", i)
-		}
-	}
-	return results
 }
 
 func receivePacketsFromInPort(t *testing.T, port ahead_port.InPort, expected int) []ahead_port.PacketWithCycle {
@@ -163,15 +125,6 @@ func receivePacketsFromInPort(t *testing.T, port ahead_port.InPort, expected int
 		t.Fatalf("receivePacketsFromInPort requires mockInPort")
 	}
 	return results
-}
-
-func ensureNoAdditionalPackets(t *testing.T, port ahead_port.AheadPort) {
-	t.Helper()
-	select {
-	case pkt := <-port.ReceiveChan():
-		t.Fatalf("unexpected extra packet: %+v", pkt)
-	default:
-	}
 }
 
 func ensureNoAdditionalPacketsInPort(t *testing.T, port ahead_port.InPort) {
