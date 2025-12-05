@@ -351,6 +351,27 @@ func (tm *TxnManager) handleYieldCommand(active *activeTxn, cmd *YieldCommand, o
 			}
 		}
 
+		// NOTE: Do NOT send resume for SendOnly!
+		// SendOnly is used by non-blocking Send(), which doesn't wait for resume.
+
+	case YieldTypeSendAndWait:
+		// Send messages and resume the transaction
+		*outgoing = append(*outgoing, cmd.SendQueue...)
+
+		// Execute operations
+		nodeID := tm.node.ID()
+		for _, op := range cmd.Operations {
+			if err := op.Execute(nodeID); err != nil {
+				// Log error but continue
+			}
+		}
+
+		// Resume transaction
+		select {
+		case active.context.resumeCh <- nil:
+		default:
+		}
+
 	case YieldTypeComplete:
 		// Transaction is complete
 		active.mu.Lock()
@@ -484,6 +505,18 @@ func (tm *TxnManager) handleMigratedYield(mtxn *migratedTxn, cmd *YieldCommand, 
 	case YieldTypeSendOnly:
 		// Just send messages
 		*outgoing = append(*outgoing, cmd.SendQueue...)
+
+		// NOTE: Do NOT send resume for SendOnly (same reason as above)
+
+	case YieldTypeSendAndWait:
+		// Send messages and resume
+		*outgoing = append(*outgoing, cmd.SendQueue...)
+
+		// Resume transaction
+		select {
+		case mtxn.resumeCh <- nil:
+		default:
+		}
 
 	default:
 		// Unknown type, just collect messages

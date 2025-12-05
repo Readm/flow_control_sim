@@ -86,7 +86,7 @@ func (tc *TxnContext) Send(msg *message.Message) error {
 	}
 
 	// Send via yield command with SendQueue
-	// Use YieldTypeSendOnly since we're only sending, not waiting for a response
+	// Non-blocking: just queue the message
 	cmd := &YieldCommand{
 		Type:      YieldTypeSendOnly,
 		SendQueue: []*message.Message{msg},
@@ -100,6 +100,28 @@ func (tc *TxnContext) Send(msg *message.Message) error {
 	default:
 		return errors.New("yield channel is full")
 	}
+}
+
+// SendAndWait sends a message and waits for it to be processed.
+// This ensures the message is sent before the transaction continues.
+func (tc *TxnContext) SendAndWait(msg *message.Message) error {
+	if msg == nil {
+		return errors.New("message cannot be nil")
+	}
+
+	// Set TransactionID if not set
+	if msg.TransactionID.NodeID == 0 && msg.TransactionID.TxnID == 0 {
+		msg.TransactionID = tc.txnID
+	}
+
+	// Send via yield and wait for processing
+	cmd := &YieldCommand{
+		Type:      YieldTypeSendAndWait, // Use new type that will send a resume
+		SendQueue: []*message.Message{msg},
+	}
+
+	_, err := tc.Yield(cmd)
+	return err
 }
 
 // NodeID returns the node ID.

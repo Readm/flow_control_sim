@@ -49,6 +49,7 @@ const (
 	OpcodeSnpSharedFwd      = 0x40 // Snoop Shared Forward
 	OpcodeSnpUniqueFwd      = 0x41 // Snoop Unique Forward
 	OpcodeSnpOnceFwd        = 0x42 // Snoop Once Forward
+	OpcodeSnpInvalidate     = 0x43 // Snoop Invalidate
 	// Additional snoop opcodes can be added here
 )
 

@@ -12,7 +12,8 @@ type YieldType string
 const (
 	YieldTypeWaitForMessage YieldType = "WaitForMessage"
 	YieldTypeWaitForTimeout YieldType = "WaitForTimeout"
-	YieldTypeSendOnly       YieldType = "SendOnly" // Send messages without waiting
+	YieldTypeSendOnly       YieldType = "SendOnly"       // Send messages without waiting (non-blocking)
+	YieldTypeSendAndWait    YieldType = "SendAndWait"    // Send messages and wait for processing (blocking)
 	YieldTypeComplete       YieldType = "Complete"
 
 	// YieldTypeMigrateTo requests migration to another node.
