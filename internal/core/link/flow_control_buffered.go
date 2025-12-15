@@ -179,3 +179,9 @@ func (fc *BufferedFlowControl) GetLatency() int {
 func (fc *BufferedFlowControl) GetBandwidth() int {
 	return fc.bandwidth
 }
+
+// GetSlots returns the internal slots array.
+// This is used by Link.SnapshotOccupancy() for monitoring.
+func (fc *BufferedFlowControl) GetSlots() [][]ahead_port.PacketWithCycle {
+	return fc.slots
+}

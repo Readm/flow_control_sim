@@ -9,30 +9,6 @@ import (
 	"github.com/Readm/flow_sim/internal/core/debug"
 )
 
-// CreateFlowControlStrategy is a factory function that creates flow control strategies by type.
-//
-// Supported strategy types:
-// - "buffered": BufferedFlowControl with ring buffer and backpressure
-// - "bufferless": BufferlessFlowControl (always-ready, no buffering, latency still applies)
-//
-// Parameters:
-// - strategyType: type of flow control strategy ("buffered", "bufferless")
-// - latency: latency parameter (used by buffered, ignored by bufferless)
-// - bandwidth: bandwidth parameter (used by buffered, ignored by bufferless)
-//
-// Returns:
-// - FlowControlStrategy instance, or panic if strategyType is unknown
-func CreateFlowControlStrategy(strategyType string, latency, bandwidth int) FlowControlStrategy {
-	switch strategyType {
-	case "buffered":
-		return NewBufferedFlowControl(latency, bandwidth)
-	case "bufferless":
-		return NewBufferlessFlowControl()
-	default:
-		panic(fmt.Sprintf("unknown flow control strategy type: %s", strategyType))
-	}
-}
-
 // LinkCycleProcessor is a custom cycle processor for Link that waits for Done(cycle-latency)
 // instead of Done(cycle-1). This allows Link to process packets earlier, taking advantage
 // of the latency buffer.
@@ -129,9 +105,6 @@ type Link struct {
 	inPort            *linkInPort
 	outPort           *linkOutPort
 
-	// +++ Flow control strategy (Phase 3 addition) +++
-	flowControl       FlowControlStrategy
-
 	// Link's own synchronization state
 	done              int64         // Link's done cycle (atomic)
 	readyUntil        int64         // Link's ready until cycle (atomic)
@@ -147,6 +120,7 @@ type Link struct {
 	packetProc        *LinkPacketProcessor
 	latency           int
 	bandwidth         int
+	totalBackpressure int
 	currentCycle      int
 	tickHookMu        sync.RWMutex
 	tickHook          func(cycle int)
@@ -157,21 +131,22 @@ type Link struct {
 type LinkPacketProcessor struct {
 	link           *Link
 	pendingPackets []ahead_port.PacketWithCycle
-	// DEPRECATED: Slots moved to BufferedFlowControl (will be removed in cleanup)
-	// slots [][]ahead_port.PacketWithCycle
+	// Slots for delayed delivery (ring buffer)
+	slots [][]ahead_port.PacketWithCycle
 }
 
 // NewLinkPacketProcessor creates a new LinkPacketProcessor.
 func NewLinkPacketProcessor(link *Link) *LinkPacketProcessor {
-	// Slots are now managed by flowControl strategy
+	slotCount := link.latency
+	slots := make([][]ahead_port.PacketWithCycle, slotCount)
 	return &LinkPacketProcessor{
 		link:           link,
+		slots:          slots,
 		pendingPackets: make([]ahead_port.PacketWithCycle, 0),
 	}
 }
 
 // ProcessPackets processes packets for Link: receive from upstream, apply latency, and send to downstream.
-// Phase 3: Refactored to use FlowControlStrategy
 func (l *LinkPacketProcessor) ProcessPackets(
 	receiveChan <-chan ahead_port.PacketWithCycle,
 	cycle int,
@@ -191,28 +166,26 @@ func (l *LinkPacketProcessor) ProcessPackets(
 
 	newPendingPackets := make([]ahead_port.PacketWithCycle, 0)
 
-	// Get BufferedFlowControl for slot operations
-	// Type assertion is safe because we only use BufferedFlowControl in current implementation
-	fc, ok := l.link.flowControl.(*BufferedFlowControl)
-	if !ok {
-		panic("ProcessPackets currently only supports BufferedFlowControl")
-	}
-
-	// Helper to add packet to slot (using flow control strategy)
+	// Helper to add packet to slot
 	addToSlot := func(pkt ahead_port.PacketWithCycle, targetCycle int) {
-		// Use strategy's CanAcceptPacket for validation
-		if !fc.CanAcceptPacket(cycle, targetCycle) {
-			panic(fmt.Sprintf("Cannot accept packet for targetCycle %d at cycle %d", targetCycle, cycle))
+		// Calculate target slot index with backpressure adjustment.
+		// Design guarantee: totalBackpressure will never exceed targetCycle (in practice)
+		targetSlotIndex := (targetCycle - l.link.totalBackpressure) % len(l.slots)
+		// Check bandwidth limit for the target slot
+		if len(l.slots[targetSlotIndex]) >= l.link.bandwidth {
+			panic(fmt.Sprintf("Slot is full (bandwidth limit exceeded) for targetSlotIndex %d at cycle %d", targetSlotIndex, cycle))
+		} else {
+			l.slots[targetSlotIndex] = append(l.slots[targetSlotIndex], pkt)
 		}
-		// Use strategy's AddToSlot method
-		fc.AddToSlot(pkt, targetCycle)
 	}
 
 	// 1. Process pending packets (already have correct TargetCycle)
 	for _, pkt := range l.pendingPackets {
 		targetCycle := pkt.Cycle
-		// Check if it fits in window (using strategy)
-		if !fc.CanAcceptPacket(cycle, targetCycle) {
+		// Check if it fits in window
+		// The ring buffer has 'latency' slots, covering [cycle, cycle + latency - 1].
+		// If targetCycle >= cycle + latency, it doesn't fit in current window.
+		if targetCycle-cycle >= l.link.latency {
 			newPendingPackets = append(newPendingPackets, pkt)
 			continue
 		}
@@ -232,8 +205,8 @@ func (l *LinkPacketProcessor) ProcessPackets(
 				Packet: pkt.Packet,
 			}
 
-			// Check if it fits in window (using strategy)
-			if !fc.CanAcceptPacket(cycle, targetCycle) {
+			// Check if it fits in window
+			if targetCycle-cycle >= l.link.latency {
 				newPendingPackets = append(newPendingPackets, delayedPkt)
 				continue
 			}
@@ -248,20 +221,18 @@ doneProcessing:
 	// Update pending packets
 	l.pendingPackets = newPendingPackets
 
-	// Decide whether to send based on downstream readiness (using strategy)
-	downstreamReady := checkReady(cycle)
-	if fc.CanSendPacket(cycle, downstreamReady) {
-		// Get packets from slot (using strategy)
-		slot := fc.GetSlot(cycle)
-		for _, pkt := range slot {
+	// If the downstream is ready, send the packets from the slots.
+	if checkReady(cycle) {
+		// Calculate slot index with backpressure adjustment.
+		slotIndex := (cycle - l.link.totalBackpressure) % len(l.slots)
+		for _, pkt := range l.slots[slotIndex] {
 			pkt.Cycle = cycle
 			sendPacket(pkt)
 		}
-		// Clear slot (using strategy)
-		fc.ClearSlot(cycle)
+		l.slots[slotIndex] = nil // Clear the slot
 	} else {
-		// Downstream not ready: increment backpressure (using strategy)
-		fc.IncrementBackpressure()
+		// Downstream not ready: increment backpressure counter to delay slot access
+		l.link.totalBackpressure = l.link.totalBackpressure + 1
 	}
 
 	// Set Done
@@ -281,44 +252,24 @@ doneProcessing:
 // - targetID: ID of the target node
 // - latency: number of cycles for packet delivery (must be >= 0)
 // - bandwidth: maximum packets per cycle (must be > 0)
-//
-// Note: This function creates a Link with BufferedFlowControl by default.
-// For other flow control strategies, use NewLinkWithFlowControl.
 func NewLink(sourceID, targetID, latency, bandwidth int) (*Link, ahead_port.InPort, ahead_port.OutPort) {
-	// Create default flow control strategy (BufferedFlowControl)
-	flowControl := NewBufferedFlowControl(latency, bandwidth)
-	return NewLinkWithFlowControl(sourceID, targetID, latency, bandwidth, flowControl)
-}
-
-// NewLinkWithFlowControl creates a new Link with a custom flow control strategy.
-//
-// Parameters:
-// - sourceID: ID of the source node
-// - targetID: ID of the target node
-// - latency: number of cycles for packet delivery (must be >= 0)
-// - bandwidth: maximum packets per cycle (must be > 0)
-// - flowControl: the flow control strategy to use
-func NewLinkWithFlowControl(sourceID, targetID, latency, bandwidth int, flowControl FlowControlStrategy) (*Link, ahead_port.InPort, ahead_port.OutPort) {
 	if latency < 0 {
 		panic("latency must not be negative")
 	}
 	if bandwidth <= 0 {
 		panic("bandwidth must be positive")
 	}
-	if flowControl == nil {
-		panic("flowControl must not be nil")
-	}
 
 	link := &Link{
-		sourceID:    sourceID,
-		targetID:    targetID,
-		latency:     latency,
-		bandwidth:   bandwidth,
-		flowControl: flowControl,
-		currentCycle: 0,
-		done:         -1,
-		readyUntil:   0,
-		readyMap:     make(map[int]bool),
+		sourceID:          sourceID,
+		targetID:          targetID,
+		latency:           latency,
+		bandwidth:         bandwidth,
+		totalBackpressure: 0,
+		currentCycle:      0,
+		done:              -1,
+		readyUntil:        0,
+		readyMap:          make(map[int]bool),
 	}
 
 	// Create ports
@@ -380,22 +331,12 @@ func (l *Link) Tick(cycle int) error {
 }
 
 // SnapshotOccupancy reports the pending packet count per slot.
-// Phase 3: Updated to use flowControl
 func (l *Link) SnapshotOccupancy() []int {
-	if l.flowControl == nil {
+	if l.packetProc == nil {
 		return nil
 	}
-
-	// Type assert to BufferedFlowControl to access slots
-	fc, ok := l.flowControl.(*BufferedFlowControl)
-	if !ok {
-		// For non-buffered flow control, return empty
-		return nil
-	}
-
-	slots := fc.GetSlots()
-	occupancy := make([]int, len(slots))
-	for i, slot := range slots {
+	occupancy := make([]int, len(l.packetProc.slots))
+	for i, slot := range l.packetProc.slots {
 		occupancy[i] = len(slot)
 	}
 	return occupancy
