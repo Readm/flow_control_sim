@@ -7,6 +7,7 @@ import (
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
+	"github.com/Readm/flow_sim/internal/core/visualization"
 )
 
 // CreateFlowControlStrategy is a factory function that creates flow control strategies by type.
@@ -191,29 +192,48 @@ func (l *LinkPacketProcessor) ProcessPackets(
 
 	newPendingPackets := make([]ahead_port.PacketWithCycle, 0)
 
-	// Get BufferedFlowControl for slot operations
-	// Type assertion is safe because we only use BufferedFlowControl in current implementation
-	fc, ok := l.link.flowControl.(*BufferedFlowControl)
-	if !ok {
-		panic("ProcessPackets currently only supports BufferedFlowControl")
+	// Check flow control type and use appropriate processing logic
+	if bufferedFC, ok := l.link.flowControl.(*BufferedFlowControl); ok {
+		// Use buffered flow control logic (with slots and backpressure)
+		l.processPacketsBuffered(bufferedFC, receiveChan, cycle, checkReady, sendPacket, setDone, &newPendingPackets)
+	} else if _, ok := l.link.flowControl.(*BufferlessFlowControl); ok {
+		// Use bufferless flow control logic (simple latency-based forwarding)
+		l.processPacketsBufferless(receiveChan, cycle, sendPacket, setDone, &newPendingPackets)
+	} else {
+		panic(fmt.Sprintf("Unsupported flow control type: %T", l.link.flowControl))
 	}
+
+	// Update pending packets
+	l.pendingPackets = newPendingPackets
+
+	// Notify upstream that we are ready for next cycle using waitGroup to wait for completion
+	wg.Wait()
+}
+
+// processPacketsBuffered handles packet processing for BufferedFlowControl.
+func (l *LinkPacketProcessor) processPacketsBuffered(
+	fc *BufferedFlowControl,
+	receiveChan <-chan ahead_port.PacketWithCycle,
+	cycle int,
+	checkReady func(int) bool,
+	sendPacket func(ahead_port.PacketWithCycle),
+	setDone func(int),
+	newPendingPackets *[]ahead_port.PacketWithCycle,
+) {
 
 	// Helper to add packet to slot (using flow control strategy)
 	addToSlot := func(pkt ahead_port.PacketWithCycle, targetCycle int) {
-		// Use strategy's CanAcceptPacket for validation
 		if !fc.CanAcceptPacket(cycle, targetCycle) {
 			panic(fmt.Sprintf("Cannot accept packet for targetCycle %d at cycle %d", targetCycle, cycle))
 		}
-		// Use strategy's AddToSlot method
 		fc.AddToSlot(pkt, targetCycle)
 	}
 
 	// 1. Process pending packets (already have correct TargetCycle)
 	for _, pkt := range l.pendingPackets {
 		targetCycle := pkt.Cycle
-		// Check if it fits in window (using strategy)
 		if !fc.CanAcceptPacket(cycle, targetCycle) {
-			newPendingPackets = append(newPendingPackets, pkt)
+			*newPendingPackets = append(*newPendingPackets, pkt)
 			continue
 		}
 		addToSlot(pkt, targetCycle)
@@ -226,15 +246,13 @@ func (l *LinkPacketProcessor) ProcessPackets(
 			sourceCycle := pkt.Cycle
 			targetCycle := sourceCycle + l.link.latency
 
-			// Create packet with target cycle
 			delayedPkt := ahead_port.PacketWithCycle{
 				Cycle:  targetCycle,
 				Packet: pkt.Packet,
 			}
 
-			// Check if it fits in window (using strategy)
 			if !fc.CanAcceptPacket(cycle, targetCycle) {
-				newPendingPackets = append(newPendingPackets, delayedPkt)
+				*newPendingPackets = append(*newPendingPackets, delayedPkt)
 				continue
 			}
 			addToSlot(delayedPkt, targetCycle)
@@ -245,31 +263,71 @@ func (l *LinkPacketProcessor) ProcessPackets(
 	}
 
 doneProcessing:
-	// Update pending packets
-	l.pendingPackets = newPendingPackets
-
-	// Decide whether to send based on downstream readiness (using strategy)
+	// Decide whether to send based on downstream readiness
 	downstreamReady := checkReady(cycle)
 	if fc.CanSendPacket(cycle, downstreamReady) {
-		// Get packets from slot (using strategy)
 		slot := fc.GetSlot(cycle)
 		for _, pkt := range slot {
 			pkt.Cycle = cycle
 			sendPacket(pkt)
 		}
-		// Clear slot (using strategy)
 		fc.ClearSlot(cycle)
 	} else {
-		// Downstream not ready: increment backpressure (using strategy)
 		fc.IncrementBackpressure()
 	}
 
-	// Set Done
 	setDone(cycle)
+}
 
-	// Notify upstream that we are ready for next cycle using waitGroup to wait for completion
-	// TODO: This may remove to further optimization
-	wg.Wait()
+// processPacketsBufferless handles packet processing for BufferlessFlowControl.
+// Simpler logic: packets are delayed by latency and forwarded immediately when ready.
+func (l *LinkPacketProcessor) processPacketsBufferless(
+	receiveChan <-chan ahead_port.PacketWithCycle,
+	cycle int,
+	sendPacket func(ahead_port.PacketWithCycle),
+	setDone func(int),
+	newPendingPackets *[]ahead_port.PacketWithCycle,
+) {
+	// 1. Process pending packets - send those whose time has come
+	for _, pkt := range l.pendingPackets {
+		if pkt.Cycle <= cycle {
+			// Time to send this packet
+			pkt.Cycle = cycle
+			sendPacket(pkt)
+		} else {
+			// Still waiting
+			*newPendingPackets = append(*newPendingPackets, pkt)
+		}
+	}
+
+	// 2. Receive new packets and either send immediately or queue
+	for {
+		select {
+		case pkt := <-receiveChan:
+			sourceCycle := pkt.Cycle
+			targetCycle := sourceCycle + l.link.latency
+
+			delayedPkt := ahead_port.PacketWithCycle{
+				Cycle:  targetCycle,
+				Packet: pkt.Packet,
+			}
+
+			if targetCycle <= cycle {
+				// Can send immediately
+				delayedPkt.Cycle = cycle
+				sendPacket(delayedPkt)
+			} else {
+				// Need to wait
+				*newPendingPackets = append(*newPendingPackets, delayedPkt)
+			}
+
+		default:
+			goto doneProcessing
+		}
+	}
+
+doneProcessing:
+	setDone(cycle)
 }
 
 // NewLink creates a Link with InPort and OutPort interfaces.
@@ -567,6 +625,27 @@ func (l *Link) setReadyUntil(cycle int) {
 		l.cond.Broadcast()
 	}
 	l.waiterMu.Unlock()
+}
+
+// GetVisualState returns the visual representation of this link.
+func (l *Link) GetVisualState() string {
+	if visualization.VisualizationMode == "none" {
+		return ""
+	}
+
+	if visualization.VisualizationMode == "ascii" {
+		// 显示链路上是否有packet在传输
+		var packetsInFlight int
+		if l.packetProc != nil {
+			packetsInFlight = len(l.packetProc.pendingPackets)
+		}
+		if packetsInFlight > 0 {
+			return fmt.Sprintf("-[%d]-", packetsInFlight)
+		}
+		return "----"
+	}
+
+	return ""
 }
 
 // ===== Port implementations =====

@@ -1,10 +1,13 @@
 package queue
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
+	"github.com/Readm/flow_sim/internal/core/debug"
+	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -146,8 +149,13 @@ func (oq *OutputQueue) InjectPackets(cycle int, packets []packet.Packet) error {
 	for _, pkt := range packets {
 		if len(oq.slots) >= oq.capacity {
 			// Queue full, drop packet
+			debug.Logf("OutputQueue: DROPPED packet (queue full %d/%d): Src=%d Dst=%d at cycle %d",
+				len(oq.slots), oq.capacity, pkt.SourceID, pkt.TargetID, cycle)
 			continue
 		}
+
+		debug.Logf("OutputQueue: Injected packet: Src=%d Dst=%d at cycle %d (queue: %d/%d)",
+			pkt.SourceID, pkt.TargetID, cycle, len(oq.slots)+1, oq.capacity)
 
 		oq.slots = append(oq.slots, packet.PacketWithCycle{
 			Cycle:  cycle,
@@ -198,4 +206,18 @@ func (oq *OutputQueue) waitDone(targetCycle int) {
 	for oq.getDone() < targetCycle {
 		oq.doneCond.Wait()
 	}
+}
+
+// GetVisualState returns the visual representation of this output queue.
+func (oq *OutputQueue) GetVisualState() string {
+	if visualization.VisualizationMode == "none" {
+		return ""
+	}
+
+	if visualization.VisualizationMode == "ascii" {
+		// 格式: [len/cap]
+		return fmt.Sprintf("[%d/%d]", oq.Length(), oq.Capacity())
+	}
+
+	return ""
 }

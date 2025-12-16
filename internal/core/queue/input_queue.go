@@ -1,11 +1,14 @@
 package queue
 
 import (
+	"fmt"
 	"runtime"
 	"sync"
 	"time"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
+	"github.com/Readm/flow_sim/internal/core/debug"
+	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -104,6 +107,7 @@ func (iq *InputQueue) Pick() []packet.Packet {
 	result := make([]packet.Packet, len(picked))
 	for i, pkt := range picked {
 		result[i] = pkt.Packet
+		debug.Logf("InputQueue: Picked packet: Src=%d Dst=%d", pkt.Packet.SourceID, pkt.Packet.TargetID)
 	}
 	return result
 }
@@ -311,4 +315,18 @@ func (iqcp *InputQueueCycleProcessor) Tick(cycle int) error {
 	}
 
 	return nil
+}
+
+// GetVisualState returns the visual representation of this input queue.
+func (iq *InputQueue) GetVisualState() string {
+	if visualization.VisualizationMode == "none" {
+		return ""
+	}
+
+	if visualization.VisualizationMode == "ascii" {
+		// 格式: [len/cap]
+		return fmt.Sprintf("[%d/%d]", iq.Length(), iq.Capacity())
+	}
+
+	return ""
 }

@@ -12,6 +12,16 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
+// PickHook allows callers to customize packet picking behavior from input queues.
+// Parameters:
+//   - ctx: context
+//   - cycle: current cycle
+//   - defaultPick: default Pick function (calls Pick() on all inputs)
+// Returns:
+//   - []packet.Packet: packets to process
+//   - error: error if any
+type PickHook func(ctx context.Context, cycle uint64, defaultPick func() []packet.Packet) ([]packet.Packet, error)
+
 // ProcessHook allows callers to implement custom processing logic.
 type ProcessHook func(ctx context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error)
 
@@ -50,6 +60,8 @@ type Node struct {
 
 	bufferMu      sync.Mutex
 	processBuffer []packet.Packet
+	pickHook      PickHook
+	pickHookMu    sync.RWMutex
 	processHook   ProcessHook
 	currentCycle  uint64
 	tickHookMu    sync.RWMutex
@@ -133,6 +145,13 @@ func (n *Node) Directories() []directory.Directory {
 	return cp
 }
 
+// SetPickHook configures the hook invoked to customize packet picking behavior.
+func (n *Node) SetPickHook(hook PickHook) {
+	n.pickHookMu.Lock()
+	defer n.pickHookMu.Unlock()
+	n.pickHook = hook
+}
+
 // SetProcessHook configures the hook invoked after packets are collected.
 func (n *Node) SetProcessHook(hook ProcessHook) {
 	n.bufferMu.Lock()
@@ -158,8 +177,20 @@ func (n *Node) ProcessBuffer() []packet.Packet {
 
 // Tick executes a cycle of computation on the Node.
 func (n *Node) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
-	buffer := n.collectPackets()
+	var buffer []packet.Packet
 
+	// 1. Pick packets (customizable via PickHook)
+	if hook := n.getPickHook(); hook != nil {
+		picked, err := hook(ctx, cycle, n.collectPackets)
+		if err != nil {
+			return err
+		}
+		buffer = picked
+	} else {
+		buffer = n.collectPackets()
+	}
+
+	// 2. Process packets (customizable via ProcessHook)
 	if hook := n.getProcessHook(); hook != nil {
 		processed, err := hook(ctx, cycle, buffer)
 		if err != nil {
@@ -170,10 +201,15 @@ func (n *Node) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
 		}
 	}
 
+	// 3. Store processed buffer
 	n.storeProcessBuffer(buffer)
+
+	// 4. Tick all queues
 	if err := n.tickQueuesConcurrently(int(cycle)); err != nil {
 		return err
 	}
+
+	// 5. Invoke tick notification hook
 	n.invokeTickHook(cycle)
 	return nil
 }
@@ -186,6 +222,12 @@ func (n *Node) collectPackets() []packet.Packet {
 		}
 	}
 	return collected
+}
+
+func (n *Node) getPickHook() PickHook {
+	n.pickHookMu.RLock()
+	defer n.pickHookMu.RUnlock()
+	return n.pickHook
 }
 
 // defaultProcessHook is a no-op hook that returns the input buffer unchanged.
