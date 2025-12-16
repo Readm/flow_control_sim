@@ -266,25 +266,6 @@ func (q *Queue) updateReady(cycle int, ready bool) {
 	}
 }
 
-// setReadyUntil updates readyUntil using atomic CAS and wakes waiting goroutines.
-func (q *Queue) setReadyUntil(cycle int) {
-	for {
-		current := atomic.LoadInt64(&q.readyUntil)
-		if int64(cycle) <= current {
-			return
-		}
-		if atomic.CompareAndSwapInt64(&q.readyUntil, current, int64(cycle)) {
-			break
-		}
-	}
-
-	q.waiterMu.Lock()
-	if q.cond != nil {
-		q.cond.Broadcast()
-	}
-	q.waiterMu.Unlock()
-}
-
 // Tick processes a single cycle.
 func (qp *Queue) Tick(cycle int) error {
 	return qp.processor.Tick(cycle)
@@ -364,11 +345,9 @@ func (qpp *QueuePacketProcessor) ProcessPackets(
 		case pkt := <-receiveChan:
 			slot := qp.findFreeSlot()
 			if slot >= 0 {
-				qp.arrayMu.Lock()
 				qp.slots[slot] = PacketWithCycle(pkt)
 				qp.freeBitmap[slot] = false
 				qp.blockReasons[slot] = 0 // Initialize block_reason to 0
-				qp.arrayMu.Unlock()
 			}
 		default:
 			goto process
@@ -376,9 +355,6 @@ func (qpp *QueuePacketProcessor) ProcessPackets(
 	}
 
 process:
-	// Calculate freeCount before sending packets (for ReadyUntil calculation)
-	freeCountBefore := qp.countFreePackets()
-
 	// Pick packets from array and send to downstream (loop until no more packets or downstream not ready)
 	for {
 		pickedPackets := qp.Pick()
@@ -393,11 +369,9 @@ process:
 				// Not ready, put back to array
 				slot := qp.findFreeSlot()
 				if slot >= 0 {
-					qp.arrayMu.Lock()
 					qp.slots[slot] = pkt
 					qp.freeBitmap[slot] = false
 					qp.blockReasons[slot] = 0
-					qp.arrayMu.Unlock()
 				}
 				allSent = false
 			}
@@ -411,33 +385,34 @@ process:
 	// SetDone
 	setDone(cycle)
 
-	// Update upstream ready status based on free packet count (before sending)
+	// Update upstream ready status based on free slot count
 	freeCount := qp.countFreePackets()
-	ready := freeCount > 0 || freeCountBefore > 0
+	ready := freeCount >= qp.inBandwidth
 
 	// Calculate ReadyUntil: currentCycle + N / inBandwidth
 	// This tells upstream how many cycles ahead Queue can receive packets
-	// Use freeCountBefore to calculate ReadyUntil (before sending packets)
-	if freeCountBefore > 0 {
-		readyUntilCycle := cycle + freeCountBefore/qp.inBandwidth
-		// Update Queue's own readyUntil for fast path
-		// Use atomic store to update readyUntil directly
-		currentReadyUntil := atomic.LoadInt64(&qp.readyUntil)
-		if int64(readyUntilCycle) > currentReadyUntil {
-			atomic.StoreInt64(&qp.readyUntil, int64(readyUntilCycle))
+	if freeCount >= qp.inBandwidth {
+		readyUntilCycle := cycle + 1 + freeCount/qp.inBandwidth
+		// Update Queue's own readyUntil using atomic CAS (avoids lock)
+		for {
+			currentReadyUntil := atomic.LoadInt64(&qp.readyUntil)
+			if int64(readyUntilCycle) <= currentReadyUntil {
+				break
+			}
+			if atomic.CompareAndSwapInt64(&qp.readyUntil, currentReadyUntil, int64(readyUntilCycle)) {
+				break
+			}
 		}
 	}
 
-	// Notify upstream via the provided updateUpstreamReady function
+	// Notify upstream for the next cycle (readyMap is used by blocking wait)
 	updateUpstreamReady(cycle+1, ready)
 }
 
 // Pick returns at most outBandwidth packets that are free (block_reason is 0).
 // Returns packets sorted by cycle (oldest first).
+// Note: This function does NOT acquire locks. The caller must ensure proper synchronization.
 func (qp *Queue) Pick() []PacketWithCycle {
-	qp.arrayMu.Lock()
-	defer qp.arrayMu.Unlock()
-
 	type packetInfo struct {
 		packet PacketWithCycle
 		index  int
@@ -479,10 +454,8 @@ func (qp *Queue) Pick() []PacketWithCycle {
 
 // findFreeSlot finds the first free slot in the array.
 // Returns -1 if no free slot is available.
+// Note: This function does NOT acquire locks. The caller must ensure proper synchronization.
 func (qp *Queue) findFreeSlot() int {
-	qp.arrayMu.Lock()
-	defer qp.arrayMu.Unlock()
-
 	for i := 0; i < qp.size; i++ {
 		if qp.freeBitmap[i] {
 			return i
@@ -491,29 +464,16 @@ func (qp *Queue) findFreeSlot() int {
 	return -1
 }
 
-// countFreePackets counts the number of packets that are free (block_reason is 0).
+// countFreePackets counts the number of free slots available to receive new packets.
+// Note: This function does NOT acquire locks. The caller must ensure proper synchronization.
 func (qp *Queue) countFreePackets() int {
-	qp.arrayMu.Lock()
-	defer qp.arrayMu.Unlock()
-
 	count := 0
 	for i := 0; i < qp.size; i++ {
-		if !qp.freeBitmap[i] && qp.isFree(i) {
+		if qp.freeBitmap[i] {
 			count++
 		}
 	}
 	return count
-}
-
-// updateReadyUntil updates readyUntil based on free packet count and current cycle.
-func (qp *Queue) updateReadyUntil(cycle int) {
-	qp.waiterMu.Lock()
-	defer qp.waiterMu.Unlock()
-
-	currentReadyUntil := atomic.LoadInt64(&qp.readyUntil)
-	if int64(cycle) >= currentReadyUntil {
-		atomic.StoreInt64(&qp.readyUntil, int64(cycle))
-	}
 }
 
 // setBlockReason sets or clears a bit in the block_reason bitmap for a slot.

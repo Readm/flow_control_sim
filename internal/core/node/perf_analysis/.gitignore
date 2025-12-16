@@ -1,0 +1,7 @@
+# Performance analysis outputs
+output/
+*.prof
+*.txt
+*.png
+*.svg
+*.pdf

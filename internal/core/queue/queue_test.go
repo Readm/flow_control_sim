@@ -399,7 +399,13 @@ func TestCountFreePackets(t *testing.T) {
 
 	queue, _, _ := NewQueue(10, 1, 1, 1)
 
-	// Add packets with different block_reason
+	// Initially all slots are free
+	freeCount := queue.countFreePackets()
+	if freeCount != 10 {
+		t.Fatalf("expected 10 free slots initially, got %d", freeCount)
+	}
+
+	// Add 5 packets (occupying 5 slots)
 	queue.arrayMu.Lock()
 	for i := 0; i < 5; i++ {
 		// Find free slot without calling findFreeSlot (already holding lock)
@@ -416,16 +422,17 @@ func TestCountFreePackets(t *testing.T) {
 		queue.slots[slot] = PacketWithCycle{Cycle: i, Packet: packet.Packet{SourceID: 1}}
 		queue.freeBitmap[slot] = false
 		if i < 3 {
-			queue.blockReasons[slot] = 0 // Free
+			queue.blockReasons[slot] = 0 // Free (can be picked)
 		} else {
-			queue.blockReasons[slot] = 1 // Blocked
+			queue.blockReasons[slot] = 1 // Blocked (cannot be picked)
 		}
 	}
 	queue.arrayMu.Unlock()
 
-	freeCount := queue.countFreePackets()
-	if freeCount != 3 {
-		t.Fatalf("expected 3 free packets, got %d", freeCount)
+	// After adding 5 packets, should have 10 - 5 = 5 free slots
+	freeCount = queue.countFreePackets()
+	if freeCount != 5 {
+		t.Fatalf("expected 5 free slots after adding 5 packets, got %d", freeCount)
 	}
 }
 
