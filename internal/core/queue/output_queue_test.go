@@ -277,8 +277,9 @@ func TestPacketSentHook(t *testing.T) {
 	oq := NewOutputQueue(10, 2, 2)
 
 	// Create downstream
-	_, downstreamIn, _ := NewQueue(10, 2, 2, 1)
-	oq.QueueOutPort().Plug(downstreamIn)
+	// Create downstream
+	downstream := &testInPort{ready: true}
+	oq.QueueOutPort().Plug(downstream)
 
 	// Set up hook to count sent packets
 	sentCount := 0

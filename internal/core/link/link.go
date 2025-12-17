@@ -11,6 +11,15 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
+// PacketWithCycle is an alias for packet.PacketWithCycle
+type PacketWithCycle = packet.PacketWithCycle
+
+// readyItem represents a ready state for a specific cycle (internal)
+type readyItem struct {
+	cycle int
+	ready bool
+}
+
 // CreateFlowControlStrategy is a factory function that creates flow control strategies by type.
 //
 // Supported strategy types:
@@ -35,101 +44,6 @@ func CreateFlowControlStrategy(strategyType string, latency, bandwidth int) Flow
 	}
 }
 
-// LinkCycleProcessor is a custom cycle processor for Link that waits for Done(cycle-latency)
-// instead of Done(cycle-1). This allows Link to process packets earlier, taking advantage
-// of the latency buffer.
-type LinkCycleProcessor struct {
-	link      *Link                // Reference to Link
-	processor *LinkPacketProcessor // Packet processing logic
-	latency   int                  // Latency in cycles
-}
-
-// Tick implements the cycle processing workflow with custom wait logic.
-func (lcp *LinkCycleProcessor) Tick(cycle int) error {
-	if lcp.processor == nil {
-		panic("LinkCycleProcessor.processor is nil")
-	}
-
-	link := lcp.link
-
-	// ===== 1. Prepare updateUpstreamReady function =====
-	// This function notifies upstream of Link's ready status
-	updateUpstreamReady := func(cycle int, ready bool) {
-		link.updateReady(cycle, ready)
-	}
-
-	// ===== 2. Get packets from upstream =====
-	// Link at cycle N processes packets from upstream cycle (N - latency)
-	// This is because Link has internal buffering/delay
-	var packets []packet.Packet
-	if link.inPort.UpstreamOut != nil {
-		waitCycle := cycle - lcp.latency
-		if waitCycle < 0 {
-			waitCycle = 0
-		}
-		packets = link.inPort.UpstreamOut.GetPackets(waitCycle)
-	}
-
-	// Get downstream's Ready check function
-	checkReady := func(cycle int) bool {
-		if link.outPort.DownstreamIn != nil {
-			// Use type assertion to access internal ready method
-			type readyChecker interface{ ready(int) bool }
-			if rc, ok := link.outPort.DownstreamIn.(readyChecker); ok {
-				return rc.ready(cycle)
-			}
-			// Fallback: use IsReadyNonBlocking for ready check
-			ready, decided := link.outPort.DownstreamIn.IsReadyNonBlocking(cycle)
-			if decided {
-				return ready
-			}
-			return false
-		}
-		return true // If not plugged, default to ready
-	}
-
-	// Get send function - directly sends packet to downstream at targetCycle
-	sendPacket := func(targetCycle int, pkt packet.Packet) bool {
-		if link.outPort.DownstreamIn != nil {
-			pwc := ahead_port.PacketWithCycle{
-				Cycle:  targetCycle,
-				Packet: pkt,
-			}
-			return link.outPort.DownstreamIn.TrySendPacket(targetCycle, pwc)
-		}
-		return true // If not plugged, default to ready/sent
-	}
-
-	// Get setDone function (sets Link's own done state)
-	setDone := func(cycle int) {
-		link.setDone(cycle)
-	}
-
-	// Call PacketProcessor to process packets
-	lcp.processor.ProcessPackets(
-		packets,
-		cycle,
-		checkReady,
-		sendPacket,
-		setDone,
-		updateUpstreamReady,
-	)
-
-	// ===== 4. Ensure Link's Done state is correct =====
-	currentDone := link.getDone()
-	if currentDone < cycle {
-		link.setDone(cycle)
-	}
-
-	// ===== 5. Assert cycle+1 is decided (optional, for debugging) =====
-	_, decided := link.IsReadyNonBlocking(cycle + 1)
-	if !decided {
-		panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not decided in Link. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
-	}
-
-	return nil
-}
-
 // Link represents a directed edge in the topology.
 // Link receives packets from upstream and forwards them to downstream with latency and bandwidth constraints.
 // Link manages its own synchronization state and exposes InPort and OutPort interfaces.
@@ -145,9 +59,11 @@ type Link struct {
 	flowControl FlowControlStrategy
 
 	// Link's own synchronization state
-	done       int64        // Link's done cycle (atomic)
-	readyUntil int64        // Link's ready until cycle (atomic)
-	readyMap   map[int]bool // Specific cycle ready status
+	done       int64 // Link's done cycle (atomic)
+	readyUntil int64 // Link's ready until cycle (atomic)
+	// readyMap   map[int]bool // Deprecated: Replaced by readyQueue
+	readyQueue      []readyItem // Sorted queue of future ready states
+	lastAccessCycle int         // For debug: tracking monotonic access
 
 	// Synchronization primitives
 	doneMu   sync.Mutex
@@ -155,41 +71,21 @@ type Link struct {
 	waiterMu sync.Mutex
 	cond     *sync.Cond
 
-	processor    *LinkCycleProcessor
-	packetProc   *LinkPacketProcessor
 	latency      int
 	bandwidth    int
 	currentCycle int
-	tickHookMu   sync.RWMutex
 	tickHook     func(cycle int)
-}
 
-// LinkPacketProcessor handles packet processing for Link.
-// It handles latency (delaying packets) and bandwidth constraints.
-type LinkPacketProcessor struct {
-	link           *Link
 	pendingPackets []ahead_port.PacketWithCycle
-	// DEPRECATED: Slots moved to BufferedFlowControl (will be removed in cleanup)
-	// slots [][]ahead_port.PacketWithCycle
 }
 
-// NewLinkPacketProcessor creates a new LinkPacketProcessor.
-func NewLinkPacketProcessor(link *Link) *LinkPacketProcessor {
-	// Slots are now managed by flowControl strategy
-	return &LinkPacketProcessor{
-		link:           link,
-		pendingPackets: make([]ahead_port.PacketWithCycle, 0),
-	}
-}
-
-// ProcessPackets processes packets for Link: receive from upstream, apply latency, and send to downstream.
-// Phase 4: Refactored to use []packet.Packet instead of channel
-func (l *LinkPacketProcessor) ProcessPackets(
+// processPackets handles packet processing (receive, delay, forwarding) for the Link.
+// It decides which packets to send based on flow control strategy and downstream readiness.
+func (l *Link) processPackets(
 	packets []packet.Packet,
 	cycle int,
 	checkReady func(int) bool,
 	sendPacket func(targetCycle int, pkt packet.Packet) bool,
-	setDone func(int),
 	updateUpstreamReady func(cycle int, ready bool),
 ) {
 	// Link just transparently forwards the updateUpstreamReady call to the upstream ports.
@@ -204,14 +100,14 @@ func (l *LinkPacketProcessor) ProcessPackets(
 	newPendingPackets := make([]ahead_port.PacketWithCycle, 0)
 
 	// Check flow control type and use appropriate processing logic
-	if bufferedFC, ok := l.link.flowControl.(*BufferedFlowControl); ok {
+	if bufferedFC, ok := l.flowControl.(*BufferedFlowControl); ok {
 		// Use buffered flow control logic (with slots and backpressure)
-		l.processPacketsBuffered(bufferedFC, packets, cycle, checkReady, sendPacket, setDone, &newPendingPackets)
-	} else if _, ok := l.link.flowControl.(*BufferlessFlowControl); ok {
+		l.processPacketsBuffered(bufferedFC, packets, cycle, checkReady, sendPacket, &newPendingPackets)
+	} else if _, ok := l.flowControl.(*BufferlessFlowControl); ok {
 		// Use bufferless flow control logic (simple latency-based forwarding)
-		l.processPacketsBufferless(packets, cycle, sendPacket, setDone, &newPendingPackets)
+		l.processPacketsBufferless(packets, cycle, sendPacket, &newPendingPackets)
 	} else {
-		panic(fmt.Sprintf("Unsupported flow control type: %T", l.link.flowControl))
+		panic(fmt.Sprintf("Unsupported flow control type: %T", l.flowControl))
 	}
 
 	// Update pending packets
@@ -222,13 +118,12 @@ func (l *LinkPacketProcessor) ProcessPackets(
 }
 
 // processPacketsBuffered handles packet processing for BufferedFlowControl.
-func (l *LinkPacketProcessor) processPacketsBuffered(
+func (l *Link) processPacketsBuffered(
 	fc *BufferedFlowControl,
 	packets []packet.Packet,
 	cycle int,
 	checkReady func(int) bool,
 	sendPacket func(targetCycle int, pkt packet.Packet) bool,
-	setDone func(int),
 	newPendingPackets *[]ahead_port.PacketWithCycle,
 ) {
 
@@ -253,7 +148,7 @@ func (l *LinkPacketProcessor) processPacketsBuffered(
 	// 2. Receive and process new packets from upstream
 	// New design: send immediately with targetCycle, or buffer if downstream not ready
 	for _, pkt := range packets {
-		targetCycle := cycle + l.link.latency
+		targetCycle := cycle + l.latency
 		// Try to send immediately
 		if !sendPacket(targetCycle, pkt) {
 			// Downstream not ready, buffer for retry
@@ -290,17 +185,14 @@ func (l *LinkPacketProcessor) processPacketsBuffered(
 	} else {
 		fc.IncrementBackpressure()
 	}
-
-	setDone(cycle)
 }
 
 // processPacketsBufferless handles packet processing for BufferlessFlowControl.
 // Simpler logic: packets are delayed by latency and forwarded immediately when ready.
-func (l *LinkPacketProcessor) processPacketsBufferless(
+func (l *Link) processPacketsBufferless(
 	packets []packet.Packet,
 	cycle int,
 	sendPacket func(targetCycle int, pkt packet.Packet) bool,
-	setDone func(int),
 	newPendingPackets *[]ahead_port.PacketWithCycle,
 ) {
 	// 1. Process pending packets - send those whose time has come
@@ -308,7 +200,7 @@ func (l *LinkPacketProcessor) processPacketsBufferless(
 		if pkt.Cycle <= cycle {
 			// Time to send this packet at its target cycle
 			if !sendPacket(pkt.Cycle, pkt.Packet) {
-				panic(fmt.Sprintf("Bufferless Link %d->%d failed to send packet at cycle %d", l.link.SourceID(), l.link.TargetID(), cycle))
+				panic(fmt.Sprintf("Bufferless Link %d->%d failed to send packet at cycle %d", l.sourceID, l.targetID, cycle))
 			}
 		} else {
 			// Still waiting
@@ -318,14 +210,12 @@ func (l *LinkPacketProcessor) processPacketsBufferless(
 
 	// 2. Receive new packets and send immediately with targetCycle
 	for _, pkt := range packets {
-		targetCycle := cycle + l.link.latency
+		targetCycle := cycle + l.latency
 		// Send immediately with target cycle label
 		if !sendPacket(targetCycle, pkt) {
-			panic(fmt.Sprintf("Bufferless Link %d->%d failed to send packet at cycle %d (target %d)", l.link.SourceID(), l.link.TargetID(), cycle, targetCycle))
+			panic(fmt.Sprintf("Bufferless Link %d->%d failed to send packet at cycle %d (target %d)", l.sourceID, l.targetID, cycle, targetCycle))
 		}
 	}
-
-	setDone(cycle)
 }
 
 // NewLink creates a Link with InPort and OutPort interfaces.
@@ -366,15 +256,16 @@ func NewLinkWithFlowControl(sourceID, targetID, latency, bandwidth int, flowCont
 	}
 
 	link := &Link{
-		sourceID:     sourceID,
-		targetID:     targetID,
-		latency:      latency,
-		bandwidth:    bandwidth,
-		flowControl:  flowControl,
-		currentCycle: 0,
-		done:         -1,
-		readyUntil:   0,
-		readyMap:     make(map[int]bool),
+		sourceID:        sourceID,
+		targetID:        targetID,
+		latency:         latency,
+		bandwidth:       bandwidth,
+		flowControl:     flowControl,
+		currentCycle:    0,
+		done:            -1,
+		readyUntil:      0,
+		readyQueue:      make([]readyItem, 0),
+		lastAccessCycle: -1,
 	}
 
 	// Create ports
@@ -385,15 +276,7 @@ func NewLinkWithFlowControl(sourceID, targetID, latency, bandwidth int, flowCont
 	link.inPort = inPort
 	link.outPort = outPort
 
-	// Create packet processor
-	link.packetProc = NewLinkPacketProcessor(link)
-
-	// Create cycle processor
-	link.processor = &LinkCycleProcessor{
-		link:      link,
-		processor: link.packetProc,
-		latency:   latency,
-	}
+	// Initialize readyUntil for the first 'latency' cycles.
 
 	// Initialize readyUntil for the first 'latency' cycles.
 	// Rationale: Link is ready for the first 'latency' cycles because packets
@@ -428,8 +311,70 @@ func (l *Link) Bandwidth() int {
 
 // Tick processes a single cycle.
 func (l *Link) Tick(cycle int) error {
-	if err := l.processor.Tick(cycle); err != nil {
-		return err
+	// ===== 1. Prepare updateUpstreamReady function =====
+	// This function notifies upstream of Link's ready status
+	updateUpstreamReady := func(cycle int, ready bool) {
+		l.updateReady(cycle, ready)
+	}
+
+	// ===== 2. Get packets from upstream =====
+	// Link at cycle N processes packets from upstream cycle (N - latency)
+	var packets []packet.Packet
+	if l.inPort.UpstreamOut != nil {
+		waitCycle := cycle - l.latency
+		if waitCycle < 0 {
+			waitCycle = 0
+		}
+		packets = l.inPort.UpstreamOut.GetPackets(waitCycle)
+	}
+
+	// Get downstream's Ready check function
+	checkReady := func(cycle int) bool {
+		if l.outPort.DownstreamIn != nil {
+			type readyChecker interface{ ready(int) bool }
+			if rc, ok := l.outPort.DownstreamIn.(readyChecker); ok {
+				return rc.ready(cycle)
+			}
+			ready, decided := l.outPort.DownstreamIn.IsReadyNonBlocking(cycle)
+			if decided {
+				return ready
+			}
+			return false
+		}
+		return true
+	}
+
+	// Get send function
+	sendPacket := func(targetCycle int, pkt packet.Packet) bool {
+		if l.outPort.DownstreamIn != nil {
+			pwc := ahead_port.PacketWithCycle{
+				Cycle:  targetCycle,
+				Packet: pkt,
+			}
+			return l.outPort.DownstreamIn.TrySendPacket(targetCycle, pwc)
+		}
+		return true
+	}
+
+	// Call processPackets to process packets
+	l.processPackets(
+		packets,
+		cycle,
+		checkReady,
+		sendPacket,
+		updateUpstreamReady,
+	)
+
+	// ===== 4. Ensure Link's Done state is correct =====
+	currentDone := l.getDone()
+	if currentDone < cycle {
+		l.setDone(cycle)
+	}
+
+	// ===== 5. Assert cycle+1 is decided (optional) =====
+	_, decided := l.IsReadyNonBlocking(cycle + 1)
+	if !decided {
+		panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not decided in Link.", cycle, cycle+1))
 	}
 	l.invokeTickHook(cycle)
 	return nil
@@ -484,14 +429,10 @@ func (l *Link) Advance(cycles int) error {
 
 // SetTickHook registers a callback invoked after each successful Tick.
 func (l *Link) SetTickHook(hook func(cycle int)) {
-	l.tickHookMu.Lock()
-	defer l.tickHookMu.Unlock()
 	l.tickHook = hook
 }
 
 func (l *Link) invokeTickHook(cycle int) {
-	l.tickHookMu.RLock()
-	defer l.tickHookMu.RUnlock()
 	if l.tickHook != nil {
 		l.tickHook(cycle)
 	}
@@ -537,19 +478,67 @@ func (l *Link) waitDone(targetCycle int) {
 
 // ready checks if Link is ready to receive data for the given cycle (internal method).
 func (l *Link) ready(cycle int) bool {
+	// Debug check for monotonic access
+	if debug.Enabled() {
+		if cycle < l.lastAccessCycle {
+			panic(fmt.Sprintf("Link Ready access violation: cycle %d < last %d (must be monotonic)", cycle, l.lastAccessCycle))
+		}
+		l.lastAccessCycle = cycle
+	}
+
 	// Fast path: if cycle < readyUntil, return true immediately
 	readyUntil := atomic.LoadInt64(&l.readyUntil)
 	if int64(cycle) < readyUntil {
 		return true
 	}
 
-	// Check readyMap
+	// Check readyQueue
 	l.waiterMu.Lock()
-	ready, exists := l.readyMap[cycle]
+
+	// Re-check readyUntil
+	currentReadyUntil := atomic.LoadInt64(&l.readyUntil)
+	if int64(cycle) < currentReadyUntil {
+		l.waiterMu.Unlock()
+		return true
+	}
+
+	found := false
+	var result bool
+
+	// Prune and Search
+	pruneIdx := 0
+	for i, item := range l.readyQueue {
+		if item.cycle < cycle {
+			continue
+		}
+		if item.cycle == cycle {
+			result = item.ready
+			found = true
+			pruneIdx = i + 1
+			break
+		}
+		pruneIdx = i
+		break
+	}
+
+	if !found && len(l.readyQueue) > 0 {
+		if l.readyQueue[len(l.readyQueue)-1].cycle < cycle {
+			pruneIdx = len(l.readyQueue)
+		}
+	}
+
+	if pruneIdx > 0 {
+		if pruneIdx >= len(l.readyQueue) {
+			l.readyQueue = nil
+		} else {
+			l.readyQueue = l.readyQueue[pruneIdx:]
+		}
+	}
+
 	l.waiterMu.Unlock()
 
-	if exists {
-		return ready
+	if found {
+		return result
 	}
 
 	// Block and wait
@@ -558,17 +547,62 @@ func (l *Link) ready(cycle int) bool {
 
 // IsReadyNonBlocking checks ready state without blocking (internal method).
 func (l *Link) IsReadyNonBlocking(cycle int) (bool, bool) {
+	// Debug check for monotonic access
+	if debug.Enabled() {
+		if cycle < l.lastAccessCycle {
+			panic(fmt.Sprintf("Link Ready access violation (NB): cycle %d < last %d", cycle, l.lastAccessCycle))
+		}
+		l.lastAccessCycle = cycle
+	}
+
 	readyUntil := atomic.LoadInt64(&l.readyUntil)
 	if int64(cycle) < readyUntil {
 		return true, true
 	}
 
 	l.waiterMu.Lock()
-	ready, exists := l.readyMap[cycle]
-	l.waiterMu.Unlock()
+	defer l.waiterMu.Unlock()
 
-	if exists {
-		return ready, true
+	currentReadyUntil := atomic.LoadInt64(&l.readyUntil)
+	if int64(cycle) < currentReadyUntil {
+		return true, true
+	}
+
+	// Prune and Search
+	pruneIdx := 0
+	found := false
+	var result bool
+
+	for i, item := range l.readyQueue {
+		if item.cycle < cycle {
+			continue
+		}
+		if item.cycle == cycle {
+			result = item.ready
+			found = true
+			pruneIdx = i // Peek: Do not consume current item
+			break
+		}
+		pruneIdx = i // Stops at > cycle
+		break
+	}
+
+	if !found && len(l.readyQueue) > 0 {
+		if l.readyQueue[len(l.readyQueue)-1].cycle < cycle {
+			pruneIdx = len(l.readyQueue)
+		}
+	}
+
+	if pruneIdx > 0 {
+		if pruneIdx >= len(l.readyQueue) {
+			l.readyQueue = nil
+		} else {
+			l.readyQueue = l.readyQueue[pruneIdx:]
+		}
+	}
+
+	if found {
+		return result, true
 	}
 
 	return false, false
@@ -584,8 +618,34 @@ func (l *Link) waitForReady(cycle int) bool {
 	}
 
 	for {
-		if ready, exists := l.readyMap[cycle]; exists {
-			return ready
+		currentReadyUntil := atomic.LoadInt64(&l.readyUntil)
+		if int64(cycle) < currentReadyUntil {
+			return true
+		}
+
+		// Search queue
+		found := false
+		var result bool
+
+		for i, item := range l.readyQueue {
+			if item.cycle == cycle {
+				result = item.ready
+				found = true
+				// Consume
+				if i+1 >= len(l.readyQueue) {
+					l.readyQueue = nil
+				} else {
+					l.readyQueue = l.readyQueue[i+1:]
+				}
+				break
+			}
+			if item.cycle > cycle {
+				break
+			}
+		}
+
+		if found {
+			return result
 		}
 		l.cond.Wait()
 	}
@@ -596,7 +656,58 @@ func (l *Link) updateReady(cycle int, ready bool) {
 	l.waiterMu.Lock()
 	defer l.waiterMu.Unlock()
 
-	l.readyMap[cycle] = ready
+	currentReadyUntil := atomic.LoadInt64(&l.readyUntil)
+	if int64(cycle) < currentReadyUntil {
+		return
+	}
+
+	// Insert
+	inserted := false
+	if len(l.readyQueue) == 0 {
+		l.readyQueue = append(l.readyQueue, readyItem{cycle, ready})
+		inserted = true
+	} else {
+		if cycle > l.readyQueue[len(l.readyQueue)-1].cycle {
+			l.readyQueue = append(l.readyQueue, readyItem{cycle, ready})
+			inserted = true
+		} else {
+			for i, item := range l.readyQueue {
+				if item.cycle == cycle {
+					l.readyQueue[i].ready = ready
+					inserted = true
+					break
+				}
+				if item.cycle > cycle {
+					l.readyQueue = append(l.readyQueue[:i+1], l.readyQueue[i:]...)
+					l.readyQueue[i] = readyItem{cycle, ready}
+					inserted = true
+					break
+				}
+			}
+			if !inserted {
+				l.readyQueue = append(l.readyQueue, readyItem{cycle, ready})
+			}
+		}
+	}
+
+	// Compaction
+	for len(l.readyQueue) > 0 {
+		head := l.readyQueue[0]
+		if int64(head.cycle) == currentReadyUntil {
+			if head.ready {
+				currentReadyUntil++
+				l.readyQueue = l.readyQueue[1:]
+			} else {
+				break
+			}
+		} else if int64(head.cycle) < currentReadyUntil {
+			l.readyQueue = l.readyQueue[1:]
+		} else {
+			break
+		}
+	}
+
+	atomic.StoreInt64(&l.readyUntil, currentReadyUntil)
 
 	if l.cond != nil {
 		l.cond.Broadcast()
@@ -634,8 +745,8 @@ func (l *Link) GetVisualState() string {
 	if visualization.VisualizationMode == "ascii" {
 		// 显示链路上是否有packet在传输
 		var packetsInFlight int
-		if l.packetProc != nil {
-			packetsInFlight = len(l.packetProc.pendingPackets)
+		if len(l.pendingPackets) > 0 {
+			packetsInFlight = len(l.pendingPackets)
 		}
 		if packetsInFlight > 0 {
 			return fmt.Sprintf("-[%d]-", packetsInFlight)

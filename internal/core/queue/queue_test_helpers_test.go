@@ -13,25 +13,32 @@ import (
 // createTestPorts creates a pair of InPort and OutPort for testing.
 // Returns (inPort, outPort) that need to be plugged.
 func createTestPorts(buffer int) (ahead_port.InPort, ahead_port.OutPort) {
-	// Create a mock upstream OutPort (channel will be set by Plug)
-	upstreamOutPort := &mockOutPort{
-		done: -1,
-	}
+	// Create a mock upstream OutPort
+	upstreamOutPort := NewMockOutPort()
 
-	// Create a mock downstream InPort (channel will be set by Plug)
-	downstreamInPort := &mockInPort{
-		readyUntil: 1024,
-	}
+	// Create a mock downstream InPort
+	downstreamInPort := NewMockInPort()
 
 	return downstreamInPort, upstreamOutPort
 }
 
+// Ensure mock structs support Base implementation for Plug
+
 // mockOutPort implements OutPort for testing.
 type mockOutPort struct {
-	ch       chan ahead_port.PacketWithCycle
-	done     int64
-	doneMu   sync.Mutex
-	doneCond *sync.Cond
+	ahead_port.BaseOutPort // Embed BaseOutPort for Plug support
+	ch                     chan ahead_port.PacketWithCycle
+	done                   int64
+	doneMu                 sync.Mutex
+	doneCond               *sync.Cond
+}
+
+func NewMockOutPort() *mockOutPort {
+	p := &mockOutPort{done: -1}
+	p.doneCond = sync.NewCond(&p.doneMu)
+	// Initialize OutputChan for BaseOutPort usage if needed, but we intercept.
+	// Actually PlugWithSelf requires us to be the BaseOutPort.
+	return p
 }
 
 func (m *mockOutPort) GetPackets(cycle int) []packet.Packet {
@@ -79,24 +86,34 @@ func (m *mockOutPort) SetDone(cycle int) {
 }
 
 func (m *mockOutPort) Plug(in ahead_port.InPort) chan ahead_port.PacketWithCycle {
-	panic("mockOutPort.Plug not implemented")
+	return m.BaseOutPort.PlugWithSelf(m, in)
 }
 
-func (m *mockOutPort) SetOutChannel(ch chan ahead_port.PacketWithCycle, downstream ahead_port.InPort) {
-	m.ch = ch
-}
+// Remove SetOutChannel as Plug handles it
 
 // mockInPort implements InPort for testing.
 type mockInPort struct {
-	ch         chan ahead_port.PacketWithCycle
-	readyUntil int
+	ahead_port.BaseInPort // Embed
+	ch                    chan ahead_port.PacketWithCycle
+	readyUntil            int
+}
+
+func NewMockInPort() *mockInPort {
+	return &mockInPort{
+		readyUntil: 1024,
+	}
 }
 
 func (m *mockInPort) TrySendPacket(cycle int, pkt ahead_port.PacketWithCycle) bool {
 	if cycle >= m.readyUntil {
 		return false
 	}
-	m.ch <- pkt
+	// Use InputChan if set by Plug, otherwise legacy ch
+	if m.InputChan != nil {
+		m.InputChan <- pkt
+	} else if m.ch != nil {
+		m.ch <- pkt
+	}
 	return true
 }
 
@@ -105,11 +122,7 @@ func (m *mockInPort) IsReadyNonBlocking(cycle int) (bool, bool) {
 }
 
 func (m *mockInPort) Plug(out ahead_port.OutPort) chan ahead_port.PacketWithCycle {
-	panic("mockInPort.Plug not implemented")
-}
-
-func (m *mockInPort) SetInChannel(ch chan ahead_port.PacketWithCycle, upstream ahead_port.OutPort) {
-	m.ch = ch
+	return m.BaseInPort.PlugWithSelf(m, out)
 }
 
 func sendPacketToOutPort(t *testing.T, port ahead_port.OutPort, cycle int, pkt packet.Packet) {
@@ -120,10 +133,31 @@ func sendPacketToOutPort(t *testing.T, port ahead_port.OutPort, cycle int, pkt p
 	}
 	// For mockOutPort, send directly to its channel
 	if mock, ok := port.(*mockOutPort); ok {
-		select {
-		case mock.ch <- env:
-		case <-time.After(100 * time.Millisecond):
-			t.Fatalf("timeout sending packet %+v", pkt)
+		// Prefer OutputChan (set by Plug), fallback to ch
+		ch := mock.OutputChan
+		if ch == nil {
+			ch = mock.ch
+		} else {
+			// If Plugged, OutputChan is what downstream reads from.
+			// But here we are simulating the *upstream component* putting data *into* the OutPort?
+			// No, OutPort is an interface to downstream.
+			// Wait, sendPacketToOutPort simulates the Component (e.g. Queue) writing to its OWN OutPort.
+			// In BaseOutPort implementation, writing to OutputChan IS sending.
+			select {
+			case ch <- env:
+			case <-time.After(100 * time.Millisecond):
+				t.Fatalf("timeout sending packet %+v", pkt)
+			}
+			return
+		}
+
+		// Legacy ch path
+		if ch != nil {
+			select {
+			case ch <- env:
+			case <-time.After(100 * time.Millisecond):
+				t.Fatalf("timeout sending packet %+v", pkt)
+			}
 		}
 	} else {
 		t.Fatalf("sendPacketToOutPort requires mockOutPort")
