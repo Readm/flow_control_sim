@@ -77,6 +77,22 @@ type OutPortSetter interface {
 	SetOutChannel(ch chan PacketWithCycle, downstream InPort)
 }
 
+// InPortInternal is an internal interface for components to use their InPort.
+type InPortInternal interface {
+	InPort
+	// ReceiveFromUpstream retrieves packets from the upstream component.
+	// This separates internal usage from the public API.
+	ReceiveFromUpstream(cycle int) []packet.Packet
+}
+
+// OutPortInternal is an internal interface for components to use their OutPort.
+type OutPortInternal interface {
+	OutPort
+	// SendToDownstream sends a packet to the downstream component.
+	// This separates internal usage from the public API.
+	SendToDownstream(pkt PacketWithCycle) bool
+}
+
 // BaseInPort provides a default implementation of InPort with Plug support.
 // Components can embed this struct to inherit the default behavior.
 // The embedding struct must implement TrySendPacket() and IsReadyNonBlocking() methods.
@@ -128,16 +144,25 @@ func (p *BaseInPort) SetInChannel(ch chan PacketWithCycle, upstream OutPort) {
 	p.UpstreamOut = upstream
 }
 
+// ReceiveFromUpstream retrieves packets from the upstream component.
+// This is an internal helper method to avoid accessing UpstreamOut directly.
+func (p *BaseInPort) ReceiveFromUpstream(cycle int) []packet.Packet {
+	if p.UpstreamOut == nil {
+		return nil
+	}
+	return p.UpstreamOut.GetPackets(cycle)
+}
+
 // BaseOutPort provides a default implementation of OutPort with Plug support.
 // Components can embed this struct to inherit the default behavior.
 // It provides a complete GetPackets() implementation that handles channel reading,
 // cycle filtering, and packet caching.
 type BaseOutPort struct {
-	OutputChan     chan PacketWithCycle       // Channel for sending packets, set by Plug()
-	DownstreamIn   InPort                     // Reference to downstream InPort, set by Plug()
-	self           OutPort                    // Reference to the full OutPort implementation
-	pendingPackets map[int][]packet.Packet    // Cached packets for future cycles
-	beforeGetHook  func(cycle int)            // Optional hook called before reading packets (e.g., for waitDone)
+	OutputChan     chan PacketWithCycle    // Channel for sending packets, set by Plug()
+	DownstreamIn   InPort                  // Reference to downstream InPort, set by Plug()
+	self           OutPort                 // Reference to the full OutPort implementation
+	pendingPackets map[int][]packet.Packet // Cached packets for future cycles
+	beforeGetHook  func(cycle int)         // Optional hook called before reading packets (e.g., for waitDone)
 }
 
 // PlugWithSelf connects this OutPort to a downstream InPort.
@@ -233,4 +258,24 @@ func (p *BaseOutPort) GetPackets(cycle int) []packet.Packet {
 // This is useful for components that need to wait for upstream completion (e.g., Link's waitDone).
 func (p *BaseOutPort) SetBeforeGetHook(hook func(cycle int)) {
 	p.beforeGetHook = hook
+}
+
+// SendToDownstream sends a packet to the downstream component.
+// This is an internal helper method to avoid accessing DownstreamIn directly.
+func (p *BaseOutPort) SendToDownstream(pkt PacketWithCycle) bool {
+	if p.DownstreamIn == nil {
+		// If no downstream is connected, we might want to return true (drop) or false.
+		// Returning false usually implies "not ready", blocking the sender.
+		// But if unattached, blocking forever is bad.
+		// However, standard simulation behavior for detached port is often dropping or error.
+		// Given TrySendPacket returns bool for "accepted", and if no one is there to accept...
+		// Let's assume detached ports should not block unless we want to simulate backpressure from void?
+		// But typically components check if plugged.
+		// If we follow OutputQueue logic:
+		// if oq.outPort.BaseOutPort.DownstreamIn == nil { oq.setDone(cycle); return nil }
+		// So it handles nil explicitly.
+		// Here, if DownstreamIn is nil, we can't send.
+		return false
+	}
+	return p.DownstreamIn.TrySendPacket(pkt.Cycle, pkt)
 }

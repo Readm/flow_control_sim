@@ -309,7 +309,7 @@ func (l *Link) Tick(cycle int) error {
 		if waitCycle < 0 {
 			waitCycle = 0
 		}
-		packets = l.inPort.UpstreamOut.GetPackets(waitCycle)
+		packets = l.inPort.ReceiveFromUpstream(waitCycle)
 	}
 
 	// Get downstream's Ready check function
@@ -335,7 +335,7 @@ func (l *Link) Tick(cycle int) error {
 				Cycle:  targetCycle,
 				Packet: pkt,
 			}
-			return l.outPort.DownstreamIn.TrySendPacket(targetCycle, pwc)
+			return l.outPort.SendToDownstream(pwc)
 		}
 		return true
 	}

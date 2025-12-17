@@ -33,9 +33,9 @@ type InputQueue struct {
 	blockReasons []uint                   // Block reason bitmap for each slot
 
 	// Configuration parameters
-	capacity     int // Maximum number of packets that can be stored
-	inBandwidth  int // Maximum packets per cycle that can be received
-	bitmapWidth  int
+	capacity    int // Maximum number of packets that can be stored
+	inBandwidth int // Maximum packets per cycle that can be received
+	bitmapWidth int
 
 	// Synchronization for array operations
 	arrayMu sync.Mutex
@@ -139,8 +139,15 @@ func (iq *InputQueue) AsInPort() ahead_port.InPort {
 // Tick processes a cycle by receiving packets from upstream and storing them internally.
 func (iq *InputQueue) Tick(cycle int) error {
 	// Wait for upstream Done >= cycle-1
+	// This is still needed if UpstreamOut doesn't implement beforeGetHook,
+	// but ReceiveFromUpstream might handle some of it if configured.
+	// For safety, and to match previous behavior, we keep explicit wait if we can,
+	// but ReceiveFromUpstream abstracts UpstreamOut.
+	// Actually, best practice is to let ReceiveFromUpstream/GetPackets handle synchronization if possible,
+	// but currently OutputQueue doesn't set beforeGetHook.
+	// So we keep the manual wait logic for now, or move it?
+	// The original code did manual wait. Let's keep it to ensure correctness.
 	if iq.inPort.UpstreamOut != nil {
-		// Use type assertion to access internal WaitDone method
 		type waitDoneProvider interface{ WaitDone(int) }
 		if wdp, ok := iq.inPort.UpstreamOut.(waitDoneProvider); ok {
 			wdp.WaitDone(cycle - 1)
@@ -152,17 +159,11 @@ func (iq *InputQueue) Tick(cycle int) error {
 		iq.updateReady(c, ready)
 	}
 
-	// Get receive channel
-	var receiveChan <-chan ahead_port.PacketWithCycle
-	if iq.inPort.InputChan != nil {
-		receiveChan = iq.inPort.InputChan
-	}
-	if receiveChan == nil {
-		receiveChan = make(chan ahead_port.PacketWithCycle)
-	}
+	// Receive packets from upstream using internal API
+	packets := iq.inPort.ReceiveFromUpstream(cycle)
 
 	// Process packets
-	iq.processPackets(receiveChan, cycle, nil, updateUpstreamReady)
+	iq.processPackets(packets, cycle, nil, updateUpstreamReady)
 
 	// Ensure Done state is correct
 	currentDone := iq.componentSync.GetDone()
@@ -175,34 +176,47 @@ func (iq *InputQueue) Tick(cycle int) error {
 
 // processPackets processes packets for InputQueue.
 func (iq *InputQueue) processPackets(
-	receiveChan <-chan ahead_port.PacketWithCycle,
+	packets []packet.Packet,
 	cycle int,
 	setDone func(int), // Optional override, usually nil
 	updateUpstreamReady func(cycle int, ready bool),
 ) {
 	var received []packet.Packet
 
-	for {
-		select {
-		case pkt := <-receiveChan:
-			slot := iq.findFreeSlot()
-			if slot >= 0 {
-				iq.arrayMu.Lock()
-				iq.slots[slot] = packet.PacketWithCycle(pkt)
-				iq.freeBitmap[slot] = false
-				iq.blockReasons[slot] = 0
-				iq.arrayMu.Unlock()
-				received = append(received, pkt.Packet)
-				if iq.onPacketReceived != nil {
-					iq.onPacketReceived(pkt.Packet)
-				}
+	for _, pkt := range packets {
+		slot := iq.findFreeSlot()
+		if slot >= 0 {
+			iq.arrayMu.Lock()
+			iq.slots[slot] = packet.PacketWithCycle{
+				Cycle: cycle, // Ingress packet assumes current cycle or we preserve its cycle?
+				// GetPackets returns []packet.Packet, loosing Cycle info (implied 'cycle').
+				// Wait, ReceiveFromUpstream returns []packet.Packet.
+				// PacketWithCycle requires a cycle.
+				// InputQueue usually stores them with current cycle or reception cycle.
+				// Original code: iq.slots[slot] = packet.PacketWithCycle(pkt) where pkt was PacketWithCycle from channel.
+				// The channel provided PacketWithCycle.
+				// GetPackets returns just Packet.
+				// So we should construct PacketWithCycle using current cycle?
+				// Or should we trust the cycle is 'cycle'?
+				// Yes, GetPackets(cycle) returns packets FOR that cycle.
+				Packet: pkt,
 			}
-		default:
-			goto done
+			iq.freeBitmap[slot] = false
+			iq.blockReasons[slot] = 0
+			iq.arrayMu.Unlock()
+			received = append(received, pkt)
+			if iq.onPacketReceived != nil {
+				iq.onPacketReceived(pkt)
+			}
+		} else {
+			// Queue full - this shouldn't happen if Ready protocol is obeyed,
+			// but if it does, we must drop or panic.
+			// Dropping is safer for sim.
+			debug.Logf("InputQueue: DROPPED packet (queue full): Src=%d Dst=%d at cycle %d",
+				pkt.SourceID, pkt.TargetID, cycle)
 		}
 	}
 
-done:
 	iq.lastCyclePackets = received
 
 	if setDone != nil {

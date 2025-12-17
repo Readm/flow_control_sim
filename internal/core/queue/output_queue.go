@@ -120,7 +120,7 @@ func (oq *OutputQueue) Tick(cycle int) error {
 		}
 
 		// Try to send packet (blocks on ready check, returns false if not ready)
-		if oq.outPort.BaseOutPort.DownstreamIn.TrySendPacket(pkt.Cycle, pkt) {
+		if oq.outPort.SendToDownstream(pkt) {
 			sent++
 			if oq.onPacketSent != nil {
 				oq.onPacketSent(pkt.Packet)

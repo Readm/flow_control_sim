@@ -47,11 +47,44 @@ func (m *mockOutPort) GetPackets(cycle int) []packet.Packet {
 
 	// Simple mock: just drain all packets from channel
 	// Real implementation would filter by cycle
+	// Read from the correct channel
+	var receiveChan <-chan ahead_port.PacketWithCycle
+	if m.OutputChan != nil {
+		receiveChan = m.OutputChan
+	} else {
+		receiveChan = m.ch
+	}
+
+	if receiveChan == nil {
+		return nil
+	}
+
 	var packets []packet.Packet
 	for {
 		select {
-		case pwc := <-m.ch:
-			packets = append(packets, pwc.Packet)
+		case pwc := <-receiveChan:
+			// Filter by cycle if needed, but mock usually drains everything for simplicity
+			// In strict simulation, we should only return packets for 'cycle'.
+			// But existing tests likely assume "whatever I put in, I get out now".
+			// Given BaseOutPort logic filters, should we?
+			// TestInputQueueReceive puts packet at cycle 0. Tick calls GetPackets(0).
+			// If we implement strict filtering and packet has cycle 0, it works.
+			if pwc.Cycle == cycle {
+				packets = append(packets, pwc.Packet)
+			} else {
+				// If cycle mismatch, strict mock should maybe error or cache.
+				// But let's look at sendPacketToOutPort:
+				// It sends with 'cycle'.
+				// So filtering is correct.
+				// BUT: BaseOutPort logic caches future packets.
+				// This mock drops them unless we implement caching?
+				// Existing mock code didn't filter at all:
+				// packets = append(packets, pwc.Packet)
+				// Let's stick to existing behavior (no filtering) to minimize breakage,
+				// unless tests rely on filtering.
+				// Reverting to "drain everything" for now.
+				packets = append(packets, pwc.Packet)
+			}
 		default:
 			return packets
 		}
