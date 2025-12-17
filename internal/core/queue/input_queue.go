@@ -80,14 +80,18 @@ func (p *inputQueueInPort) Plug(out ahead_port.OutPort) chan ahead_port.PacketWi
 }
 
 // NewInputQueue creates a new InputQueue with the specified capacity and bandwidth parameters.
-func NewInputQueue(capacity int, inBandwidth int, outBandwidth int) *InputQueue {
+// 改为指针 *bool，仅允许传入nil或一个bool指针，实现“单一可选参数”语义
+// Global variable to control allowAheadReady for all InputQueue instances.
+// It must be set at process-init. Default is true.
+var AllowAheadReadyGlobal = true
+
+func NewInputQueue(capacity int, inBandwidth int) *InputQueue {
 	if capacity <= 0 {
-		capacity = 8
+		panic("capacity must be positive")
 	}
 	if inBandwidth <= 0 {
 		panic("inBandwidth must be positive")
 	}
-	// outBandwidth is ignored as InputQueue doesn't send downstream automatically
 
 	iq := &InputQueue{
 		componentSync:    ahead_port.NewComponentSync(),
@@ -108,31 +112,19 @@ func NewInputQueue(capacity int, inBandwidth int, outBandwidth int) *InputQueue 
 	// Create ports
 	iq.inPort = &inputQueueInPort{inputQueue: iq}
 	// For queueOutPort, we can leave it nil or create a dummy if strictly required by interface users.
-	// Previous InputQueue returned queue.outPort.
-	// If we truly make InputQueue independent, we might drop queueOutPort if it's not used.
-	// Let's assume for now we don't need a functional OutPort for InputQueue since it consumes packets.
 
 	// Initialize ready state for initial cycles
-	iq.componentSync.InitReady(capacity)
+	limit := capacity / inBandwidth
+	if limit < 1 || !AllowAheadReadyGlobal {
+		limit = 1
+	}
+	iq.componentSync.InitReady(limit)
 
 	return iq
 }
 
 // QueueInPort returns the InPort for Network connections.
 func (iq *InputQueue) QueueInPort() ahead_port.InPort {
-	return iq.inPort
-}
-
-// QueueOutPort returns the OutPort. Currently nil as InputQueue is a sink in this context.
-func (iq *InputQueue) QueueOutPort() ahead_port.OutPort {
-	// Previously this returned internal queue's outPort.
-	// Since InputQueue logic never sends to it, it might be unused?
-	// If existing code calls this, we might need a stub.
-	return iq.queueOutPort
-}
-
-// AsInPort is a convenience method that returns QueueInPort.
-func (iq *InputQueue) AsInPort() ahead_port.InPort {
 	return iq.inPort
 }
 

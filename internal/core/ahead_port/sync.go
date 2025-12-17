@@ -355,7 +355,5 @@ func (cs *ComponentSync) SetReadyUntil(cycle int) {
 // InitReady initializes ready state for the first 'limit' cycles.
 // This is useful for components that are ready during initialization.
 func (cs *ComponentSync) InitReady(limit int) {
-	for cycle := 0; cycle <= limit; cycle++ {
-		cs.UpdateReady(cycle, true)
-	}
+	cs.SetReadyUntil(limit)
 }

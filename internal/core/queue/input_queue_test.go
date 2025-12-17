@@ -12,7 +12,7 @@ import (
 func TestNewInputQueue(t *testing.T) {
 	t.Parallel()
 
-	iq := NewInputQueue(10, 2, 3)
+	iq := NewInputQueue(10, 2)
 	if iq == nil {
 		t.Fatal("NewInputQueue returned nil")
 	}
@@ -33,7 +33,7 @@ func TestInputQueueReceive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	iq := NewInputQueue(10, 2, 2)
+	iq := NewInputQueue(10, 2)
 
 	// Create upstream mock
 	_, upstreamOutPort := createTestPorts(8)
@@ -82,7 +82,7 @@ func TestInputQueueReceive(t *testing.T) {
 func TestInputQueuePick(t *testing.T) {
 	t.Parallel()
 
-	iq := NewInputQueue(10, 2, 2)
+	iq := NewInputQueue(10, 2)
 
 	// Manually inject packet into storage for testing Pick logic directly
 	// Note: In real usage, Tick populates this.

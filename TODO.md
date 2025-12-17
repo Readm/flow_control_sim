@@ -1,6 +1,7 @@
 # Network Core TODO List
 排查,InQueue目前没有提前Ready
 Link还是不对：Process封装干掉，依旧使用wg update ready，很慢
+全局的配置方案
 ## P0 - 立即需要
 
 - [ ] **统计和监控API**
