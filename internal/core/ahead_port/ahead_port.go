@@ -9,27 +9,22 @@ import (
 type PacketWithCycle = packet.PacketWithCycle
 
 // InPort represents an input port interface for receiving data from upstream components.
-// It provides write access to a channel and methods to check readiness for receiving data.
+// It provides methods to send packets and check readiness for receiving data.
 // This interface is used by upstream components to send packets to downstream components.
 type InPort interface {
-	// SendChan returns a write-only channel for upstream to push packets.
-	// Upstream sends (Packet, Cycle) pairs through this channel.
-	// Panics if called before Plug().
-	SendChan() chan<- PacketWithCycle
+	// TrySendPacket attempts to send a packet for the given cycle.
+	// Returns true if the packet was accepted (ready and sent), false otherwise.
+	// This method blocks waiting for the ready decision, then sends the packet if ready.
+	// If the channel buffer is full, it blocks until space is available.
+	TrySendPacket(cycle int, pkt PacketWithCycle) bool
 
-	// Ready checks if the port is ready to receive data for the given cycle.
-	// Called by upstream before sending a packet for a specific cycle.
-	// Returns true if the port is ready, false otherwise.
-	// This method may block waiting for the port to become ready.
-	Ready(cycle int) bool
-
-	// ReadyNonBlocking checks if the port is ready without blocking.
+	// IsReadyNonBlocking checks if the port is ready without blocking.
 	// Returns (ready, decided):
 	//   - ready: true if the port is ready to receive data, false otherwise
 	//   - decided: true if the ready state has been determined (won't block),
 	//              false if the state is undecided and Ready() would block
 	// This method never blocks and is useful for assertions and checking decision status.
-	ReadyNonBlocking(cycle int) (ready bool, decided bool)
+	IsReadyNonBlocking(cycle int) (ready bool, decided bool)
 
 	// Plug connects this InPort to an upstream OutPort.
 	// Creates a new channel and configures both ports to use it.
@@ -40,24 +35,25 @@ type InPort interface {
 }
 
 // OutPort represents an output port interface for sending data to downstream components.
-// It provides read access to a channel and methods to wait for upstream completion.
+// It provides methods to retrieve packets for a specific cycle.
 // This interface is used by downstream components to receive packets from upstream components.
 type OutPort interface {
-	// ReceiveChan returns a read-only channel for downstream to receive packets.
-	// Downstream reads (Packet, Cycle) pairs from this channel.
-	// Panics if called before Plug().
-	ReceiveChan() <-chan PacketWithCycle
-
-	// WaitDone blocks the calling goroutine until upstream's Done >= targetCycle.
-	// Called by downstream at the start of cycle N to ensure upstream has completed cycle N-1.
-	// This uses condition variable to avoid busy waiting - the goroutine will block until
-	// upstream calls SetDone with a value >= targetCycle.
-	// Returns immediately if Done >= targetCycle (no blocking needed).
-	WaitDone(targetCycle int)
-
-	// GetDone returns the current Done value set by upstream.
-	// Can be called by downstream to check upstream progress without blocking.
-	GetDone() int
+	// GetPackets retrieves all packets for the specified cycle from upstream.
+	// This method must be called sequentially for each cycle (0, 1, 2, ...).
+	//
+	// Behavior:
+	// 1. Blocks until upstream completes the necessary cycle (based on component latency)
+	// 2. Returns all packets that belong to the specified cycle
+	// 3. Filters out packets from other cycles and caches them for future calls
+	//
+	// Parameters:
+	//   cycle: The cycle number to retrieve packets for
+	//
+	// Returns:
+	//   []packet.Packet - All packets for this cycle (may be empty)
+	//
+	// Note: Each cycle must be requested exactly once, in sequential order.
+	GetPackets(cycle int) []packet.Packet
 
 	// Plug connects this OutPort to a downstream InPort.
 	// Creates a new channel and configures both ports to use it.
@@ -83,20 +79,11 @@ type OutPortSetter interface {
 
 // BaseInPort provides a default implementation of InPort with Plug support.
 // Components can embed this struct to inherit the default behavior.
-// The embedding struct must implement the Ready() and ReadyNonBlocking() methods.
+// The embedding struct must implement TrySendPacket() and IsReadyNonBlocking() methods.
 type BaseInPort struct {
 	InputChan   chan PacketWithCycle // Channel for receiving packets, set by Plug()
 	UpstreamOut OutPort              // Reference to upstream OutPort, set by Plug()
 	self        InPort               // Reference to the full InPort implementation
-}
-
-// SendChan returns the write-only view of the input channel.
-// Panics if called before Plug().
-func (p *BaseInPort) SendChan() chan<- PacketWithCycle {
-	if p.InputChan == nil {
-		panic("BaseInPort.SendChan() called before Plug()")
-	}
-	return p.InputChan
 }
 
 // Plug connects this InPort to an upstream OutPort.
@@ -143,20 +130,11 @@ func (p *BaseInPort) SetInChannel(ch chan PacketWithCycle, upstream OutPort) {
 
 // BaseOutPort provides a default implementation of OutPort with Plug support.
 // Components can embed this struct to inherit the default behavior.
-// The embedding struct must implement the WaitDone() and GetDone() methods.
+// The embedding struct must implement the GetPackets() method.
 type BaseOutPort struct {
 	OutputChan   chan PacketWithCycle // Channel for sending packets, set by Plug()
 	DownstreamIn InPort               // Reference to downstream InPort, set by Plug()
 	self         OutPort              // Reference to the full OutPort implementation
-}
-
-// ReceiveChan returns the read-only view of the output channel.
-// Panics if called before Plug().
-func (p *BaseOutPort) ReceiveChan() <-chan PacketWithCycle {
-	if p.OutputChan == nil {
-		panic("BaseOutPort.ReceiveChan() called before Plug()")
-	}
-	return p.OutputChan
 }
 
 // PlugWithSelf connects this OutPort to a downstream InPort.

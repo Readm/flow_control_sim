@@ -191,11 +191,18 @@ type testInPort struct {
 	packets []packet.PacketWithCycle
 }
 
-func (t *testInPort) Ready(cycle int) bool {
-	return t.ready
+func (t *testInPort) TrySendPacket(cycle int, pkt ahead_port.PacketWithCycle) bool {
+	if !t.ready {
+		return false
+	}
+	if t.InputChan == nil {
+		panic("testInPort.TrySendPacket() called before Plug()")
+	}
+	t.InputChan <- pkt
+	return true
 }
 
-func (t *testInPort) ReadyNonBlocking(cycle int) (bool, bool) {
+func (t *testInPort) IsReadyNonBlocking(cycle int) (bool, bool) {
 	return t.ready, true
 }
 

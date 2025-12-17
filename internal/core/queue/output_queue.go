@@ -43,7 +43,46 @@ type OutputQueue struct {
 // outputQueueOutPort implements OutPort interface for OutputQueue.
 type outputQueueOutPort struct {
 	ahead_port.BaseOutPort
-	outputQueue *OutputQueue
+	outputQueue    *OutputQueue
+	pendingPackets map[int][]packet.Packet // Cached packets for future cycles
+}
+
+// GetPackets retrieves all packets for the specified cycle.
+func (p *outputQueueOutPort) GetPackets(cycle int) []packet.Packet {
+	// OutputQueue doesn't have upstream, no waiting needed
+
+	// Check if we have cached packets for this cycle
+	if p.pendingPackets == nil {
+		p.pendingPackets = make(map[int][]packet.Packet)
+	}
+
+	if cached, ok := p.pendingPackets[cycle]; ok {
+		delete(p.pendingPackets, cycle)
+		return cached
+	}
+
+	// Read from channel and filter by cycle
+	var result []packet.Packet
+	if p.OutputChan == nil {
+		return result
+	}
+
+	for {
+		select {
+		case pwc := <-p.OutputChan:
+			if pwc.Cycle == cycle {
+				result = append(result, pwc.Packet)
+			} else if pwc.Cycle > cycle {
+				// Future packet, cache it
+				p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
+			} else {
+				// Past packet - skip it (already processed or stale)
+				continue
+			}
+		default:
+			return result
+		}
+	}
 }
 
 // WaitDone waits for OutputQueue to complete the target cycle.
@@ -103,7 +142,7 @@ func (oq *OutputQueue) QueueOutPort() ahead_port.OutPort {
 // Tick sends up to outBandwidth packets to downstream.
 func (oq *OutputQueue) Tick(cycle int) error {
 	// If no downstream connected, just mark done
-	if oq.outPort.BaseOutPort.DownstreamIn == nil || oq.outPort.BaseOutPort.OutputChan == nil {
+	if oq.outPort.BaseOutPort.DownstreamIn == nil {
 		oq.setDone(cycle)
 		return nil
 	}
@@ -119,22 +158,14 @@ func (oq *OutputQueue) Tick(cycle int) error {
 			continue
 		}
 
-		// Check downstream ready
-		if !oq.outPort.BaseOutPort.DownstreamIn.Ready(pkt.Cycle) {
-			// Not ready, keep packet for next cycle
-			newSlots = append(newSlots, pkt)
-			continue
-		}
-
-		// Try to send (use BaseOutPort.OutputChan which was set by Plug)
-		select {
-		case oq.outPort.BaseOutPort.OutputChan <- pkt:
+		// Try to send packet (blocks on ready check, returns false if not ready)
+		if oq.outPort.BaseOutPort.DownstreamIn.TrySendPacket(pkt.Cycle, pkt) {
 			sent++
 			if oq.onPacketSent != nil {
 				oq.onPacketSent(pkt.Packet)
 			}
-		default:
-			// Channel full, keep packet
+		} else {
+			// Not ready, keep packet for next cycle
 			newSlots = append(newSlots, pkt)
 		}
 	}

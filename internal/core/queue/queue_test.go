@@ -64,7 +64,7 @@ func TestNewQueueDefaults(t *testing.T) {
 
 // TestReady removed - tests private methods, access via ports
 
-// TestReadyNonBlocking removed - tests private methods, access via ports
+// TestIsReadyNonBlocking removed - tests private methods, access via ports
 
 // TestUpdateReady removed - tests private methods, internal implementation detail
 

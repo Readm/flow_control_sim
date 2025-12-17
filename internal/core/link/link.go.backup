@@ -86,7 +86,7 @@ func (lcp *LinkCycleProcessor) Tick(cycle int) error {
 	}
 
 	// ===== 5. Assert cycle+1 is decided (optional, for debugging) =====
-	_, decided := link.readyNonBlocking(cycle + 1)
+	_, decided := link.IsReadyNonBlocking(cycle + 1)
 	if !decided {
 		panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not decided in Link. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 	}
@@ -441,8 +441,8 @@ func (l *Link) ready(cycle int) bool {
 	return l.waitForReady(cycle)
 }
 
-// readyNonBlocking checks ready state without blocking (internal method).
-func (l *Link) readyNonBlocking(cycle int) (bool, bool) {
+// IsReadyNonBlocking checks ready state without blocking (internal method).
+func (l *Link) IsReadyNonBlocking(cycle int) (bool, bool) {
 	readyUntil := atomic.LoadInt64(&l.readyUntil)
 	if int64(cycle) < readyUntil {
 		return true, true
@@ -523,9 +523,9 @@ func (p *linkInPort) Ready(cycle int) bool {
 	return p.link.ready(cycle)
 }
 
-// ReadyNonBlocking checks Link's ready state without blocking.
-func (p *linkInPort) ReadyNonBlocking(cycle int) (bool, bool) {
-	return p.link.readyNonBlocking(cycle)
+// IsReadyNonBlocking checks Link's ready state without blocking.
+func (p *linkInPort) IsReadyNonBlocking(cycle int) (bool, bool) {
+	return p.link.IsReadyNonBlocking(cycle)
 }
 
 // Plug overrides BaseInPort.Plug to pass self.

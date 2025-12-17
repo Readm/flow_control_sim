@@ -59,14 +59,34 @@ type queueInPort struct {
 	queue *Queue
 }
 
-// Ready checks if downstream is ready to receive data for the given cycle.
-func (p *queueInPort) Ready(cycle int) bool {
+// TrySendPacket attempts to send a packet to Queue for the given cycle.
+func (p *queueInPort) TrySendPacket(cycle int, pkt ahead_port.PacketWithCycle) bool {
+	if p.InputChan == nil {
+		panic("queueInPort.TrySendPacket() called before Plug()")
+	}
+	if !p.queue.ready(cycle) {
+		return false
+	}
+	p.InputChan <- pkt
+	return true
+}
+
+// ready is an internal helper (not part of InPort interface).
+func (p *queueInPort) ready(cycle int) bool {
 	return p.queue.ready(cycle)
 }
 
-// ReadyNonBlocking checks if downstream is ready without blocking.
-func (p *queueInPort) ReadyNonBlocking(cycle int) (ready bool, decided bool) {
-	return p.queue.readyNonBlocking(cycle)
+// sendChan is an internal helper (not part of InPort interface).
+func (p *queueInPort) sendChan() chan<- ahead_port.PacketWithCycle {
+	if p.InputChan == nil {
+		panic("queueInPort.sendChan() called before Plug()")
+	}
+	return p.InputChan
+}
+
+// IsReadyNonBlocking checks if downstream is ready without blocking.
+func (p *queueInPort) IsReadyNonBlocking(cycle int) (ready bool, decided bool) {
+	return p.queue.IsReadyNonBlocking(cycle)
 }
 
 // Plug connects this InPort to an upstream OutPort.
@@ -77,17 +97,59 @@ func (p *queueInPort) Plug(out ahead_port.OutPort) chan ahead_port.PacketWithCyc
 // queueOutPort implements OutPort for Queue's output side.
 type queueOutPort struct {
 	ahead_port.BaseOutPort
-	queue *Queue
+	queue          *Queue
+	pendingPackets map[int][]packet.Packet // Cached packets for future cycles
+}
+
+// GetPackets retrieves all packets for the specified cycle.
+func (p *queueOutPort) GetPackets(cycle int) []packet.Packet {
+	// 1. Wait for upstream to complete the previous cycle
+	if p.queue.inPort.UpstreamOut != nil {
+		waitCycle := cycle - 1 // Queue has no latency, wait for cycle-1
+		// Use type assertion to access internal WaitDone method
+		type waitDoneProvider interface{ WaitDone(int) }
+		if wdp, ok := p.queue.inPort.UpstreamOut.(waitDoneProvider); ok {
+			wdp.WaitDone(waitCycle)
+		}
+	}
+
+	// 2. Check if we have cached packets for this cycle
+	if p.pendingPackets == nil {
+		p.pendingPackets = make(map[int][]packet.Packet)
+	}
+
+	if cached, ok := p.pendingPackets[cycle]; ok {
+		delete(p.pendingPackets, cycle)
+		return cached
+	}
+
+	// 3. Read from channel and filter by cycle
+	var result []packet.Packet
+	if p.OutputChan == nil {
+		return result
+	}
+
+	for {
+		select {
+		case pwc := <-p.OutputChan:
+			if pwc.Cycle == cycle {
+				result = append(result, pwc.Packet)
+			} else if pwc.Cycle > cycle {
+				// Future packet, cache it
+				p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
+			} else {
+				// Past packet - skip it (already processed or stale)
+				continue
+			}
+		default:
+			return result
+		}
+	}
 }
 
 // WaitDone blocks until upstream has completed the target cycle.
 func (p *queueOutPort) WaitDone(targetCycle int) {
 	p.queue.waitDone(targetCycle)
-}
-
-// GetDone returns the current done value.
-func (p *queueOutPort) GetDone() int {
-	return p.queue.getDone()
 }
 
 // Plug connects this OutPort to a downstream InPort.
@@ -188,10 +250,17 @@ func (q *Queue) waitDone(targetCycle int) {
 	if q.inPort.UpstreamOut == nil {
 		return
 	}
-	if q.inPort.UpstreamOut.GetDone() >= targetCycle {
-		return
+	// Use type assertion to access internal WaitDone method
+	type waitDoneProvider interface {
+		WaitDone(int)
+		GetDone() int
 	}
-	q.inPort.UpstreamOut.WaitDone(targetCycle)
+	if wdp, ok := q.inPort.UpstreamOut.(waitDoneProvider); ok {
+		if wdp.GetDone() >= targetCycle {
+			return
+		}
+		wdp.WaitDone(targetCycle)
+	}
 }
 
 // ready checks if downstream is ready to process the given cycle.
@@ -212,8 +281,8 @@ func (q *Queue) ready(cycle int) bool {
 	return q.waitForReady(cycle)
 }
 
-// readyNonBlocking checks if downstream is ready without blocking.
-func (q *Queue) readyNonBlocking(cycle int) (ready bool, decided bool) {
+// IsReadyNonBlocking checks if downstream is ready without blocking.
+func (q *Queue) IsReadyNonBlocking(cycle int) (ready bool, decided bool) {
 	readyUntil := atomic.LoadInt64(&q.readyUntil)
 	if int64(cycle) < readyUntil {
 		return true, true
@@ -287,20 +356,47 @@ func (qcp *QueueCycleProcessor) Tick(cycle int) error {
 		queue.updateReady(c, ready)
 	}
 
+	// Get packets from upstream
+	var packets []packet.Packet
+	if queue.inPort.UpstreamOut != nil {
+		packets = queue.inPort.UpstreamOut.GetPackets(cycle)
+	}
+
 	// Prepare checkReady function
 	checkReady := func(c int) bool {
 		if queue.outPort.DownstreamIn == nil {
 			return true
 		}
-		return queue.outPort.DownstreamIn.Ready(c)
+		// Use type assertion to access internal ready method
+		type readyChecker interface{ ready(int) bool }
+		if rc, ok := queue.outPort.DownstreamIn.(readyChecker); ok {
+			return rc.ready(c)
+		}
+		// Fallback
+		ready, decided := queue.outPort.DownstreamIn.IsReadyNonBlocking(c)
+		if decided {
+			return ready
+		}
+		return false
+	}
+
+	// Prepare send function - directly sends to downstream at targetCycle
+	sendPacket := func(targetCycle int, pkt packet.Packet) {
+		if queue.outPort.DownstreamIn != nil {
+			pwc := ahead_port.PacketWithCycle{
+				Cycle:  targetCycle,
+				Packet: pkt,
+			}
+			queue.outPort.DownstreamIn.TrySendPacket(targetCycle, pwc)
+		}
 	}
 
 	// Process all packets
 	qcp.processor.ProcessPackets(
-		queue.inPort.UpstreamOut.ReceiveChan(),
+		packets,
 		cycle,
 		checkReady,
-		qcp.sendPacket,
+		sendPacket,
 		queue.setDone,
 		updateUpstreamReady,
 	)
@@ -312,7 +408,7 @@ func (qcp *QueueCycleProcessor) Tick(cycle int) error {
 	}
 
 	// Assert that cycle+1 has been configured
-	_, decided := queue.readyNonBlocking(cycle + 1)
+	_, decided := queue.IsReadyNonBlocking(cycle + 1)
 	if !decided {
 		panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not configured. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 	}
@@ -320,41 +416,31 @@ func (qcp *QueueCycleProcessor) Tick(cycle int) error {
 	return nil
 }
 
-// sendPacket sends a packet to downstream.
-func (qcp *QueueCycleProcessor) sendPacket(pkt ahead_port.PacketWithCycle) {
-	queue := qcp.queue
-	if queue.outPort.DownstreamIn != nil {
-		queue.outPort.DownstreamIn.SendChan() <- pkt
-	}
-}
 
 // ProcessPackets implements PacketProcessor interface for Queue.
 func (qpp *QueuePacketProcessor) ProcessPackets(
-	receiveChan <-chan ahead_port.PacketWithCycle,
+	packets []packet.Packet,
 	cycle int,
 	checkReady func(int) bool,
-	sendPacket func(ahead_port.PacketWithCycle),
+	sendPacket func(targetCycle int, pkt packet.Packet),
 	setDone func(int),
 	updateUpstreamReady func(cycle int, ready bool),
 ) {
 	qp := qpp.queue
 
-	// Receive packets from channel and store in array (non-blocking, drain all)
-	for {
-		select {
-		case pkt := <-receiveChan:
-			slot := qp.findFreeSlot()
-			if slot >= 0 {
-				qp.slots[slot] = PacketWithCycle(pkt)
-				qp.freeBitmap[slot] = false
-				qp.blockReasons[slot] = 0 // Initialize block_reason to 0
+	// Store incoming packets in array
+	for _, pkt := range packets {
+		slot := qp.findFreeSlot()
+		if slot >= 0 {
+			qp.slots[slot] = PacketWithCycle{
+				Cycle:  cycle,
+				Packet: pkt,
 			}
-		default:
-			goto process
+			qp.freeBitmap[slot] = false
+			qp.blockReasons[slot] = 0 // Initialize block_reason to 0
 		}
 	}
 
-process:
 	// Pick packets from array and send to downstream (loop until no more packets or downstream not ready)
 	for {
 		pickedPackets := qp.Pick()
@@ -364,7 +450,8 @@ process:
 		allSent := true
 		for _, pkt := range pickedPackets {
 			if checkReady(pkt.Cycle) {
-				sendPacket(ahead_port.PacketWithCycle(pkt))
+				// Queue has no latency, send at current cycle
+				sendPacket(cycle, pkt.Packet)
 			} else {
 				// Not ready, put back to array
 				slot := qp.findFreeSlot()

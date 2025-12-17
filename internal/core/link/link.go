@@ -8,6 +8,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/core/visualization"
+	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
 // CreateFlowControlStrategy is a factory function that creates flow control strategies by type.
@@ -38,9 +39,9 @@ func CreateFlowControlStrategy(strategyType string, latency, bandwidth int) Flow
 // instead of Done(cycle-1). This allows Link to process packets earlier, taking advantage
 // of the latency buffer.
 type LinkCycleProcessor struct {
-	link      *Link                 // Reference to Link
-	processor *LinkPacketProcessor  // Packet processing logic
-	latency   int                   // Latency in cycles
+	link      *Link                // Reference to Link
+	processor *LinkPacketProcessor // Packet processing logic
+	latency   int                  // Latency in cycles
 }
 
 // Tick implements the cycle processing workflow with custom wait logic.
@@ -51,41 +52,50 @@ func (lcp *LinkCycleProcessor) Tick(cycle int) error {
 
 	link := lcp.link
 
-	// ===== 1. Wait for upstream completion =====
-	// Link at cycle N needs to wait for upstream to complete cycle - latency
-	targetWaitCycle := cycle - lcp.latency
-	if link.inPort.UpstreamOut != nil {
-		link.inPort.UpstreamOut.WaitDone(targetWaitCycle)
-	}
-
-	// ===== 2. Prepare updateUpstreamReady function =====
+	// ===== 1. Prepare updateUpstreamReady function =====
 	// This function notifies upstream of Link's ready status
 	updateUpstreamReady := func(cycle int, ready bool) {
 		link.updateReady(cycle, ready)
 	}
 
-	// ===== 3. Process packets =====
-	// Get upstream's output channel (if plugged)
-	var receiveChan <-chan ahead_port.PacketWithCycle
-	if link.inPort.InputChan != nil {
-		receiveChan = link.inPort.InputChan
-	} else {
-		// If not plugged, use empty channel
-		receiveChan = make(chan ahead_port.PacketWithCycle)
+	// ===== 2. Get packets from upstream =====
+	// Link at cycle N processes packets from upstream cycle (N - latency)
+	// This is because Link has internal buffering/delay
+	var packets []packet.Packet
+	if link.inPort.UpstreamOut != nil {
+		waitCycle := cycle - lcp.latency
+		if waitCycle < 0 {
+			waitCycle = 0
+		}
+		packets = link.inPort.UpstreamOut.GetPackets(waitCycle)
 	}
 
 	// Get downstream's Ready check function
 	checkReady := func(cycle int) bool {
 		if link.outPort.DownstreamIn != nil {
-			return link.outPort.DownstreamIn.Ready(cycle)
+			// Use type assertion to access internal ready method
+			type readyChecker interface{ ready(int) bool }
+			if rc, ok := link.outPort.DownstreamIn.(readyChecker); ok {
+				return rc.ready(cycle)
+			}
+			// Fallback: use IsReadyNonBlocking for ready check
+			ready, decided := link.outPort.DownstreamIn.IsReadyNonBlocking(cycle)
+			if decided {
+				return ready
+			}
+			return false
 		}
 		return true // If not plugged, default to ready
 	}
 
-	// Get send function
-	sendPacket := func(pkt ahead_port.PacketWithCycle) {
-		if link.outPort.OutputChan != nil {
-			link.outPort.OutputChan <- pkt
+	// Get send function - directly sends packet to downstream at targetCycle
+	sendPacket := func(targetCycle int, pkt packet.Packet) {
+		if link.outPort.DownstreamIn != nil {
+			pwc := ahead_port.PacketWithCycle{
+				Cycle:  targetCycle,
+				Packet: pkt,
+			}
+			link.outPort.DownstreamIn.TrySendPacket(targetCycle, pwc)
 		}
 	}
 
@@ -96,7 +106,7 @@ func (lcp *LinkCycleProcessor) Tick(cycle int) error {
 
 	// Call PacketProcessor to process packets
 	lcp.processor.ProcessPackets(
-		receiveChan,
+		packets,
 		cycle,
 		checkReady,
 		sendPacket,
@@ -111,7 +121,7 @@ func (lcp *LinkCycleProcessor) Tick(cycle int) error {
 	}
 
 	// ===== 5. Assert cycle+1 is decided (optional, for debugging) =====
-	_, decided := link.readyNonBlocking(cycle + 1)
+	_, decided := link.IsReadyNonBlocking(cycle + 1)
 	if !decided {
 		panic(fmt.Sprintf("Tick(cycle=%d) completed but cycle+1=%d is not decided in Link. Processor must call updateUpstreamReady(cycle+1, ready) in ProcessPackets.", cycle, cycle+1))
 	}
@@ -123,34 +133,34 @@ func (lcp *LinkCycleProcessor) Tick(cycle int) error {
 // Link receives packets from upstream and forwards them to downstream with latency and bandwidth constraints.
 // Link manages its own synchronization state and exposes InPort and OutPort interfaces.
 type Link struct {
-	sourceID          int
-	targetID          int
+	sourceID int
+	targetID int
 
 	// Port references (set by NewLink, used internally)
-	inPort            *linkInPort
-	outPort           *linkOutPort
+	inPort  *linkInPort
+	outPort *linkOutPort
 
 	// +++ Flow control strategy (Phase 3 addition) +++
-	flowControl       FlowControlStrategy
+	flowControl FlowControlStrategy
 
 	// Link's own synchronization state
-	done              int64         // Link's done cycle (atomic)
-	readyUntil        int64         // Link's ready until cycle (atomic)
-	readyMap          map[int]bool  // Specific cycle ready status
+	done       int64        // Link's done cycle (atomic)
+	readyUntil int64        // Link's ready until cycle (atomic)
+	readyMap   map[int]bool // Specific cycle ready status
 
 	// Synchronization primitives
-	doneMu            sync.Mutex
-	doneCond          *sync.Cond
-	waiterMu          sync.Mutex
-	cond              *sync.Cond
+	doneMu   sync.Mutex
+	doneCond *sync.Cond
+	waiterMu sync.Mutex
+	cond     *sync.Cond
 
-	processor         *LinkCycleProcessor
-	packetProc        *LinkPacketProcessor
-	latency           int
-	bandwidth         int
-	currentCycle      int
-	tickHookMu        sync.RWMutex
-	tickHook          func(cycle int)
+	processor    *LinkCycleProcessor
+	packetProc   *LinkPacketProcessor
+	latency      int
+	bandwidth    int
+	currentCycle int
+	tickHookMu   sync.RWMutex
+	tickHook     func(cycle int)
 }
 
 // LinkPacketProcessor handles packet processing for Link.
@@ -172,12 +182,12 @@ func NewLinkPacketProcessor(link *Link) *LinkPacketProcessor {
 }
 
 // ProcessPackets processes packets for Link: receive from upstream, apply latency, and send to downstream.
-// Phase 3: Refactored to use FlowControlStrategy
+// Phase 4: Refactored to use []packet.Packet instead of channel
 func (l *LinkPacketProcessor) ProcessPackets(
-	receiveChan <-chan ahead_port.PacketWithCycle,
+	packets []packet.Packet,
 	cycle int,
 	checkReady func(int) bool,
-	sendPacket func(ahead_port.PacketWithCycle),
+	sendPacket func(targetCycle int, pkt packet.Packet) bool,
 	setDone func(int),
 	updateUpstreamReady func(cycle int, ready bool),
 ) {
@@ -195,10 +205,10 @@ func (l *LinkPacketProcessor) ProcessPackets(
 	// Check flow control type and use appropriate processing logic
 	if bufferedFC, ok := l.link.flowControl.(*BufferedFlowControl); ok {
 		// Use buffered flow control logic (with slots and backpressure)
-		l.processPacketsBuffered(bufferedFC, receiveChan, cycle, checkReady, sendPacket, setDone, &newPendingPackets)
+		l.processPacketsBuffered(bufferedFC, packets, cycle, checkReady, sendPacket, setDone, &newPendingPackets)
 	} else if _, ok := l.link.flowControl.(*BufferlessFlowControl); ok {
 		// Use bufferless flow control logic (simple latency-based forwarding)
-		l.processPacketsBufferless(receiveChan, cycle, sendPacket, setDone, &newPendingPackets)
+		l.processPacketsBufferless(packets, cycle, sendPacket, setDone, &newPendingPackets)
 	} else {
 		panic(fmt.Sprintf("Unsupported flow control type: %T", l.link.flowControl))
 	}
@@ -213,10 +223,10 @@ func (l *LinkPacketProcessor) ProcessPackets(
 // processPacketsBuffered handles packet processing for BufferedFlowControl.
 func (l *LinkPacketProcessor) processPacketsBuffered(
 	fc *BufferedFlowControl,
-	receiveChan <-chan ahead_port.PacketWithCycle,
+	packets []packet.Packet,
 	cycle int,
 	checkReady func(int) bool,
-	sendPacket func(ahead_port.PacketWithCycle),
+	sendPacket func(targetCycle int, pkt packet.Packet) bool,
 	setDone func(int),
 	newPendingPackets *[]ahead_port.PacketWithCycle,
 ) {
@@ -239,37 +249,27 @@ func (l *LinkPacketProcessor) processPacketsBuffered(
 		addToSlot(pkt, targetCycle)
 	}
 
-	// 2. Receive and process new packets from channel
-	for {
-		select {
-		case pkt := <-receiveChan:
-			sourceCycle := pkt.Cycle
-			targetCycle := sourceCycle + l.link.latency
-
-			delayedPkt := ahead_port.PacketWithCycle{
+	// 2. Receive and process new packets from upstream
+	// New design: send immediately with targetCycle, or buffer if downstream not ready
+	for _, pkt := range packets {
+		targetCycle := cycle + l.link.latency
+		// Try to send immediately
+		if !sendPacket(targetCycle, pkt) {
+			// Downstream not ready, buffer for retry
+			*newPendingPackets = append(*newPendingPackets, ahead_port.PacketWithCycle{
 				Cycle:  targetCycle,
-				Packet: pkt.Packet,
-			}
-
-			if !fc.CanAcceptPacket(cycle, targetCycle) {
-				*newPendingPackets = append(*newPendingPackets, delayedPkt)
-				continue
-			}
-			addToSlot(delayedPkt, targetCycle)
-
-		default:
-			goto doneProcessing
+				Packet: pkt,
+			})
 		}
 	}
 
-doneProcessing:
-	// Decide whether to send based on downstream readiness
+	// 3. Decide whether to send based on downstream readiness
 	downstreamReady := checkReady(cycle)
 	if fc.CanSendPacket(cycle, downstreamReady) {
 		slot := fc.GetSlot(cycle)
-		for _, pkt := range slot {
-			pkt.Cycle = cycle
-			sendPacket(pkt)
+		for _, pwc := range slot {
+			// Send packet with its stored target cycle
+			sendPacket(pwc.Cycle, pwc.Packet)
 		}
 		fc.ClearSlot(cycle)
 	} else {
@@ -282,51 +282,30 @@ doneProcessing:
 // processPacketsBufferless handles packet processing for BufferlessFlowControl.
 // Simpler logic: packets are delayed by latency and forwarded immediately when ready.
 func (l *LinkPacketProcessor) processPacketsBufferless(
-	receiveChan <-chan ahead_port.PacketWithCycle,
+	packets []packet.Packet,
 	cycle int,
-	sendPacket func(ahead_port.PacketWithCycle),
+	sendPacket func(targetCycle int, pkt packet.Packet) bool,
 	setDone func(int),
 	newPendingPackets *[]ahead_port.PacketWithCycle,
 ) {
 	// 1. Process pending packets - send those whose time has come
 	for _, pkt := range l.pendingPackets {
 		if pkt.Cycle <= cycle {
-			// Time to send this packet
-			pkt.Cycle = cycle
-			sendPacket(pkt)
+			// Time to send this packet at its target cycle
+			sendPacket(pkt.Cycle, pkt.Packet)
 		} else {
 			// Still waiting
 			*newPendingPackets = append(*newPendingPackets, pkt)
 		}
 	}
 
-	// 2. Receive new packets and either send immediately or queue
-	for {
-		select {
-		case pkt := <-receiveChan:
-			sourceCycle := pkt.Cycle
-			targetCycle := sourceCycle + l.link.latency
-
-			delayedPkt := ahead_port.PacketWithCycle{
-				Cycle:  targetCycle,
-				Packet: pkt.Packet,
-			}
-
-			if targetCycle <= cycle {
-				// Can send immediately
-				delayedPkt.Cycle = cycle
-				sendPacket(delayedPkt)
-			} else {
-				// Need to wait
-				*newPendingPackets = append(*newPendingPackets, delayedPkt)
-			}
-
-		default:
-			goto doneProcessing
-		}
+	// 2. Receive new packets and send immediately with targetCycle
+	for _, pkt := range packets {
+		targetCycle := cycle + l.link.latency
+		// Send immediately with target cycle label
+		sendPacket(targetCycle, pkt)
 	}
 
-doneProcessing:
 	setDone(cycle)
 }
 
@@ -368,11 +347,11 @@ func NewLinkWithFlowControl(sourceID, targetID, latency, bandwidth int, flowCont
 	}
 
 	link := &Link{
-		sourceID:    sourceID,
-		targetID:    targetID,
-		latency:     latency,
-		bandwidth:   bandwidth,
-		flowControl: flowControl,
+		sourceID:     sourceID,
+		targetID:     targetID,
+		latency:      latency,
+		bandwidth:    bandwidth,
+		flowControl:  flowControl,
 		currentCycle: 0,
 		done:         -1,
 		readyUntil:   0,
@@ -558,8 +537,8 @@ func (l *Link) ready(cycle int) bool {
 	return l.waitForReady(cycle)
 }
 
-// readyNonBlocking checks ready state without blocking (internal method).
-func (l *Link) readyNonBlocking(cycle int) (bool, bool) {
+// IsReadyNonBlocking checks ready state without blocking (internal method).
+func (l *Link) IsReadyNonBlocking(cycle int) (bool, bool) {
 	readyUntil := atomic.LoadInt64(&l.readyUntil)
 	if int64(cycle) < readyUntil {
 		return true, true
@@ -656,14 +635,34 @@ type linkInPort struct {
 	link *Link
 }
 
-// Ready checks if Link is ready to receive data for the given cycle.
-func (p *linkInPort) Ready(cycle int) bool {
+// TrySendPacket attempts to send a packet to Link for the given cycle.
+func (p *linkInPort) TrySendPacket(cycle int, pkt ahead_port.PacketWithCycle) bool {
+	if p.InputChan == nil {
+		panic("linkInPort.TrySendPacket() called before Plug()")
+	}
+	if !p.link.ready(cycle) {
+		return false
+	}
+	p.InputChan <- pkt
+	return true
+}
+
+// ready is an internal helper (not part of InPort interface).
+func (p *linkInPort) ready(cycle int) bool {
 	return p.link.ready(cycle)
 }
 
-// ReadyNonBlocking checks Link's ready state without blocking.
-func (p *linkInPort) ReadyNonBlocking(cycle int) (bool, bool) {
-	return p.link.readyNonBlocking(cycle)
+// sendChan is an internal helper (not part of InPort interface).
+func (p *linkInPort) sendChan() chan<- ahead_port.PacketWithCycle {
+	if p.InputChan == nil {
+		panic("linkInPort.sendChan() called before Plug()")
+	}
+	return p.InputChan
+}
+
+// IsReadyNonBlocking checks Link's ready state without blocking.
+func (p *linkInPort) IsReadyNonBlocking(cycle int) (bool, bool) {
+	return p.link.IsReadyNonBlocking(cycle)
 }
 
 // Plug overrides BaseInPort.Plug to pass self.
@@ -674,17 +673,59 @@ func (p *linkInPort) Plug(out ahead_port.OutPort) chan ahead_port.PacketWithCycl
 // linkOutPort implements OutPort interface for Link.
 type linkOutPort struct {
 	ahead_port.BaseOutPort
-	link *Link
+	link           *Link
+	pendingPackets map[int][]packet.Packet // Cached packets for future cycles
+}
+
+// GetPackets retrieves all packets for the specified cycle.
+func (p *linkOutPort) GetPackets(cycle int) []packet.Packet {
+	// 1. Wait for this Link to complete the necessary cycle
+	// When downstream asks for packets at cycle N, we need to wait for this Link
+	// to finish processing cycle (N - latency) since packets sent at that cycle
+	// will arrive at cycle N.
+	waitCycle := cycle - p.link.latency
+	if waitCycle < 0 {
+		waitCycle = 0
+	}
+	p.link.waitDone(waitCycle)
+
+	// 2. Check if we have cached packets for this cycle
+	if p.pendingPackets == nil {
+		p.pendingPackets = make(map[int][]packet.Packet)
+	}
+
+	if cached, ok := p.pendingPackets[cycle]; ok {
+		delete(p.pendingPackets, cycle)
+		return cached
+	}
+
+	// 3. Read from channel and filter by cycle
+	var result []packet.Packet
+	if p.OutputChan == nil {
+		return result
+	}
+
+	for {
+		select {
+		case pwc := <-p.OutputChan:
+			if pwc.Cycle == cycle {
+				result = append(result, pwc.Packet)
+			} else if pwc.Cycle > cycle {
+				// Future packet, cache it
+				p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
+			} else {
+				// Past packet - skip it (already processed or stale)
+				continue
+			}
+		default:
+			return result
+		}
+	}
 }
 
 // WaitDone waits for Link to complete the given cycle.
 func (p *linkOutPort) WaitDone(cycle int) {
 	p.link.waitDone(cycle)
-}
-
-// GetDone gets Link's current done cycle.
-func (p *linkOutPort) GetDone() int {
-	return p.link.getDone()
 }
 
 // Plug overrides BaseOutPort.Plug to pass self.

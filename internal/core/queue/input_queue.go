@@ -2,9 +2,9 @@ package queue
 
 import (
 	"fmt"
-	"runtime"
+	"math"
 	"sync"
-	"time"
+	"sync/atomic"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
@@ -127,25 +127,16 @@ func (iq *InputQueue) SetPacketReceivedHook(hook func(packet.Packet)) {
 
 // EnableAlwaysReady configures the queue to stay ready for all future cycles.
 // This is useful for scenarios that do not model backpressure (e.g., simplified network tests).
+// Instead of spawning a goroutine that continuously updates readyMap, this sets readyUntil to MaxInt64.
 func (iq *InputQueue) EnableAlwaysReady() {
 	iq.readyOnce.Do(func() {
 		if iq.queue == nil {
 			return
 		}
 
-		capacity := iq.queue.Capacity()
-
-		go func(start int) {
-			cycle := start
-			for {
-				iq.queue.updateReady(cycle, true)
-				cycle++
-				if cycle%128 == 0 {
-					runtime.Gosched()
-					time.Sleep(0)
-				}
-			}
-		}(capacity)
+		// Set readyUntil to maximum value, making all cycles ready instantly.
+		// This avoids the need for background goroutines and lock contention.
+		atomic.StoreInt64(&iq.queue.readyUntil, math.MaxInt64)
 	})
 }
 
@@ -259,7 +250,11 @@ func (iqcp *InputQueueCycleProcessor) Tick(cycle int) error {
 	// Wait for upstream Done >= cycle-1
 	if iq.queueInPort != nil {
 		if baseIn, ok := iq.queueInPort.(*queueInPort); ok && baseIn.UpstreamOut != nil {
-			baseIn.UpstreamOut.WaitDone(cycle - 1)
+			// Use type assertion to access internal WaitDone method
+			type waitDoneProvider interface{ WaitDone(int) }
+			if wdp, ok := baseIn.UpstreamOut.(waitDoneProvider); ok {
+				wdp.WaitDone(cycle - 1)
+			}
 		}
 	}
 

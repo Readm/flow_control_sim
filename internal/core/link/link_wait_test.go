@@ -97,15 +97,16 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	if err := link.Tick(2); err != nil {
 		t.Fatalf("link.Tick failed: %v", err)
 	}
-	ensureNoAdditionalPacketsInPort(t, downstreamInPort)
 
-	mockOut.SetDone(5)
-	if err := link.Tick(4); err != nil {
-		t.Fatalf("link.Tick failed at cycle 4: %v", err)
-	}
-
+	// New design: packet is sent immediately with targetCycle=6 (2+4)
+	// So we can receive it now (it's in the channel, labeled as cycle 6)
 	received := receivePacketsFromInPort(t, downstreamInPort, 1)
 	if received[0].Packet.Payload != "early" {
 		t.Fatalf("expected payload 'early', got %q", received[0].Packet.Payload)
 	}
+	if received[0].Cycle != 6 {
+		t.Fatalf("expected cycle 6, got %d", received[0].Cycle)
+	}
+
+	ensureNoAdditionalPacketsInPort(t, downstreamInPort)
 }

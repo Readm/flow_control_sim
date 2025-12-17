@@ -2,6 +2,7 @@ package link
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ func createTestPorts(buffer int) (ahead_port.InPort, ahead_port.OutPort) {
 // mockOutPort implements OutPort for testing.
 type mockOutPort struct {
 	ch       chan ahead_port.PacketWithCycle
-	done     int
+	done     int64
 	doneMu   sync.Mutex
 	doneCond *sync.Cond
 }
@@ -43,20 +44,36 @@ func (m *mockOutPort) WaitDone(cycle int) {
 		m.doneCond = sync.NewCond(&m.doneMu)
 	}
 
-	for m.done < cycle {
+	for atomic.LoadInt64(&m.done) < int64(cycle) {
 		m.doneCond.Wait()
 	}
 }
 
+func (m *mockOutPort) GetPackets(cycle int) []packet.Packet {
+	// Wait for this mock to complete the cycle
+	m.WaitDone(cycle)
+
+	// Simple mock: just drain all packets from channel
+	// Real implementation would filter by cycle
+	var packets []packet.Packet
+	for {
+		select {
+		case pwc := <-m.ch:
+			packets = append(packets, pwc.Packet)
+		default:
+			return packets
+		}
+	}
+}
+
 func (m *mockOutPort) GetDone() int {
-	m.doneMu.Lock()
-	defer m.doneMu.Unlock()
-	return m.done
+	return int(atomic.LoadInt64(&m.done))
 }
 
 func (m *mockOutPort) SetDone(cycle int) {
+	atomic.StoreInt64(&m.done, int64(cycle))
+
 	m.doneMu.Lock()
-	m.done = cycle
 	if m.doneCond != nil {
 		m.doneCond.Broadcast()
 	}
@@ -77,11 +94,18 @@ type mockInPort struct {
 	readyUntil int
 }
 
-func (m *mockInPort) SendChan() chan<- ahead_port.PacketWithCycle { return m.ch }
-func (m *mockInPort) Ready(cycle int) bool                        { return cycle < m.readyUntil }
-func (m *mockInPort) ReadyNonBlocking(cycle int) (bool, bool) {
+func (m *mockInPort) TrySendPacket(cycle int, pkt ahead_port.PacketWithCycle) bool {
+	if cycle >= m.readyUntil {
+		return false
+	}
+	m.ch <- pkt
+	return true
+}
+
+func (m *mockInPort) IsReadyNonBlocking(cycle int) (bool, bool) {
 	return cycle < m.readyUntil, true
 }
+
 func (m *mockInPort) Plug(out ahead_port.OutPort) chan ahead_port.PacketWithCycle {
 	panic("mockInPort.Plug not implemented")
 }
@@ -111,14 +135,19 @@ func sendPacketToOutPort(t *testing.T, port ahead_port.OutPort, cycle int, pkt p
 func receivePacketsFromInPort(t *testing.T, port ahead_port.InPort, expected int) []ahead_port.PacketWithCycle {
 	t.Helper()
 	results := make([]ahead_port.PacketWithCycle, 0, expected)
-	// For mockInPort, read directly from its channel
+
+	// New API: InPort doesn't expose packets directly
+	// We need to read from the channel that was set up during Plug
 	if mock, ok := port.(*mockInPort); ok {
+		if mock.ch == nil {
+			t.Fatalf("mockInPort.ch is nil - port not plugged?")
+		}
 		for i := 0; i < expected; i++ {
 			select {
 			case pkt := <-mock.ch:
 				results = append(results, pkt)
 			case <-time.After(200 * time.Millisecond):
-				t.Fatalf("timeout waiting for packet %d", i)
+				t.Fatalf("timeout waiting for packet %d (received %d so far)", i, len(results))
 			}
 		}
 	} else {
