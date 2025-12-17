@@ -89,14 +89,15 @@ func (lcp *LinkCycleProcessor) Tick(cycle int) error {
 	}
 
 	// Get send function - directly sends packet to downstream at targetCycle
-	sendPacket := func(targetCycle int, pkt packet.Packet) {
+	sendPacket := func(targetCycle int, pkt packet.Packet) bool {
 		if link.outPort.DownstreamIn != nil {
 			pwc := ahead_port.PacketWithCycle{
 				Cycle:  targetCycle,
 				Packet: pkt,
 			}
-			link.outPort.DownstreamIn.TrySendPacket(targetCycle, pwc)
+			return link.outPort.DownstreamIn.TrySendPacket(targetCycle, pwc)
 		}
+		return true // If not plugged, default to ready/sent
 	}
 
 	// Get setDone function (sets Link's own done state)
@@ -267,11 +268,25 @@ func (l *LinkPacketProcessor) processPacketsBuffered(
 	downstreamReady := checkReady(cycle)
 	if fc.CanSendPacket(cycle, downstreamReady) {
 		slot := fc.GetSlot(cycle)
+		var pendingInSlot []ahead_port.PacketWithCycle
+		allSent := true
+
 		for _, pwc := range slot {
 			// Send packet with its stored target cycle
-			sendPacket(pwc.Cycle, pwc.Packet)
+			if !sendPacket(pwc.Cycle, pwc.Packet) {
+				pendingInSlot = append(pendingInSlot, pwc)
+				allSent = false
+			}
 		}
-		fc.ClearSlot(cycle)
+
+		if allSent {
+			fc.ClearSlot(cycle)
+		} else {
+			// Some packets failed to send. Retain them in the slot and apply backpressure.
+			// This ensures they are retried in the next opportunity.
+			fc.UpdateSlot(cycle, pendingInSlot)
+			fc.IncrementBackpressure()
+		}
 	} else {
 		fc.IncrementBackpressure()
 	}
@@ -292,7 +307,9 @@ func (l *LinkPacketProcessor) processPacketsBufferless(
 	for _, pkt := range l.pendingPackets {
 		if pkt.Cycle <= cycle {
 			// Time to send this packet at its target cycle
-			sendPacket(pkt.Cycle, pkt.Packet)
+			if !sendPacket(pkt.Cycle, pkt.Packet) {
+				panic(fmt.Sprintf("Bufferless Link %d->%d failed to send packet at cycle %d", l.link.SourceID(), l.link.TargetID(), cycle))
+			}
 		} else {
 			// Still waiting
 			*newPendingPackets = append(*newPendingPackets, pkt)
@@ -303,7 +320,9 @@ func (l *LinkPacketProcessor) processPacketsBufferless(
 	for _, pkt := range packets {
 		targetCycle := cycle + l.link.latency
 		// Send immediately with target cycle label
-		sendPacket(targetCycle, pkt)
+		if !sendPacket(targetCycle, pkt) {
+			panic(fmt.Sprintf("Bufferless Link %d->%d failed to send packet at cycle %d (target %d)", l.link.SourceID(), l.link.TargetID(), cycle, targetCycle))
+		}
 	}
 
 	setDone(cycle)

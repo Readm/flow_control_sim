@@ -158,6 +158,17 @@ func (fc *BufferedFlowControl) ClearSlot(cycle int) {
 	fc.slots[slotIndex] = nil
 }
 
+// UpdateSlot updates the slot for the given cycle with a specific set of packets.
+// This is used when only some packets could be sent and the rest need to be retained.
+//
+// Parameters:
+//   cycle: the current cycle
+//   packets: the packets to store in the slot
+func (fc *BufferedFlowControl) UpdateSlot(cycle int, packets []ahead_port.PacketWithCycle) {
+	slotIndex := ((cycle - fc.totalBackpressure) % fc.latency + fc.latency) % fc.latency
+	fc.slots[slotIndex] = packets
+}
+
 // IncrementBackpressure increments the backpressure counter.
 // This is called when downstream is not ready.
 func (fc *BufferedFlowControl) IncrementBackpressure() {
