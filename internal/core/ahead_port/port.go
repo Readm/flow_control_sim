@@ -130,11 +130,14 @@ func (p *BaseInPort) SetInChannel(ch chan PacketWithCycle, upstream OutPort) {
 
 // BaseOutPort provides a default implementation of OutPort with Plug support.
 // Components can embed this struct to inherit the default behavior.
-// The embedding struct must implement the GetPackets() method.
+// It provides a complete GetPackets() implementation that handles channel reading,
+// cycle filtering, and packet caching.
 type BaseOutPort struct {
-	OutputChan   chan PacketWithCycle // Channel for sending packets, set by Plug()
-	DownstreamIn InPort               // Reference to downstream InPort, set by Plug()
-	self         OutPort              // Reference to the full OutPort implementation
+	OutputChan     chan PacketWithCycle       // Channel for sending packets, set by Plug()
+	DownstreamIn   InPort                     // Reference to downstream InPort, set by Plug()
+	self           OutPort                    // Reference to the full OutPort implementation
+	pendingPackets map[int][]packet.Packet    // Cached packets for future cycles
+	beforeGetHook  func(cycle int)            // Optional hook called before reading packets (e.g., for waitDone)
 }
 
 // PlugWithSelf connects this OutPort to a downstream InPort.
@@ -177,4 +180,57 @@ func (p *BaseOutPort) SetOutChannel(ch chan PacketWithCycle, downstream InPort) 
 	}
 	p.OutputChan = ch
 	p.DownstreamIn = downstream
+}
+
+// GetPackets provides a default implementation that retrieves packets for a specific cycle.
+// This method handles:
+// 1. Calling the optional beforeGetHook (for components that need to wait)
+// 2. Checking the packet cache
+// 3. Reading from the channel and filtering by cycle
+// 4. Caching future packets
+//
+// Components can use this default implementation or override it if needed.
+func (p *BaseOutPort) GetPackets(cycle int) []packet.Packet {
+	// 1. Call optional hook (e.g., for waitDone)
+	if p.beforeGetHook != nil {
+		p.beforeGetHook(cycle)
+	}
+
+	// 2. Initialize cache if needed
+	if p.pendingPackets == nil {
+		p.pendingPackets = make(map[int][]packet.Packet)
+	}
+
+	// 3. Check cache
+	if cached, ok := p.pendingPackets[cycle]; ok {
+		delete(p.pendingPackets, cycle)
+		return cached
+	}
+
+	// 4. Read from channel and filter by cycle
+	var result []packet.Packet
+	if p.OutputChan == nil {
+		return result
+	}
+
+	for {
+		select {
+		case pwc := <-p.OutputChan:
+			if pwc.Cycle == cycle {
+				result = append(result, pwc.Packet)
+			} else if pwc.Cycle > cycle {
+				// Future packet, cache it
+				p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
+			}
+			// Past packets (pwc.Cycle < cycle) are silently dropped
+		default:
+			return result
+		}
+	}
+}
+
+// SetBeforeGetHook sets an optional hook that will be called before reading packets.
+// This is useful for components that need to wait for upstream completion (e.g., Link's waitDone).
+func (p *BaseOutPort) SetBeforeGetHook(hook func(cycle int)) {
+	p.beforeGetHook = hook
 }

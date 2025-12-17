@@ -3,22 +3,12 @@ package link
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
-
-// PacketWithCycle is an alias for packet.PacketWithCycle
-type PacketWithCycle = packet.PacketWithCycle
-
-// readyItem represents a ready state for a specific cycle (internal)
-type readyItem struct {
-	cycle int
-	ready bool
-}
 
 // CreateFlowControlStrategy is a factory function that creates flow control strategies by type.
 //
@@ -58,18 +48,8 @@ type Link struct {
 	// +++ Flow control strategy (Phase 3 addition) +++
 	flowControl FlowControlStrategy
 
-	// Link's own synchronization state
-	done       int64 // Link's done cycle (atomic)
-	readyUntil int64 // Link's ready until cycle (atomic)
-	// readyMap   map[int]bool // Deprecated: Replaced by readyQueue
-	readyQueue      []readyItem // Sorted queue of future ready states
-	lastAccessCycle int         // For debug: tracking monotonic access
-
-	// Synchronization primitives
-	doneMu   sync.Mutex
-	doneCond *sync.Cond
-	waiterMu sync.Mutex
-	cond     *sync.Cond
+	// Link's synchronization state
+	componentSync *ahead_port.ComponentSync
 
 	latency      int
 	bandwidth    int
@@ -256,33 +236,37 @@ func NewLinkWithFlowControl(sourceID, targetID, latency, bandwidth int, flowCont
 	}
 
 	link := &Link{
-		sourceID:        sourceID,
-		targetID:        targetID,
-		latency:         latency,
-		bandwidth:       bandwidth,
-		flowControl:     flowControl,
-		currentCycle:    0,
-		done:            -1,
-		readyUntil:      0,
-		readyQueue:      make([]readyItem, 0),
-		lastAccessCycle: -1,
+		sourceID:      sourceID,
+		targetID:      targetID,
+		latency:       latency,
+		bandwidth:     bandwidth,
+		flowControl:   flowControl,
+		currentCycle:  0,
+		componentSync: ahead_port.NewComponentSync(),
 	}
 
 	// Create ports
 	inPort := &linkInPort{link: link}
 	outPort := &linkOutPort{link: link}
 
+	// Set up beforeGetHook for linkOutPort to handle waitDone
+	outPort.SetBeforeGetHook(func(cycle int) {
+		waitCycle := cycle - link.latency
+		if waitCycle < 0 {
+			waitCycle = 0
+		}
+		link.waitDone(waitCycle)
+	})
+
 	// Link holds port references
 	link.inPort = inPort
 	link.outPort = outPort
 
 	// Initialize readyUntil for the first 'latency' cycles.
-
-	// Initialize readyUntil for the first 'latency' cycles.
 	// Rationale: Link is ready for the first 'latency' cycles because packets
 	// are still in transit (haven't reached downstream yet).
 	// This prevents deadlock in cyclic topologies during initialization.
-	link.readyUntil = int64(latency)
+	link.componentSync.SetReadyUntil(latency)
 	debug.Logf("Link.NewLink: link %d->%d initialized with readyUntil=%d (latency=%d)",
 		sourceID, targetID, latency, latency)
 
@@ -366,9 +350,9 @@ func (l *Link) Tick(cycle int) error {
 	)
 
 	// ===== 4. Ensure Link's Done state is correct =====
-	currentDone := l.getDone()
+	currentDone := l.componentSync.GetDone()
 	if currentDone < cycle {
-		l.setDone(cycle)
+		l.componentSync.SetDone(cycle)
 	}
 
 	// ===== 5. Assert cycle+1 is decided (optional) =====
@@ -440,300 +424,29 @@ func (l *Link) invokeTickHook(cycle int) {
 
 // ===== Link synchronization methods (internal) =====
 
-// setDone sets Link's done state (internal method).
-func (l *Link) setDone(cycle int) {
-	atomic.StoreInt64(&l.done, int64(cycle))
-
-	// Wake up waiting goroutines
-	l.doneMu.Lock()
-	if l.doneCond != nil {
-		l.doneCond.Broadcast()
-	}
-	l.doneMu.Unlock()
-}
-
-// getDone gets Link's done state (internal method).
-func (l *Link) getDone() int {
-	return int(atomic.LoadInt64(&l.done))
-}
-
-// waitDone waits for Link to complete targetCycle (internal method).
-func (l *Link) waitDone(targetCycle int) {
-	currentDone := l.getDone()
-	if currentDone >= targetCycle {
-		return
-	}
-
-	l.doneMu.Lock()
-	defer l.doneMu.Unlock()
-
-	if l.doneCond == nil {
-		l.doneCond = sync.NewCond(&l.doneMu)
-	}
-
-	for l.getDone() < targetCycle {
-		l.doneCond.Wait()
-	}
-}
-
 // ready checks if Link is ready to receive data for the given cycle (internal method).
 func (l *Link) ready(cycle int) bool {
-	// Debug check for monotonic access
-	if debug.Enabled() {
-		if cycle < l.lastAccessCycle {
-			panic(fmt.Sprintf("Link Ready access violation: cycle %d < last %d (must be monotonic)", cycle, l.lastAccessCycle))
-		}
-		l.lastAccessCycle = cycle
-	}
-
-	// Fast path: if cycle < readyUntil, return true immediately
-	readyUntil := atomic.LoadInt64(&l.readyUntil)
-	if int64(cycle) < readyUntil {
-		return true
-	}
-
-	// Check readyQueue
-	l.waiterMu.Lock()
-
-	// Re-check readyUntil
-	currentReadyUntil := atomic.LoadInt64(&l.readyUntil)
-	if int64(cycle) < currentReadyUntil {
-		l.waiterMu.Unlock()
-		return true
-	}
-
-	found := false
-	var result bool
-
-	// Prune and Search
-	pruneIdx := 0
-	for i, item := range l.readyQueue {
-		if item.cycle < cycle {
-			continue
-		}
-		if item.cycle == cycle {
-			result = item.ready
-			found = true
-			pruneIdx = i + 1
-			break
-		}
-		pruneIdx = i
-		break
-	}
-
-	if !found && len(l.readyQueue) > 0 {
-		if l.readyQueue[len(l.readyQueue)-1].cycle < cycle {
-			pruneIdx = len(l.readyQueue)
-		}
-	}
-
-	if pruneIdx > 0 {
-		if pruneIdx >= len(l.readyQueue) {
-			l.readyQueue = nil
-		} else {
-			l.readyQueue = l.readyQueue[pruneIdx:]
-		}
-	}
-
-	l.waiterMu.Unlock()
-
-	if found {
-		return result
-	}
-
-	// Block and wait
-	return l.waitForReady(cycle)
+	return l.componentSync.Ready(cycle)
 }
 
 // IsReadyNonBlocking checks ready state without blocking (internal method).
 func (l *Link) IsReadyNonBlocking(cycle int) (bool, bool) {
-	// Debug check for monotonic access
-	if debug.Enabled() {
-		if cycle < l.lastAccessCycle {
-			panic(fmt.Sprintf("Link Ready access violation (NB): cycle %d < last %d", cycle, l.lastAccessCycle))
-		}
-		l.lastAccessCycle = cycle
-	}
-
-	readyUntil := atomic.LoadInt64(&l.readyUntil)
-	if int64(cycle) < readyUntil {
-		return true, true
-	}
-
-	l.waiterMu.Lock()
-	defer l.waiterMu.Unlock()
-
-	currentReadyUntil := atomic.LoadInt64(&l.readyUntil)
-	if int64(cycle) < currentReadyUntil {
-		return true, true
-	}
-
-	// Prune and Search
-	pruneIdx := 0
-	found := false
-	var result bool
-
-	for i, item := range l.readyQueue {
-		if item.cycle < cycle {
-			continue
-		}
-		if item.cycle == cycle {
-			result = item.ready
-			found = true
-			pruneIdx = i // Peek: Do not consume current item
-			break
-		}
-		pruneIdx = i // Stops at > cycle
-		break
-	}
-
-	if !found && len(l.readyQueue) > 0 {
-		if l.readyQueue[len(l.readyQueue)-1].cycle < cycle {
-			pruneIdx = len(l.readyQueue)
-		}
-	}
-
-	if pruneIdx > 0 {
-		if pruneIdx >= len(l.readyQueue) {
-			l.readyQueue = nil
-		} else {
-			l.readyQueue = l.readyQueue[pruneIdx:]
-		}
-	}
-
-	if found {
-		return result, true
-	}
-
-	return false, false
-}
-
-// waitForReady blocks until ready (internal method).
-func (l *Link) waitForReady(cycle int) bool {
-	l.waiterMu.Lock()
-	defer l.waiterMu.Unlock()
-
-	if l.cond == nil {
-		l.cond = sync.NewCond(&l.waiterMu)
-	}
-
-	for {
-		currentReadyUntil := atomic.LoadInt64(&l.readyUntil)
-		if int64(cycle) < currentReadyUntil {
-			return true
-		}
-
-		// Search queue
-		found := false
-		var result bool
-
-		for i, item := range l.readyQueue {
-			if item.cycle == cycle {
-				result = item.ready
-				found = true
-				// Consume
-				if i+1 >= len(l.readyQueue) {
-					l.readyQueue = nil
-				} else {
-					l.readyQueue = l.readyQueue[i+1:]
-				}
-				break
-			}
-			if item.cycle > cycle {
-				break
-			}
-		}
-
-		if found {
-			return result
-		}
-		l.cond.Wait()
-	}
+	return l.componentSync.IsReadyNonBlocking(cycle)
 }
 
 // updateReady updates Link's ready state (internal method).
 func (l *Link) updateReady(cycle int, ready bool) {
-	l.waiterMu.Lock()
-	defer l.waiterMu.Unlock()
-
-	currentReadyUntil := atomic.LoadInt64(&l.readyUntil)
-	if int64(cycle) < currentReadyUntil {
-		return
-	}
-
-	// Insert
-	inserted := false
-	if len(l.readyQueue) == 0 {
-		l.readyQueue = append(l.readyQueue, readyItem{cycle, ready})
-		inserted = true
-	} else {
-		if cycle > l.readyQueue[len(l.readyQueue)-1].cycle {
-			l.readyQueue = append(l.readyQueue, readyItem{cycle, ready})
-			inserted = true
-		} else {
-			for i, item := range l.readyQueue {
-				if item.cycle == cycle {
-					l.readyQueue[i].ready = ready
-					inserted = true
-					break
-				}
-				if item.cycle > cycle {
-					l.readyQueue = append(l.readyQueue[:i+1], l.readyQueue[i:]...)
-					l.readyQueue[i] = readyItem{cycle, ready}
-					inserted = true
-					break
-				}
-			}
-			if !inserted {
-				l.readyQueue = append(l.readyQueue, readyItem{cycle, ready})
-			}
-		}
-	}
-
-	// Compaction
-	for len(l.readyQueue) > 0 {
-		head := l.readyQueue[0]
-		if int64(head.cycle) == currentReadyUntil {
-			if head.ready {
-				currentReadyUntil++
-				l.readyQueue = l.readyQueue[1:]
-			} else {
-				break
-			}
-		} else if int64(head.cycle) < currentReadyUntil {
-			l.readyQueue = l.readyQueue[1:]
-		} else {
-			break
-		}
-	}
-
-	atomic.StoreInt64(&l.readyUntil, currentReadyUntil)
-
-	if l.cond != nil {
-		l.cond.Broadcast()
-	}
+	l.componentSync.UpdateReady(cycle, ready)
 }
 
 // setReadyUntil sets readyUntil (internal method).
 func (l *Link) setReadyUntil(cycle int) {
-	// Atomically update readyUntil
-	for {
-		current := atomic.LoadInt64(&l.readyUntil)
-		if int64(cycle) <= current {
-			return
-		}
-		if atomic.CompareAndSwapInt64(&l.readyUntil, current, int64(cycle)) {
-			break
-		}
-	}
+	l.componentSync.SetReadyUntil(cycle)
+}
 
-	// Wake up all waiting goroutines
-	// Because readyUntil increased, previously blocked cycles may now be ready
-	l.waiterMu.Lock()
-	if l.cond != nil {
-		l.cond.Broadcast()
-	}
-	l.waiterMu.Unlock()
+// waitDone waits for Link to complete targetCycle (internal method).
+func (l *Link) waitDone(targetCycle int) {
+	l.componentSync.WaitDone(targetCycle)
 }
 
 // GetVisualState returns the visual representation of this link.
@@ -782,14 +495,6 @@ func (p *linkInPort) ready(cycle int) bool {
 	return p.link.ready(cycle)
 }
 
-// sendChan is an internal helper (not part of InPort interface).
-func (p *linkInPort) sendChan() chan<- ahead_port.PacketWithCycle {
-	if p.InputChan == nil {
-		panic("linkInPort.sendChan() called before Plug()")
-	}
-	return p.InputChan
-}
-
 // IsReadyNonBlocking checks Link's ready state without blocking.
 func (p *linkInPort) IsReadyNonBlocking(cycle int) (bool, bool) {
 	return p.link.IsReadyNonBlocking(cycle)
@@ -803,54 +508,7 @@ func (p *linkInPort) Plug(out ahead_port.OutPort) chan ahead_port.PacketWithCycl
 // linkOutPort implements OutPort interface for Link.
 type linkOutPort struct {
 	ahead_port.BaseOutPort
-	link           *Link
-	pendingPackets map[int][]packet.Packet // Cached packets for future cycles
-}
-
-// GetPackets retrieves all packets for the specified cycle.
-func (p *linkOutPort) GetPackets(cycle int) []packet.Packet {
-	// 1. Wait for this Link to complete the necessary cycle
-	// When downstream asks for packets at cycle N, we need to wait for this Link
-	// to finish processing cycle (N - latency) since packets sent at that cycle
-	// will arrive at cycle N.
-	waitCycle := cycle - p.link.latency
-	if waitCycle < 0 {
-		waitCycle = 0
-	}
-	p.link.waitDone(waitCycle)
-
-	// 2. Check if we have cached packets for this cycle
-	if p.pendingPackets == nil {
-		p.pendingPackets = make(map[int][]packet.Packet)
-	}
-
-	if cached, ok := p.pendingPackets[cycle]; ok {
-		delete(p.pendingPackets, cycle)
-		return cached
-	}
-
-	// 3. Read from channel and filter by cycle
-	var result []packet.Packet
-	if p.OutputChan == nil {
-		return result
-	}
-
-	for {
-		select {
-		case pwc := <-p.OutputChan:
-			if pwc.Cycle == cycle {
-				result = append(result, pwc.Packet)
-			} else if pwc.Cycle > cycle {
-				// Future packet, cache it
-				p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
-			} else {
-				// Past packet - skip it (already processed or stale)
-				continue
-			}
-		default:
-			return result
-		}
-	}
+	link *Link
 }
 
 // WaitDone waits for Link to complete the given cycle.

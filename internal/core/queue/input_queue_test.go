@@ -87,10 +87,10 @@ func TestInputQueuePick(t *testing.T) {
 	// Manually inject packet into storage for testing Pick logic directly
 	// Note: In real usage, Tick populates this.
 	iq.arrayMu.Lock()
-	iq.slots[0] = PacketWithCycle{Cycle: 3, Packet: packet.Packet{SourceID: 1}}
+	iq.slots[0] = packet.PacketWithCycle{Cycle: 3, Packet: packet.Packet{SourceID: 1}}
 	iq.freeBitmap[0] = false
 	iq.blockReasons[0] = 0
-	iq.slots[1] = PacketWithCycle{Cycle: 5, Packet: packet.Packet{SourceID: 2}}
+	iq.slots[1] = packet.PacketWithCycle{Cycle: 5, Packet: packet.Packet{SourceID: 2}}
 	iq.freeBitmap[1] = false
 	iq.blockReasons[1] = 0
 	iq.arrayMu.Unlock()

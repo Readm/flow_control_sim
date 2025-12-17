@@ -70,20 +70,6 @@ func (fc *BufferedFlowControl) CanAcceptPacket(cycle int, targetCycle int) bool 
 	return len(fc.slots[targetSlotIndex]) < fc.bandwidth
 }
 
-// OnPacketAccepted is called after a packet is added to a slot.
-// In the buffered strategy, slot management is handled externally,
-// so this is a no-op. The packet is added via AddToSlot().
-func (fc *BufferedFlowControl) OnPacketAccepted(cycle int, targetCycle int) {
-	// No-op - slot management handled by AddToSlot
-}
-
-// OnPacketBlocked is called when a packet cannot be accepted.
-// In the buffered strategy, backpressure is only incremented when
-// downstream is not ready (in CanSendPacket), not when accepting packets.
-func (fc *BufferedFlowControl) OnPacketBlocked(cycle int, targetCycle int) {
-	// No-op - backpressure handled in CanSendPacket
-}
-
 // CanSendPacket checks if packets should be sent to downstream.
 // Returns true only if downstream is ready.
 // If false, the caller should increment backpressure via IncrementBackpressure().
@@ -91,16 +77,10 @@ func (fc *BufferedFlowControl) CanSendPacket(cycle int, downstreamReady bool) bo
 	return downstreamReady
 }
 
-// OnPacketSent is called after packets are sent.
-// Slot clearing is handled externally.
-func (fc *BufferedFlowControl) OnPacketSent(cycle int) {
-	// No-op - slot clearing handled externally
-}
-
-// GetReadyForCycle returns the ready state for upstream.
+// IsReady returns the ready state for upstream.
 // In the current implementation, this checks downstream readiness.
 // For now, we return true (will be refined in Phase 3).
-func (fc *BufferedFlowControl) GetReadyForCycle(cycle int) bool {
+func (fc *BufferedFlowControl) IsReady(cycle int) bool {
 	// TODO: Refine this logic in Phase 3
 	// Current implementation checks downstream readiness
 	return true

@@ -12,11 +12,12 @@ package link
 //
 // Lifecycle:
 // 1. Check if can accept packet from upstream (CanAcceptPacket)
-// 2. Accept packet and update state (OnPacketAccepted)
-// 3. Or block packet and update state (OnPacketBlocked)
-// 4. Check if can send packet to downstream (CanSendPacket)
-// 5. Send packet and update state (OnPacketSent)
-// 6. Report ready state to upstream (GetReadyForCycle)
+// 2. Check if can send packet to downstream (CanSendPacket)
+// 3. Report ready state to upstream (IsReady)
+// 4. Reset state when needed (Reset)
+//
+// Note: OnPacket* lifecycle methods have been removed as they were mostly no-ops.
+// Concrete implementations handle state management directly in their helper methods.
 type FlowControlStrategy interface {
 	// CanAcceptPacket checks if the strategy can accept a new packet.
 	// This is called when Link receives a packet from upstream.
@@ -30,23 +31,6 @@ type FlowControlStrategy interface {
 	//   false if the packet should be delayed (e.g., buffer full, no credits)
 	CanAcceptPacket(cycle int, targetCycle int) bool
 
-	// OnPacketAccepted is called after a packet is accepted.
-	// This allows the strategy to update internal state (e.g., decrement credits,
-	// add to buffer, update occupancy).
-	//
-	// Parameters:
-	//   cycle: current cycle
-	//   targetCycle: the cycle when the packet will arrive at downstream
-	OnPacketAccepted(cycle int, targetCycle int)
-
-	// OnPacketBlocked is called when a packet cannot be accepted.
-	// This allows the strategy to update internal state (e.g., increment backpressure).
-	//
-	// Parameters:
-	//   cycle: current cycle
-	//   targetCycle: the attempted target cycle
-	OnPacketBlocked(cycle int, targetCycle int)
-
 	// CanSendPacket checks if the strategy allows sending packets to downstream.
 	// This is called in each cycle to decide whether to transmit buffered packets.
 	//
@@ -59,14 +43,7 @@ type FlowControlStrategy interface {
 	//   false if packets should be held (e.g., downstream not ready, no credits)
 	CanSendPacket(cycle int, downstreamReady bool) bool
 
-	// OnPacketSent is called after a packet is sent to downstream.
-	// This allows the strategy to update internal state (e.g., clear slot, update counters).
-	//
-	// Parameters:
-	//   cycle: current cycle
-	OnPacketSent(cycle int)
-
-	// GetReadyForCycle returns the ready state for a given cycle.
+	// IsReady returns the ready state for a given cycle.
 	// This is called to update upstream about Link's readiness.
 	//
 	// Parameters:
@@ -75,7 +52,7 @@ type FlowControlStrategy interface {
 	// Returns:
 	//   true if Link is ready to accept packets for that cycle
 	//   false otherwise
-	GetReadyForCycle(cycle int) bool
+	IsReady(cycle int) bool
 
 	// Reset resets the flow control state.
 	// This is called when Network.Reset() is invoked.

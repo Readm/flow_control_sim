@@ -46,7 +46,7 @@ func TestCreateFlowControlStrategy_Bufferless(t *testing.T) {
 		t.Error("BufferlessFlowControl should always accept packets")
 	}
 
-	if !fc.GetReadyForCycle(0) {
+	if !fc.IsReady(0) {
 		t.Error("BufferlessFlowControl should always be ready")
 	}
 }

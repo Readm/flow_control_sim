@@ -67,8 +67,8 @@ func TestBufferlessFlowControl_CanSendPacket(t *testing.T) {
 	}
 }
 
-// TestBufferlessFlowControl_GetReadyForCycle tests ready signal.
-func TestBufferlessFlowControl_GetReadyForCycle(t *testing.T) {
+// TestBufferlessFlowControl_IsReady tests ready signal.
+func TestBufferlessFlowControl_IsReady(t *testing.T) {
 	fc := NewBufferlessFlowControl()
 
 	tests := []struct {
@@ -83,9 +83,9 @@ func TestBufferlessFlowControl_GetReadyForCycle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := fc.GetReadyForCycle(tt.cycle)
+			got := fc.IsReady(tt.cycle)
 			if !got {
-				t.Errorf("GetReadyForCycle(%d) = false, want true (bufferless should always be ready)",
+				t.Errorf("IsReady(%d) = false, want true (bufferless should always be ready)",
 					tt.cycle)
 			}
 		})
@@ -104,50 +104,8 @@ func TestBufferlessFlowControl_Reset(t *testing.T) {
 		t.Error("CanAcceptPacket should still return true after reset")
 	}
 
-	if !fc.GetReadyForCycle(0) {
-		t.Error("GetReadyForCycle should still return true after reset")
-	}
-}
-
-// TestBufferlessFlowControl_OnPacketAccepted tests packet acceptance callback.
-func TestBufferlessFlowControl_OnPacketAccepted(t *testing.T) {
-	fc := NewBufferlessFlowControl()
-
-	// Call OnPacketAccepted (should be no-op, but shouldn't panic)
-	fc.OnPacketAccepted(0, 0)
-	fc.OnPacketAccepted(10, 15)
-
-	// Verify behavior is unchanged
-	if !fc.CanAcceptPacket(0, 0) {
-		t.Error("CanAcceptPacket should still return true after OnPacketAccepted")
-	}
-}
-
-// TestBufferlessFlowControl_OnPacketBlocked tests packet blocking callback.
-func TestBufferlessFlowControl_OnPacketBlocked(t *testing.T) {
-	fc := NewBufferlessFlowControl()
-
-	// Call OnPacketBlocked (should be no-op, but shouldn't panic)
-	// Note: This should never happen in practice since CanAcceptPacket always returns true
-	fc.OnPacketBlocked(0, 0)
-
-	// Verify behavior is unchanged
-	if !fc.CanAcceptPacket(0, 0) {
-		t.Error("CanAcceptPacket should still return true after OnPacketBlocked")
-	}
-}
-
-// TestBufferlessFlowControl_OnPacketSent tests packet sent callback.
-func TestBufferlessFlowControl_OnPacketSent(t *testing.T) {
-	fc := NewBufferlessFlowControl()
-
-	// Call OnPacketSent (should be no-op, but shouldn't panic)
-	fc.OnPacketSent(0)
-	fc.OnPacketSent(10)
-
-	// Verify behavior is unchanged
-	if !fc.CanAcceptPacket(0, 0) {
-		t.Error("CanAcceptPacket should still return true after OnPacketSent")
+	if !fc.IsReady(0) {
+		t.Error("IsReady should still return true after reset")
 	}
 }
 
@@ -155,12 +113,8 @@ func TestBufferlessFlowControl_OnPacketSent(t *testing.T) {
 func TestBufferlessFlowControl_Stateless(t *testing.T) {
 	fc := NewBufferlessFlowControl()
 
-	// Call various methods in random order
-	fc.OnPacketAccepted(0, 5)
-	fc.OnPacketSent(5)
-	fc.OnPacketBlocked(10, 15)
+	// Call Reset and verify queries still return the same results
 	fc.Reset()
-	fc.OnPacketAccepted(20, 25)
 
 	// All queries should still return the same results
 	if !fc.CanAcceptPacket(0, 0) {
@@ -171,8 +125,8 @@ func TestBufferlessFlowControl_Stateless(t *testing.T) {
 		t.Error("CanAcceptPacket should always return true regardless of cycles")
 	}
 
-	if !fc.GetReadyForCycle(50) {
-		t.Error("GetReadyForCycle should always return true")
+	if !fc.IsReady(50) {
+		t.Error("IsReady should always return true")
 	}
 
 	if !fc.CanSendPacket(10, true) {

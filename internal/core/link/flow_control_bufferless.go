@@ -33,57 +33,19 @@ func NewBufferlessFlowControl() *BufferlessFlowControl {
 
 // CanAcceptPacket always returns true for bufferless flow control.
 // Packets are never rejected by flow control constraints.
-//
-// Parameters:
-//   cycle: current simulation cycle (unused)
-//   targetCycle: target delivery cycle (unused)
-//
-// Returns:
-//   Always true
 func (fc *BufferlessFlowControl) CanAcceptPacket(cycle int, targetCycle int) bool {
 	return true
 }
 
-// OnPacketAccepted is called after a packet is accepted.
-// For bufferless strategy, this is a no-op as there's no state to update.
-func (fc *BufferlessFlowControl) OnPacketAccepted(cycle int, targetCycle int) {
-	// No-op - stateless strategy
-}
-
-// OnPacketBlocked is called when a packet cannot be accepted.
-// For bufferless strategy, this should never happen as CanAcceptPacket always returns true.
-func (fc *BufferlessFlowControl) OnPacketBlocked(cycle int, targetCycle int) {
-	// No-op - should never be called
-}
-
 // CanSendPacket checks if packets should be sent to downstream.
 // For bufferless flow control, this delegates entirely to downstream readiness.
-//
-// Parameters:
-//   cycle: current simulation cycle (unused)
-//   downstreamReady: whether downstream port is ready
-//
-// Returns:
-//   The downstreamReady value unchanged
 func (fc *BufferlessFlowControl) CanSendPacket(cycle int, downstreamReady bool) bool {
 	return downstreamReady
 }
 
-// OnPacketSent is called after packets are sent.
-// For bufferless strategy, this is a no-op as there's no state to update.
-func (fc *BufferlessFlowControl) OnPacketSent(cycle int) {
-	// No-op - stateless strategy
-}
-
-// GetReadyForCycle returns whether the link is ready to accept packets from upstream.
+// IsReady returns whether the link is ready to accept packets from upstream.
 // For bufferless flow control, this always returns true.
-//
-// Parameters:
-//   cycle: current simulation cycle (unused)
-//
-// Returns:
-//   Always true
-func (fc *BufferlessFlowControl) GetReadyForCycle(cycle int) bool {
+func (fc *BufferlessFlowControl) IsReady(cycle int) bool {
 	return true
 }
 

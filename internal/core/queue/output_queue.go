@@ -43,46 +43,7 @@ type OutputQueue struct {
 // outputQueueOutPort implements OutPort interface for OutputQueue.
 type outputQueueOutPort struct {
 	ahead_port.BaseOutPort
-	outputQueue    *OutputQueue
-	pendingPackets map[int][]packet.Packet // Cached packets for future cycles
-}
-
-// GetPackets retrieves all packets for the specified cycle.
-func (p *outputQueueOutPort) GetPackets(cycle int) []packet.Packet {
-	// OutputQueue doesn't have upstream, no waiting needed
-
-	// Check if we have cached packets for this cycle
-	if p.pendingPackets == nil {
-		p.pendingPackets = make(map[int][]packet.Packet)
-	}
-
-	if cached, ok := p.pendingPackets[cycle]; ok {
-		delete(p.pendingPackets, cycle)
-		return cached
-	}
-
-	// Read from channel and filter by cycle
-	var result []packet.Packet
-	if p.OutputChan == nil {
-		return result
-	}
-
-	for {
-		select {
-		case pwc := <-p.OutputChan:
-			if pwc.Cycle == cycle {
-				result = append(result, pwc.Packet)
-			} else if pwc.Cycle > cycle {
-				// Future packet, cache it
-				p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
-			} else {
-				// Past packet - skip it (already processed or stale)
-				continue
-			}
-		default:
-			return result
-		}
-	}
+	outputQueue *OutputQueue
 }
 
 // WaitDone waits for OutputQueue to complete the target cycle.
@@ -100,11 +61,11 @@ func (p *outputQueueOutPort) Plug(in ahead_port.InPort) chan ahead_port.PacketWi
 	return p.BaseOutPort.PlugWithSelf(p, in)
 }
 
-// NewOutputQueue creates a new OutputQueue with the specified buffer size and bandwidth.
+// NewOutputQueue creates a new OutputQueue with the specified capacity and bandwidth.
 // inBandwidth is not used internally but validated for API consistency.
-func NewOutputQueue(bufferSize int, inBandwidth int, outBandwidth int) *OutputQueue {
-	if bufferSize <= 0 {
-		bufferSize = 8
+func NewOutputQueue(capacity int, inBandwidth int, outBandwidth int) *OutputQueue {
+	if capacity <= 0 {
+		capacity = 8
 	}
 	if inBandwidth <= 0 {
 		panic("inBandwidth must be positive")
@@ -114,8 +75,8 @@ func NewOutputQueue(bufferSize int, inBandwidth int, outBandwidth int) *OutputQu
 	}
 
 	oq := &OutputQueue{
-		slots:        make([]packet.PacketWithCycle, 0, bufferSize),
-		capacity:     bufferSize,
+		slots:        make([]packet.PacketWithCycle, 0, capacity),
+		capacity:     capacity,
 		outBandwidth: outBandwidth,
 		done:         -1,
 	}

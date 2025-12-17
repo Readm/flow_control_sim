@@ -5,22 +5,12 @@ import (
 	"math"
 	"sort"
 	"sync"
-	"sync/atomic"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
-
-// readyItem represents a ready state for a specific cycle
-type readyItem struct {
-	cycle int
-	ready bool
-}
-
-// PacketWithCycle is an alias for packet.PacketWithCycle
-type PacketWithCycle = packet.PacketWithCycle
 
 // InputQueue handles packet reception from upstream components.
 // It integrates the storage and flow control logic previously found in Queue.
@@ -35,26 +25,17 @@ type InputQueue struct {
 	queueOutPort ahead_port.OutPort
 
 	// Synchronization state
-	done            int64
-	readyUntil      int64
-	readyQueue      []readyItem // Sorted queue of future ready states
-	lastAccessCycle int         // For debug: tracking monotonic access
-
-	waiterMu sync.Mutex
-	cond     *sync.Cond
-
-	doneMu   sync.Mutex
-	doneCond *sync.Cond
+	componentSync *ahead_port.ComponentSync
 
 	// Array storage fields
-	slots        []PacketWithCycle // Array storage for packets
-	freeBitmap   []bool            // Bitmap marking free slots (true = free, false = occupied)
-	blockReasons []uint            // Block reason bitmap for each slot
+	slots        []packet.PacketWithCycle // Array storage for packets
+	freeBitmap   []bool                   // Bitmap marking free slots (true = free, false = occupied)
+	blockReasons []uint                   // Block reason bitmap for each slot
 
 	// Configuration parameters
-	capacity    int // formerly size
-	bandwidth   int // formerly inBandwidth
-	bitmapWidth int
+	capacity     int // Maximum number of packets that can be stored
+	inBandwidth  int // Maximum packets per cycle that can be received
+	bitmapWidth  int
 
 	// Synchronization for array operations
 	arrayMu sync.Mutex
@@ -88,14 +69,6 @@ func (p *inputQueueInPort) ready(cycle int) bool {
 	return p.inputQueue.ready(cycle)
 }
 
-// sendChan is an internal helper.
-func (p *inputQueueInPort) sendChan() chan<- ahead_port.PacketWithCycle {
-	if p.InputChan == nil {
-		panic("inputQueueInPort.sendChan() called before Plug()")
-	}
-	return p.InputChan
-}
-
 // IsReadyNonBlocking checks if downstream is ready without blocking.
 func (p *inputQueueInPort) IsReadyNonBlocking(cycle int) (ready bool, decided bool) {
 	return p.inputQueue.IsReadyNonBlocking(cycle)
@@ -106,10 +79,10 @@ func (p *inputQueueInPort) Plug(out ahead_port.OutPort) chan ahead_port.PacketWi
 	return p.BaseInPort.PlugWithSelf(p, out)
 }
 
-// NewInputQueue creates a new InputQueue with the specified buffer size and bandwidth parameters.
-func NewInputQueue(bufferSize int, inBandwidth int, outBandwidth int) *InputQueue {
-	if bufferSize <= 0 {
-		bufferSize = 8
+// NewInputQueue creates a new InputQueue with the specified capacity and bandwidth parameters.
+func NewInputQueue(capacity int, inBandwidth int, outBandwidth int) *InputQueue {
+	if capacity <= 0 {
+		capacity = 8
 	}
 	if inBandwidth <= 0 {
 		panic("inBandwidth must be positive")
@@ -117,16 +90,13 @@ func NewInputQueue(bufferSize int, inBandwidth int, outBandwidth int) *InputQueu
 	// outBandwidth is ignored as InputQueue doesn't send downstream automatically
 
 	iq := &InputQueue{
-		done:             -1,
-		readyUntil:       -1,
-		readyQueue:       make([]readyItem, 0),
-		lastAccessCycle:  -1,
-		capacity:         bufferSize,
-		bandwidth:        inBandwidth,
+		componentSync:    ahead_port.NewComponentSync(),
+		capacity:         capacity,
+		inBandwidth:      inBandwidth,
 		bitmapWidth:      1,
-		slots:            make([]PacketWithCycle, bufferSize),
-		freeBitmap:       make([]bool, bufferSize),
-		blockReasons:     make([]uint, bufferSize),
+		slots:            make([]packet.PacketWithCycle, capacity),
+		freeBitmap:       make([]bool, capacity),
+		blockReasons:     make([]uint, capacity),
 		lastCyclePackets: make([]packet.Packet, 0),
 	}
 
@@ -143,7 +113,7 @@ func NewInputQueue(bufferSize int, inBandwidth int, outBandwidth int) *InputQueu
 	// Let's assume for now we don't need a functional OutPort for InputQueue since it consumes packets.
 
 	// Initialize ready state for initial cycles
-	iq.primeReady(bufferSize)
+	iq.componentSync.InitReady(capacity)
 
 	return iq
 }
@@ -195,9 +165,9 @@ func (iq *InputQueue) Tick(cycle int) error {
 	iq.processPackets(receiveChan, cycle, nil, updateUpstreamReady)
 
 	// Ensure Done state is correct
-	currentDone := iq.getDone()
+	currentDone := iq.componentSync.GetDone()
 	if currentDone < cycle {
-		iq.setDone(cycle)
+		iq.componentSync.SetDone(cycle)
 	}
 
 	return nil
@@ -247,7 +217,7 @@ done:
 func (iq *InputQueue) Pick() []packet.Packet {
 	// Reuse logic from Queue.Pick but adapted
 	type packetInfo struct {
-		packet PacketWithCycle
+		packet packet.PacketWithCycle
 		index  int
 	}
 
@@ -339,7 +309,7 @@ func (iq *InputQueue) SetPacketReceivedHook(hook func(packet.Packet)) {
 // EnableAlwaysReady configures the queue to stay ready for all future cycles.
 func (iq *InputQueue) EnableAlwaysReady() {
 	iq.readyOnce.Do(func() {
-		atomic.StoreInt64(&iq.readyUntil, math.MaxInt64)
+		iq.componentSync.SetReadyUntil(math.MaxInt64)
 	})
 }
 
@@ -354,21 +324,24 @@ func (iq *InputQueue) GetVisualState() string {
 	return ""
 }
 
-// ===== Internal synchronization methods (Migrated from Queue) =====
+// ===== Internal synchronization methods =====
 
-func (iq *InputQueue) setDone(cycle int) {
-	atomic.StoreInt64(&iq.done, int64(cycle))
-	iq.doneMu.Lock()
-	if iq.doneCond != nil {
-		iq.doneCond.Broadcast()
-	}
-	iq.doneMu.Unlock()
+// ready checks if InputQueue is ready to receive data for the given cycle.
+func (iq *InputQueue) ready(cycle int) bool {
+	return iq.componentSync.Ready(cycle)
 }
 
-func (iq *InputQueue) getDone() int {
-	return int(atomic.LoadInt64(&iq.done))
+// IsReadyNonBlocking checks ready state without blocking.
+func (iq *InputQueue) IsReadyNonBlocking(cycle int) (ready bool, decided bool) {
+	return iq.componentSync.IsReadyNonBlocking(cycle)
 }
 
+// updateReady updates InputQueue's ready state.
+func (iq *InputQueue) updateReady(cycle int, ready bool) {
+	iq.componentSync.UpdateReady(cycle, ready)
+}
+
+// waitDone waits for upstream to complete the target cycle.
 func (iq *InputQueue) waitDone(targetCycle int) {
 	if iq.inPort.UpstreamOut == nil {
 		return
@@ -382,231 +355,5 @@ func (iq *InputQueue) waitDone(targetCycle int) {
 			return
 		}
 		wdp.WaitDone(targetCycle)
-	}
-}
-
-func (iq *InputQueue) ready(cycle int) bool {
-	if debug.Enabled() {
-		if cycle < iq.lastAccessCycle {
-			panic(fmt.Sprintf("Ready access violation: cycle %d < last %d (must be monotonic)", cycle, iq.lastAccessCycle))
-		}
-		iq.lastAccessCycle = cycle
-	}
-
-	readyUntil := atomic.LoadInt64(&iq.readyUntil)
-	if int64(cycle) < readyUntil {
-		return true
-	}
-
-	iq.waiterMu.Lock()
-	currentReadyUntil := atomic.LoadInt64(&iq.readyUntil)
-	if int64(cycle) < currentReadyUntil {
-		iq.waiterMu.Unlock()
-		return true
-	}
-
-	// Prune logic
-	pruneIdx := 0
-	found := false
-	var result bool
-
-	for i, item := range iq.readyQueue {
-		if item.cycle < cycle {
-			continue
-		}
-		if item.cycle == cycle {
-			result = item.ready
-			found = true
-			pruneIdx = i + 1
-			break
-		}
-		pruneIdx = i
-		break
-	}
-
-	// Handle full prune if everything < cycle
-	if !found && len(iq.readyQueue) > 0 && iq.readyQueue[len(iq.readyQueue)-1].cycle < cycle {
-		pruneIdx = len(iq.readyQueue)
-	}
-
-	if pruneIdx > 0 {
-		if pruneIdx >= len(iq.readyQueue) {
-			iq.readyQueue = nil
-		} else {
-			iq.readyQueue = iq.readyQueue[pruneIdx:]
-		}
-	}
-
-	iq.waiterMu.Unlock()
-
-	if found {
-		return result
-	}
-
-	return iq.waitForReady(cycle)
-}
-
-func (iq *InputQueue) IsReadyNonBlocking(cycle int) (ready bool, decided bool) {
-	if debug.Enabled() {
-		if cycle < iq.lastAccessCycle {
-			panic(fmt.Sprintf("Ready access violation (NB): cycle %d < last %d", cycle, iq.lastAccessCycle))
-		}
-		iq.lastAccessCycle = cycle
-	}
-
-	readyUntil := atomic.LoadInt64(&iq.readyUntil)
-	if int64(cycle) < readyUntil {
-		return true, true
-	}
-
-	iq.waiterMu.Lock()
-	defer iq.waiterMu.Unlock()
-
-	currentReadyUntil := atomic.LoadInt64(&iq.readyUntil)
-	if int64(cycle) < currentReadyUntil {
-		return true, true
-	}
-
-	pruneIdx := 0
-	found := false
-	var result bool
-
-	for i, item := range iq.readyQueue {
-		if item.cycle < cycle {
-			continue
-		}
-		if item.cycle == cycle {
-			result = item.ready
-			found = true
-			pruneIdx = i
-			break
-		}
-		pruneIdx = i
-		break
-	}
-
-	if !found && len(iq.readyQueue) > 0 && iq.readyQueue[len(iq.readyQueue)-1].cycle < cycle {
-		pruneIdx = len(iq.readyQueue)
-	}
-
-	if pruneIdx > 0 {
-		if pruneIdx >= len(iq.readyQueue) {
-			iq.readyQueue = nil
-		} else {
-			iq.readyQueue = iq.readyQueue[pruneIdx:]
-		}
-	}
-
-	if found {
-		return result, true
-	}
-
-	return false, false
-}
-
-func (iq *InputQueue) waitForReady(cycle int) bool {
-	iq.waiterMu.Lock()
-	defer iq.waiterMu.Unlock()
-
-	if iq.cond == nil {
-		iq.cond = sync.NewCond(&iq.waiterMu)
-	}
-
-	for {
-		currentReadyUntil := atomic.LoadInt64(&iq.readyUntil)
-		if int64(cycle) < currentReadyUntil {
-			return true
-		}
-
-		found := false
-		var result bool
-
-		for i, item := range iq.readyQueue {
-			if item.cycle == cycle {
-				result = item.ready
-				found = true
-				if i+1 >= len(iq.readyQueue) {
-					iq.readyQueue = nil
-				} else {
-					iq.readyQueue = iq.readyQueue[i+1:]
-				}
-				break
-			}
-			if item.cycle > cycle {
-				break
-			}
-		}
-
-		if found {
-			return result
-		}
-
-		iq.cond.Wait()
-	}
-}
-
-func (iq *InputQueue) updateReady(cycle int, ready bool) {
-	iq.waiterMu.Lock()
-	defer iq.waiterMu.Unlock()
-
-	currentReadyUntil := atomic.LoadInt64(&iq.readyUntil)
-	if int64(cycle) < currentReadyUntil {
-		return
-	}
-
-	inserted := false
-	if len(iq.readyQueue) == 0 {
-		iq.readyQueue = append(iq.readyQueue, readyItem{cycle, ready})
-		inserted = true
-	} else {
-		if cycle > iq.readyQueue[len(iq.readyQueue)-1].cycle {
-			iq.readyQueue = append(iq.readyQueue, readyItem{cycle, ready})
-			inserted = true
-		} else {
-			for i, item := range iq.readyQueue {
-				if item.cycle == cycle {
-					iq.readyQueue[i].ready = ready
-					inserted = true
-					break
-				}
-				if item.cycle > cycle {
-					iq.readyQueue = append(iq.readyQueue[:i+1], iq.readyQueue[i:]...)
-					iq.readyQueue[i] = readyItem{cycle, ready}
-					inserted = true
-					break
-				}
-			}
-			if !inserted {
-				iq.readyQueue = append(iq.readyQueue, readyItem{cycle, ready})
-			}
-		}
-	}
-
-	for len(iq.readyQueue) > 0 {
-		head := iq.readyQueue[0]
-		if int64(head.cycle) == currentReadyUntil {
-			if head.ready {
-				currentReadyUntil++
-				iq.readyQueue = iq.readyQueue[1:]
-			} else {
-				break
-			}
-		} else if int64(head.cycle) < currentReadyUntil {
-			iq.readyQueue = iq.readyQueue[1:]
-		} else {
-			break
-		}
-	}
-
-	atomic.StoreInt64(&iq.readyUntil, currentReadyUntil)
-
-	if iq.cond != nil {
-		iq.cond.Broadcast()
-	}
-}
-
-func (iq *InputQueue) primeReady(limit int) {
-	for cycle := 0; cycle <= limit; cycle++ {
-		iq.updateReady(cycle, true)
 	}
 }
