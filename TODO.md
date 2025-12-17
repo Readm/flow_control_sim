@@ -1,7 +1,6 @@
 # Network Core TODO List
- 帮我做如下优化：我们要求Ready信息也必须是单增的，以此，来简化ReadyMap，变为一个ReadyQueue。帮我设计一个ReadyUntil和ReadyQueue的协作模式。
-ReadyQueue的意思是，它存储每个Cycle的Ready的信息，如果ReadyUntil已经超过里面的Cycle，或者，cycle的Ready已经被读取过，那么删除它。这样避免它
-持续的增长。在Debug模式下，检查Ready（cycle）访问必须是按照cycle单增的，不过可以跳过，例如，1,3,4,5,10。用最简洁的话解释你的设计。
+排查,InQueue目前没有提前Ready
+Link还是不对：Process封装干掉，依旧使用wg update ready，很慢
 ## P0 - 立即需要
 
 - [ ] **统计和监控API**
