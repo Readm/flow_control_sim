@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -35,27 +36,31 @@ func TestInputQueueReceive(t *testing.T) {
 
 	iq := NewInputQueue(10, 2)
 
-	// Create upstream mock
-	_, upstreamOutPort := createTestPorts(8)
-	// InputQueue's InPort connects to Upstream's OutPort
-	iq.QueueInPort().Plug(upstreamOutPort)
+	// Create upstream mock and connect
+	upstream := newMockUpstream()
+	ahead_port.Connect(upstream, iq)
 
-	mockOut := upstreamOutPort.(*mockOutPort)
+	// Declare InputQueue ready for cycle 1 (downstream signals this)
+	iq.fromUpstream.UpdateReady(1, true)
 
-	// Send packet from upstream
+	// Send packet from upstream for cycle 1
 	pkt := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"}
-	select {
-	case <-ctx.Done():
-		t.Fatal("timeout before sending packet")
-	default:
-		sendPacketToOutPort(t, upstreamOutPort, 0, pkt)
-		mockOut.SetDone(0)
-	}
 
-	// Process cycle 0
+	// Run upstream operations in goroutine
+	go func() {
+		if !upstream.SendPacket(1, pkt) {
+			t.Error("Failed to send packet")
+		}
+		upstream.MarkDone(1)
+	}()
+
+	// Process cycle 1 (will wait for upstream done on cycle 0, which is satisfied)
 	done := make(chan error, 1)
 	go func() {
-		done <- iq.Tick(0)
+		// First tick cycle 0 (no packets expected)
+		_ = iq.Tick(0)
+		// Then tick cycle 1 (receives packet)
+		done <- iq.Tick(1)
 	}()
 
 	select {
@@ -109,6 +114,3 @@ func TestInputQueuePick(t *testing.T) {
 		t.Errorf("expected queue to be empty after pick, got %d", iq.Length())
 	}
 }
-
-// Helper to simulate upstream behavior
-// createTestPorts is in queue_test_helpers_test.go

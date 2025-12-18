@@ -1,767 +1,755 @@
-# Port API 双层接口设计方案
+# Port API 统一设计方案
 
 ## 文档信息
 - **创建日期**: 2025-12-18
-- **状态**: 设计方案
-- **相关问题**: OutputQueue/Link 无法通过 OutPort 接口输出数据，被迫访问内部实现
+- **更新日期**: 2025-12-18
+- **状态**: 设计方案 - 准备实施
+- **相关问题**: Port接口和实现重复，同步逻辑分散在各组件中
 
 ---
 
 ## 1. 问题背景
 
-### 1.1 当前设计的困境
+### 1.1 当前设计的问题
 
-**外部接口（公共 API）**：
+**接口重复**：
+- `InPort` 和 `OutPort` 是两个独立的接口
+- `BaseInPort` 和 `BaseOutPort` 提供了几乎相同的实现（channel管理、Plug逻辑）
+- 每个组件都要定义自己的port类型（linkInPort、inputQueueInPort等）
+
+**同步逻辑分散**：
+- Link和Queue都需要自己处理Ready/Done同步
+- ComponentSync逻辑嵌入在各个组件中
+- 代码重复，难以维护
+
+**连接复杂**：
+- 需要Plug模式来建立连接
+- 每个连接需要两个Port实例（upstream的OutPort + downstream的InPort）
+- 连接关系不直观
+
+### 1.2 设计目标
+
+1. **Port作为独立实体**：Port是连接两个组件的桥梁，不属于任何组件
+2. **一个连接一个Port**：两个组件之间只需要一个Port实例
+3. **类型安全**：通过接口视图防止误用API
+4. **同步逻辑集中**：所有Ready/Done逻辑由Port管理
+5. **组件简化**：Link/Queue只关注业务逻辑，不处理同步
+
+---
+
+## 2. 核心设计理念
+
+### 2.1 概念模型
+
+```
+[OutputQueue] ----<Port1>---- [Link] ----<Port2>---- [InputQueue]
+      |              |           |             |            |
+   上游视角       独立实体      双重角色      独立实体     下游视角
+  (InPort)                   (OutPort)                  (OutPort)
+                             (InPort)
+```
+
+**关键理解**：
+- **Port是独立实体**：不属于任何组件，是组件之间的连接
+- **Port有两个视角**：
+  - 上游组件看到的是 `InPort` 接口（发送数据）
+  - 下游组件看到的是 `OutPort` 接口（接收数据）
+- **一个Port实例**：同时实现两个接口
+
+### 2.2 架构图
+
+```
+                     Port内部结构
+          ┌─────────────────────────────────┐
+          │   channel: chan PacketWithCycle │
+          │   upstreamDone: int             │
+          │   downstreamReady: map[int]bool │
+          │   pendingPackets: cache         │
+          └─────────────────────────────────┘
+                      ▲         ▲
+                      │         │
+          实现InPort接口    实现OutPort接口
+                      │         │
+          ┌───────────┴─┐   ┌──┴──────────┐
+          │  上游视角    │   │   下游视角   │
+          │  Send()     │   │  Receive()  │
+          │  MarkDone() │   │  WaitDone()  │
+          └─────────────┘   └──────────────┘
+```
+
+---
+
+## 3. 接口设计
+
+### 3.1 InPort接口（上游组件视角）
+
 ```go
+// InPort - 上游组件的视角（发送方）
 type InPort interface {
-    TrySendPacket(cycle int, pkt PacketWithCycle) bool
-    IsReadyNonBlocking(cycle int) (ready bool, decided bool)
-    Plug(out OutPort) chan PacketWithCycle
-}
+    // Send 发送数据到下游
+    // 返回 true 表示发送成功，false 表示下游未准备好
+    Send(cycle int, pkt PacketWithCycle) bool
 
+    // IsDownstreamReady 检查下游是否ready（非阻塞）
+    // 返回 (ready, decided):
+    //   - ready: 下游是否准备好
+    //   - decided: 是否已做出决策（false表示会阻塞）
+    IsDownstreamReady(cycle int) (ready bool, decided bool)
+
+    // MarkDone 标记上游完成了指定周期
+    // 用于通知下游可以安全读取该周期的数据
+    MarkDone(cycle int)
+}
+```
+
+### 3.2 OutPort接口（下游组件视角）
+
+```go
+// OutPort - 下游组件的视角（接收方）
 type OutPort interface {
-    GetPackets(cycle int) []packet.Packet
-    Plug(in InPort) chan PacketWithCycle
+    // Receive 从上游接收数据
+    // 返回属于指定cycle的所有packets
+    Receive(cycle int) []packet.Packet
+
+    // WaitUpstreamDone 等待上游完成指定周期
+    // 阻塞直到上游调用了 MarkDone(cycle)
+    WaitUpstreamDone(cycle int)
+
+    // GetUpstreamDone 获取上游已完成的周期
+    // 非阻塞，用于查询状态
+    GetUpstreamDone() int
+
+    // UpdateReady 更新下游的ready状态
+    // 用于告知上游自己是否准备好接收数据
+    UpdateReady(cycle int, ready bool)
 }
 ```
 
-**问题**：
-- ✅ **InPort** 完整：外部可以 `TrySendPacket()` 发送数据，模块内部可以从 channel 读取
-- ❌ **OutPort** 不完整：外部可以 `GetPackets()` 读取数据，但**模块内部没有 API 输出数据**
+### 3.3 Port结构体（统一实现）
 
-### 1.2 当前的 Workaround（破坏封装）
-
-**OutputQueue** (output_queue.go:123):
 ```go
-// 被迫访问 BaseOutPort 内部字段
-if oq.outPort.BaseOutPort.DownstreamIn.TrySendPacket(pkt.Cycle, pkt) {
-              ^^^^^^^^^^^^  ^^^^^^^^^^^^
-              直接访问内部实现，破坏封装！
-    sent++
+type Port struct {
+    // ===== 通信通道 =====
+    channel chan PacketWithCycle
+
+    // ===== 上游Done状态 =====
+    upstreamDone   int
+    upstreamDoneCh chan int
+    upstreamDoneMu sync.Mutex
+
+    // ===== 下游Ready状态 =====
+    downstreamReady   map[int]bool
+    downstreamReadyCh map[int]chan bool
+    downstreamReadyMu sync.Mutex
+
+    // ===== 数据缓存（OutPort功能）=====
+    pendingPackets map[int][]packet.Packet
+    pendingMu      sync.Mutex
 }
-```
 
-**Link** (link.go:338):
-```go
-// 同样被迫访问内部字段
-if l.outPort.DownstreamIn.TrySendPacket(targetCycle, pwc) {
-             ^^^^^^^^^^^^
-    return true
-}
-```
+// Port同时实现InPort和OutPort接口
+func (p *Port) Send(cycle int, pkt PacketWithCycle) bool { ... }
+func (p *Port) IsDownstreamReady(cycle int) (bool, bool) { ... }
+func (p *Port) MarkDone(cycle int) { ... }
 
-### 1.3 根本原因
+func (p *Port) Receive(cycle int) []packet.Packet { ... }
+func (p *Port) WaitUpstreamDone(cycle int) { ... }
+func (p *Port) GetUpstreamDone() int { ... }
+func (p *Port) UpdateReady(cycle int, ready bool) { ... }
 
-**外部视角 vs 内部视角的冲突**：
-
-```
-外部视角（接口使用者）：
-[Module A]                    [Module B]
-  OutPort  ---------------->   InPort
-        GetPackets()      TrySendPacket()
-  ✅ 单向接口合理（类型安全）
-
-内部视角（模块实现者）：
-[Module A 内部]
-  生成数据 --?--> OutPort
-              ❌ 缺少内部输出 API！
-
-[Module B 内部]
-  InPort --?--> 处理数据
-         ✅ 可以从 channel 读取
+// 提供视图转换（类型安全）
+func (p *Port) AsInPort() InPort { return p }
+func (p *Port) AsOutPort() OutPort { return p }
 ```
 
 ---
 
-## 2. 设计目标
+## 4. 组件设计
 
-1. **保持外部接口的类型安全**：InPort/OutPort 的方向性约束
-2. **提供完整的内部 API**：模块可以通过接口完成所有操作
-3. **各模块自行实现逻辑**：接口只定义契约，实现由模块决定
-4. **不破坏封装**：不需要访问 `BaseOutPort.DownstreamIn` 等内部字段
+### 4.1 Link结构
 
----
-
-## 3. 双层接口设计方案
-
-### 3.1 架构概览
-
-```
-                    外部使用                          内部使用
-                    ========                          ========
-
-  外部模块  ---->  InPort/OutPort  <----  模块边界  ----> InPortInternal/OutPortInternal
-                  (公共接口)                              (内部接口)
-
-                  类型安全                                 API 完整
-                  方向约束                                 自由实现
-```
-
-### 3.2 接口定义
-
-#### 公共接口层（给外部模块使用）
-
-```go
-// InPort 是模块的输入端口（外部视角）
-// 外部模块调用 TrySendPacket() 向此端口发送数据
-type InPort interface {
-    // TrySendPacket 尝试向此端口发送数据包
-    // 由外部模块（upstream）调用
-    TrySendPacket(cycle int, pkt PacketWithCycle) bool
-
-    // IsReadyNonBlocking 检查此端口是否准备好接收数据
-    // 由外部模块调用
-    IsReadyNonBlocking(cycle int) (ready bool, decided bool)
-
-    // Plug 连接到上游 OutPort
-    Plug(out OutPort) chan PacketWithCycle
-}
-
-// OutPort 是模块的输出端口（外部视角）
-// 外部模块调用 GetPackets() 从此端口读取数据
-type OutPort interface {
-    // GetPackets 从此端口获取数据包
-    // 由外部模块（downstream）调用
-    GetPackets(cycle int) []packet.Packet
-
-    // Plug 连接到下游 InPort
-    Plug(in InPort) chan PacketWithCycle
-}
-```
-
-#### 内部接口层（给模块实现者使用）
-
-```go
-// InPortInternal 扩展了 InPort，提供模块内部使用的方法
-// 模块实现者使用此接口在内部处理接收到的数据
-type InPortInternal interface {
-    InPort  // 继承公共接口
-
-    // ReceiveFromUpstream 从上游读取数据（模块内部调用）
-    // 这是模块内部从 InPort 获取数据的方法
-    //
-    // 实现说明：
-    // - 从内部 channel 读取数据包
-    // - 可能会等待上游完成必要的 cycle
-    // - 返回属于指定 cycle 的所有数据包
-    ReceiveFromUpstream(cycle int) []packet.Packet
-}
-
-// OutPortInternal 扩展了 OutPort，提供模块内部使用的方法
-// 模块实现者使用此接口将数据输出到 OutPort
-type OutPortInternal interface {
-    OutPort  // 继承公共接口
-
-    // SendToDownstream 向下游发送数据（模块内部调用）
-    // 这是模块内部向 OutPort 输出数据的方法
-    //
-    // 参数：
-    //   cycle: 数据包的目标 cycle
-    //   pkt: 要发送的数据包
-    //
-    // 返回：
-    //   true: 发送成功
-    //   false: 下游未准备好，发送失败
-    //
-    // 实现说明：
-    // - 检查下游的 ready 状态
-    // - 如果 ready，调用下游 InPort.TrySendPacket()
-    // - 如果不 ready，返回 false（由调用者决定如何处理）
-    SendToDownstream(cycle int, pkt packet.Packet) bool
-}
-```
-
-### 3.3 基础实现类
-
-```go
-// BaseInPort 提供 InPortInternal 的默认实现
-// 模块可以嵌入此结构体并覆盖特定方法
-type BaseInPort struct {
-    InputChan   chan PacketWithCycle  // 接收数据的 channel
-    UpstreamOut OutPort               // 上游 OutPort 引用
-}
-
-func (p *BaseInPort) ReceiveFromUpstream(cycle int) []packet.Packet {
-    // 默认实现：从 InputChan 读取数据
-    var result []packet.Packet
-    for {
-        select {
-        case pwc := <-p.InputChan:
-            if pwc.Cycle == cycle {
-                result = append(result, pwc.Packet)
-            }
-        default:
-            return result
-        }
-    }
-}
-
-// BaseOutPort 提供 OutPortInternal 的默认实现
-type BaseOutPort struct {
-    OutputChan   chan PacketWithCycle  // 发送数据的 channel（与 downstream 的 InputChan 相同）
-    DownstreamIn InPort                // 下游 InPort 引用
-}
-
-func (p *BaseOutPort) SendToDownstream(cycle int, pkt packet.Packet) bool {
-    if p.DownstreamIn == nil {
-        return false  // 没有连接下游
-    }
-
-    pwc := PacketWithCycle{
-        Cycle:  cycle,
-        Packet: pkt,
-    }
-
-    // 调用下游的公共接口方法
-    return p.DownstreamIn.TrySendPacket(cycle, pwc)
-}
-```
-
----
-
-## 4. 使用示例
-
-### 4.1 OutputQueue 的重构
-
-**之前（破坏封装）**：
-```go
-type OutputQueue struct {
-    outPort *outputQueueOutPort
-}
-
-func (oq *OutputQueue) Tick(cycle int) error {
-    for _, pkt := range oq.slots {
-        // ❌ 直接访问内部字段
-        if oq.outPort.BaseOutPort.DownstreamIn.TrySendPacket(pkt.Cycle, pkt) {
-            sent++
-        }
-    }
-}
-```
-
-**之后（使用内部接口）**：
-```go
-type OutputQueue struct {
-    outPort OutPortInternal  // 使用内部接口
-}
-
-func (oq *OutputQueue) Tick(cycle int) error {
-    for _, pkt := range oq.slots {
-        // ✅ 通过接口方法发送
-        if oq.outPort.SendToDownstream(pkt.Cycle, pkt.Packet) {
-            sent++
-        } else {
-            // 下游未准备好，保留数据包
-            newSlots = append(newSlots, pkt)
-        }
-    }
-}
-```
-
-### 4.2 Link 的重构
-
-**之前（访问内部字段）**：
 ```go
 type Link struct {
-    inPort  *linkInPort
-    outPort *linkOutPort
+    sourceID, targetID int
+    latency, bandwidth int
+
+    // ===== Port引用（接口类型，类型安全）=====
+    fromUpstream OutPort  // Link从上游接收数据（只能调用Receive等方法）
+    toDownstream InPort   // Link向下游发送数据（只能调用Send等方法）
+
+    // ===== Link自己的业务逻辑 =====
+    flowControl    FlowControlStrategy
+    pendingPackets []PacketWithCycle
 }
 
-func (l *Link) Tick(cycle int) error {
-    // ❌ 直接访问 upstream OutPort
-    packets = l.inPort.UpstreamOut.GetPackets(waitCycle)
-
-    // ❌ 直接访问 downstream InPort
-    l.outPort.DownstreamIn.TrySendPacket(targetCycle, pwc)
-}
-```
-
-**之后（使用内部接口）**：
-```go
-type Link struct {
-    inPort  InPortInternal   // 使用内部接口
-    outPort OutPortInternal  // 使用内部接口
-}
-
-func (l *Link) Tick(cycle int) error {
-    // ✅ 通过内部接口读取
-    packets := l.inPort.ReceiveFromUpstream(waitCycle)
-
-    // ✅ 通过内部接口发送
-    for _, pkt := range packets {
-        if !l.outPort.SendToDownstream(targetCycle, pkt) {
-            // 处理发送失败
-        }
+// NewLink 创建Link（不创建Port）
+func NewLink(sourceID, targetID, latency, bandwidth int) *Link {
+    return &Link{
+        sourceID:  sourceID,
+        targetID:  targetID,
+        latency:   latency,
+        bandwidth: bandwidth,
+        // Port由外部设置
     }
 }
+
+// SetUpstreamPort 设置上游Port（Link作为下游）
+func (l *Link) SetUpstreamPort(port OutPort) {
+    l.fromUpstream = port
+}
+
+// SetDownstreamPort 设置下游Port（Link作为上游）
+func (l *Link) SetDownstreamPort(port InPort) {
+    l.toDownstream = port
+}
 ```
 
-### 4.3 InputQueue 的实现
+### 4.2 InputQueue结构
 
 ```go
 type InputQueue struct {
-    inPort InPortInternal  // 使用内部接口
+    capacity, inBandwidth int
+
+    // ===== Port引用（只能接收）=====
+    fromUpstream OutPort  // 只能调用Receive、WaitUpstreamDone、UpdateReady
+
+    // ===== Queue自己的业务逻辑 =====
+    slots      []PacketWithCycle
+    freeBitmap []bool
 }
 
-func (iq *InputQueue) Tick(cycle int) error {
-    // ✅ 通过内部接口接收数据
-    packets := iq.inPort.ReceiveFromUpstream(cycle)
+func (iq *InputQueue) SetUpstreamPort(port OutPort) {
+    iq.fromUpstream = port
+}
+```
 
-    // 处理接收到的数据包
-    for _, pkt := range packets {
-        iq.storePacket(pkt)
+### 4.3 OutputQueue结构
+
+```go
+type OutputQueue struct {
+    capacity, outBandwidth int
+
+    // ===== Port引用（只能发送）=====
+    toDownstream InPort  // 只能调用Send、IsDownstreamReady、MarkDone
+
+    // ===== Queue自己的业务逻辑 =====
+    slots []PacketWithCycle
+}
+
+func (oq *OutputQueue) SetDownstreamPort(port InPort) {
+    oq.toDownstream = port
+}
+```
+
+---
+
+## 5. 网络构建
+
+### 5.1 手动构建方式
+
+```go
+func BuildNetwork() {
+    // 1. 创建所有组件
+    node0Queue := NewOutputQueue(capacity=32, outBandwidth=8)
+    link := NewLink(sourceID=0, targetID=1, latency=5, bandwidth=10)
+    node1Queue := NewInputQueue(capacity=32, inBandwidth=8)
+
+    // 2. 创建Port并连接
+
+    // Port1: OutputQueue -> Link
+    port1 := NewPort()
+    node0Queue.SetDownstreamPort(port1.AsInPort())   // OutputQueue作为上游
+    link.SetUpstreamPort(port1.AsOutPort())          // Link作为下游
+
+    // Port2: Link -> InputQueue
+    port2 := NewPort()
+    link.SetDownstreamPort(port2.AsInPort())         // Link作为上游
+    node1Queue.SetUpstreamPort(port2.AsOutPort())    // InputQueue作为下游
+}
+```
+
+### 5.2 简洁的Connect函数
+
+```go
+// Connect 连接两个组件
+// upstream: 上游组件（必须有 SetDownstreamPort 方法）
+// downstream: 下游组件（必须有 SetUpstreamPort 方法）
+// 返回创建的Port实例
+func Connect(upstream, downstream Component) *Port {
+    port := NewPort()
+
+    // 设置上游组件的下游Port（InPort视图）
+    if setter, ok := upstream.(interface{ SetDownstreamPort(InPort) }); ok {
+        setter.SetDownstreamPort(port.AsInPort())
+    }
+
+    // 设置下游组件的上游Port（OutPort视图）
+    if setter, ok := downstream.(interface{ SetUpstreamPort(OutPort) }); ok {
+        setter.SetUpstreamPort(port.AsOutPort())
+    }
+
+    return port
+}
+
+// 使用示例
+func BuildNetwork_V2() {
+    node0Queue := NewOutputQueue(32, 8)
+    link := NewLink(0, 1, 5, 10)
+    node1Queue := NewInputQueue(32, 8)
+
+    // 一行代码创建连接
+    Connect(node0Queue, link)
+    Connect(link, node1Queue)
+}
+```
+
+---
+
+## 6. 组件实现示例
+
+### 6.1 Link.Tick实现
+
+```go
+func (l *Link) Tick(cycle int) error {
+    // 1. 从上游接收数据（使用OutPort接口）
+    if l.fromUpstream != nil {
+        waitCycle := cycle - l.latency
+        if waitCycle >= 0 {
+            l.fromUpstream.WaitUpstreamDone(waitCycle)
+        }
+        packets := l.fromUpstream.Receive(waitCycle)
+
+        // 2. Link业务逻辑：延迟、流控
+        for _, pkt := range packets {
+            targetCycle := cycle + l.latency
+
+            // 检查下游是否ready
+            if l.toDownstream != nil {
+                ready, _ := l.toDownstream.IsDownstreamReady(targetCycle)
+                if ready {
+                    // 发送到下游（使用InPort接口）
+                    l.toDownstream.Send(targetCycle, PacketWithCycle{
+                        Cycle:  targetCycle,
+                        Packet: pkt,
+                    })
+                } else {
+                    // 下游未ready，缓存等待重试
+                    l.pendingPackets = append(l.pendingPackets, ...)
+                }
+            }
+        }
+
+        // 3. 更新自己的ready状态（告诉上游）
+        if l.toDownstream != nil {
+            downstreamReady, _ := l.toDownstream.IsDownstreamReady(cycle+1)
+            l.fromUpstream.UpdateReady(cycle+1, downstreamReady)
+        }
+    }
+
+    // 4. 标记完成（告诉下游）
+    if l.toDownstream != nil {
+        l.toDownstream.MarkDone(cycle)
     }
 
     return nil
 }
 ```
 
----
+### 6.2 InputQueue.Tick实现
 
-## 5. 接口对比
-
-### 5.1 外部使用对比
-
-| 场景 | 使用的接口 | 调用的方法 | 说明 |
-|------|-----------|-----------|------|
-| OutputQueue → Link | `OutPort` / `InPort` | `TrySendPacket` | 外部连接，使用公共接口 |
-| Link → InputQueue | `OutPort` / `InPort` | `GetPackets` / `TrySendPacket` | 外部连接，使用公共接口 |
-
-**类型安全**：
 ```go
-func connect(out OutPort, in InPort) {
-    // ✅ 编译器保证方向正确
-    // ❌ 无法错误地传入两个 InPort 或两个 OutPort
-}
-```
-
-### 5.2 内部使用对比
-
-| 组件 | 使用的接口 | 调用的方法 | 说明 |
-|------|-----------|-----------|------|
-| OutputQueue 内部 | `OutPortInternal` | `SendToDownstream` | 输出数据到自己的 OutPort |
-| Link 内部（读取） | `InPortInternal` | `ReceiveFromUpstream` | 从自己的 InPort 读取数据 |
-| Link 内部（发送） | `OutPortInternal` | `SendToDownstream` | 输出数据到自己的 OutPort |
-| InputQueue 内部 | `InPortInternal` | `ReceiveFromUpstream` | 从自己的 InPort 读取数据 |
-
-**API 完整性**：
-```go
-type OutputQueue struct {
-    outPort OutPortInternal  // ✅ 可以调用 SendToDownstream
-}
-
-type InputQueue struct {
-    inPort InPortInternal   // ✅ 可以调用 ReceiveFromUpstream
-}
-```
-
----
-
-## 6. 设计优势
-
-### 6.1 类型安全
-
-**编译时检查方向正确性**：
-```go
-// ✅ 正确
-func connect(out OutPort, in InPort) { ... }
-network.Connect(queue.outPort, link.inPort)
-
-// ❌ 编译错误：类型不匹配
-network.Connect(queue.inPort, link.inPort)  // 两个 InPort
-```
-
-### 6.2 接口隔离
-
-**外部使用者只看到需要的方法**：
-```go
-// downstream 使用 OutPort
-var upstream OutPort = link.outPort
-packets := upstream.GetPackets(cycle)  // ✅ 可以
-upstream.SendToDownstream(...)         // ❌ 编译错误（方法不存在）
-```
-
-### 6.3 实现灵活性
-
-**各模块可以自定义内部行为**：
-```go
-// Link 可以特殊实现 SendToDownstream
-type linkOutPort struct {
-    BaseOutPort
-    link *Link
-}
-
-func (p *linkOutPort) SendToDownstream(cycle int, pkt packet.Packet) bool {
-    // Link 的特殊逻辑：检查流控策略
-    if !p.link.flowControl.CanSendPacket(cycle) {
-        return false
+func (iq *InputQueue) Tick(cycle int) error {
+    if iq.fromUpstream == nil {
+        return nil
     }
 
-    // 调用默认实现
-    return p.BaseOutPort.SendToDownstream(cycle, pkt)
-}
-```
-
-### 6.4 封装完整性
-
-**不再需要访问内部字段**：
-```go
-// ❌ 之前：破坏封装
-oq.outPort.BaseOutPort.DownstreamIn.TrySendPacket(...)
-
-// ✅ 之后：通过接口
-oq.outPort.SendToDownstream(...)
-```
-
----
-
-## 7. 实现计划
-
-### 7.1 重构范围
-
-需要修改的文件：
-
-1. **ahead_port/port.go**
-   - 添加 `InPortInternal` 和 `OutPortInternal` 接口
-   - 更新 `BaseInPort` 实现 `InPortInternal`
-   - 更新 `BaseOutPort` 实现 `OutPortInternal`
-
-2. **queue/input_queue.go**
-   - 修改 `InputQueue` 使用 `InPortInternal`
-   - 更新 `Tick` 方法使用 `ReceiveFromUpstream()`
-
-3. **queue/output_queue.go**
-   - 修改 `OutputQueue` 使用 `OutPortInternal`
-   - 更新 `Tick` 方法使用 `SendToDownstream()`
-
-4. **link/link.go**
-   - 修改 `Link` 的 port 字段类型
-   - 更新 `Tick` 和 `processPackets` 方法
-
-5. **network/network.go**
-   - 确保 `Connect` 方法的类型签名仍然使用公共接口
-   - 验证外部连接逻辑
-
-### 7.2 实现步骤
-
-#### Phase 1: 定义新接口
-- [ ] 在 `ahead_port/port.go` 中添加 `InPortInternal` 和 `OutPortInternal`
-- [ ] 为 `BaseInPort` 添加 `ReceiveFromUpstream()` 实现
-- [ ] 为 `BaseOutPort` 添加 `SendToDownstream()` 实现
-
-#### Phase 2: 更新 Queue
-- [ ] 修改 `InputQueue` 使用 `InPortInternal`
-- [ ] 修改 `OutputQueue` 使用 `OutPortInternal`
-- [ ] 运行 queue 包的测试
-
-#### Phase 3: 更新 Link
-- [ ] 修改 `Link` 的 port 类型
-- [ ] 重构 `processPackets` 方法
-- [ ] 运行 link 包的测试
-
-#### Phase 4: 验证集成
-- [ ] 运行 network 包的测试
-- [ ] 运行 node 包的测试
-- [ ] 修复 deadlock 问题
-- [ ] 验证 benchmark 测试
-
-#### Phase 5: 清理
-- [ ] 移除所有对 `BaseOutPort.DownstreamIn` 的直接访问
-- [ ] 更新文档和注释
-- [ ] 代码审查
-
-### 7.3 兼容性考虑
-
-**向后兼容**：
-- 公共接口（`InPort`/`OutPort`）保持不变
-- 外部使用代码（如测试）无需修改
-- 只有内部实现需要更新
-
-**渐进式迁移**：
-- 可以逐个组件迁移
-- 新旧实现可以共存（通过类型断言）
-
----
-
-## 8. 与 ComponentSync 的关系
-
-### 8.1 职责分离
-
-| 组件 | 职责 | 关注点 |
-|------|------|--------|
-| **Port 接口** | 数据流动 | Send/Receive 数据包 |
-| **ComponentSync** | 状态同步 | Ready/Done 状态管理 |
-
-**它们是正交的**：
-- Port 不关心同步状态（由 ComponentSync 管理）
-- ComponentSync 不关心数据流动（由 Port 管理）
-
-### 8.2 协同工作
-
-```go
-// InPort 实现中使用 ComponentSync
-type linkInPort struct {
-    BaseInPort
-    link *Link
-}
-
-func (p *linkInPort) TrySendPacket(cycle int, pkt PacketWithCycle) bool {
-    // 1. 检查 ready 状态（使用 ComponentSync）
-    if !p.link.componentSync.Ready(cycle) {
-        return false
-    }
-
-    // 2. 发送数据（使用 Port channel）
-    p.InputChan <- pkt
-    return true
-}
-```
-
-**分工明确**：
-- `ComponentSync.Ready()` 负责同步决策
-- `InputChan <- pkt` 负责数据传递
-
----
-
-## 9. 常见问题（FAQ）
-
-### Q1: 为什么不直接统一为一个 Port 接口？
-
-**答**：统一接口会失去类型安全：
-```go
-// 统一接口的问题
-type Port interface {
-    Send(...) bool
-    Receive(...) []Packet
-}
-
-// ❌ 这些调用都是合法的，但语义错误
-inputQueue.port.Send(...)      // InputQueue 不应该输出
-outputQueue.port.Receive(...)  // OutputQueue 不应该接收
-```
-
-双层设计保留了方向性约束，同时提供完整 API。
-
-### Q2: Internal 接口是否应该导出（大写）？
-
-**答**：应该导出。理由：
-- 其他包的组件需要使用（如 queue、link 包）
-- 这是公开的扩展接口，不是私有实现细节
-- 通过命名（Internal）已经清晰表明了用途
-
-### Q3: 是否所有组件都必须使用 Internal 接口？
-
-**答**：不是。
-- **外部连接**：使用公共接口（`InPort`/`OutPort`）
-- **内部实现**：使用内部接口（`InPortInternal`/`OutPortInternal`）
-
-示例：
-```go
-// Network.Connect 仍然使用公共接口
-func (n *Network) Connect(out OutPort, in InPort) { ... }
-
-// OutputQueue 内部使用内部接口
-type OutputQueue struct {
-    outPort OutPortInternal
-}
-```
-
-### Q4: BaseOutPort.SendToDownstream 和直接访问 DownstreamIn 有什么区别？
-
-**答**：封装和可维护性。
-
-**之前（直接访问）**：
-```go
-oq.outPort.BaseOutPort.DownstreamIn.TrySendPacket(...)
-// - 依赖内部实现细节
-// - 如果 DownstreamIn 字段改名或移除，所有调用处都要改
-// - 破坏封装
-```
-
-**之后（接口方法）**：
-```go
-oq.outPort.SendToDownstream(...)
-// - 通过接口契约
-// - 内部实现可以改变，不影响调用者
-// - 遵循封装原则
-```
-
-### Q5: 这会影响性能吗？
-
-**答**：几乎没有影响。
-- 接口方法调用在 Go 中开销很小（虚方法表查找）
-- 之前也是通过方法调用（`TrySendPacket`），现在只是换了个入口
-- 编译器可能会内联简单的方法
-
----
-
-## 10. 总结
-
-### 10.1 设计原则
-
-1. **外部简洁，内部完整**：公共接口保持简单，内部接口提供完整功能
-2. **类型安全优先**：编译时检查，防止方向错误
-3. **封装完整性**：不暴露内部实现细节
-4. **实现灵活性**：各模块可以自定义行为
-
-### 10.2 关键改进
-
-| 方面 | 改进前 | 改进后 |
-|------|--------|--------|
-| **API 完整性** | ❌ OutPort 缺少输出方法 | ✅ OutPortInternal 提供 SendToDownstream |
-| **封装** | ❌ 直接访问 BaseOutPort 字段 | ✅ 通过接口方法 |
-| **类型安全** | ✅ 已有 InPort/OutPort 区分 | ✅ 保持 |
-| **实现灵活性** | ⚠️  受限于基类实现 | ✅ 可以覆盖内部方法 |
-
-### 10.3 下一步行动
-
-1. Review 本设计文档，确认方案
-2. 按照 Phase 1-5 实施重构
-3. 验证所有测试通过
-4. 解决 deadlock 和数据包传输问题
-5. 运行性能分析测试
-
----
-
-## 附录：完整代码示例
-
-### A.1 完整的接口定义
-
-```go
-package ahead_port
-
-import "github.com/Readm/flow_sim/internal/dataflow/packet"
-
-// ===== 公共接口（外部使用）=====
-
-type InPort interface {
-    TrySendPacket(cycle int, pkt PacketWithCycle) bool
-    IsReadyNonBlocking(cycle int) (ready bool, decided bool)
-    Plug(out OutPort) chan PacketWithCycle
-}
-
-type OutPort interface {
-    GetPackets(cycle int) []packet.Packet
-    Plug(in InPort) chan PacketWithCycle
-}
-
-// ===== 内部接口（模块实现使用）=====
-
-type InPortInternal interface {
-    InPort
-    ReceiveFromUpstream(cycle int) []packet.Packet
-}
-
-type OutPortInternal interface {
-    OutPort
-    SendToDownstream(cycle int, pkt packet.Packet) bool
-}
-
-// ===== 基础实现 =====
-
-type BaseInPort struct {
-    InputChan   chan PacketWithCycle
-    UpstreamOut OutPort
-    self        InPort
-}
-
-func (p *BaseInPort) ReceiveFromUpstream(cycle int) []packet.Packet {
-    // 实现数据接收逻辑
-    var result []packet.Packet
-    for {
-        select {
-        case pwc := <-p.InputChan:
-            if pwc.Cycle == cycle {
-                result = append(result, pwc.Packet)
-            }
-        default:
-            return result
+    // 1. 等待上游完成
+    iq.fromUpstream.WaitUpstreamDone(cycle - 1)
+
+    // 2. 接收数据（使用OutPort接口）
+    packets := iq.fromUpstream.Receive(cycle)
+
+    // 3. Queue业务逻辑：存储packets
+    for _, pkt := range packets {
+        slot := iq.findFreeSlot()
+        if slot >= 0 {
+            iq.slots[slot] = PacketWithCycle{Cycle: cycle, Packet: pkt}
+            iq.freeBitmap[slot] = false
         }
     }
-}
 
-type BaseOutPort struct {
-    OutputChan   chan PacketWithCycle
-    DownstreamIn InPort
-    self         OutPort
-}
+    // 4. 告诉上游自己的ready状态
+    hasCapacity := iq.Length() < iq.Capacity()
+    iq.fromUpstream.UpdateReady(cycle+1, hasCapacity)
 
-func (p *BaseOutPort) SendToDownstream(cycle int, pkt packet.Packet) bool {
-    if p.DownstreamIn == nil {
-        return false
-    }
-
-    pwc := PacketWithCycle{
-        Cycle:  cycle,
-        Packet: pkt,
-    }
-
-    return p.DownstreamIn.TrySendPacket(cycle, pwc)
+    return nil
 }
 ```
 
-### A.2 OutputQueue 完整示例
+### 6.3 OutputQueue.Tick实现
 
 ```go
-package queue
-
-import "github.com/Readm/flow_sim/internal/core/ahead_port"
-
-type OutputQueue struct {
-    slots        []packet.PacketWithCycle
-    capacity     int
-    outBandwidth int
-    outPort      ahead_port.OutPortInternal  // 使用内部接口
-}
-
-type outputQueueOutPort struct {
-    ahead_port.BaseOutPort
-    outputQueue *OutputQueue
-}
-
-func (p *outputQueueOutPort) WaitDone(targetCycle int) {
-    p.outputQueue.waitDone(targetCycle)
-}
-
-func (p *outputQueueOutPort) Plug(in ahead_port.InPort) chan ahead_port.PacketWithCycle {
-    return p.BaseOutPort.PlugWithSelf(p, in)
-}
-
-func NewOutputQueue(capacity int, inBandwidth int, outBandwidth int) *OutputQueue {
-    oq := &OutputQueue{
-        slots:        make([]packet.PacketWithCycle, 0, capacity),
-        capacity:     capacity,
-        outBandwidth: outBandwidth,
-    }
-
-    oq.outPort = &outputQueueOutPort{
-        outputQueue: oq,
-    }
-
-    return oq
-}
-
 func (oq *OutputQueue) Tick(cycle int) error {
-    sent := 0
-    newSlots := make([]packet.PacketWithCycle, 0, len(oq.slots))
+    if oq.toDownstream == nil {
+        return nil
+    }
 
+    sent := 0
+    newSlots := make([]PacketWithCycle, 0)
+
+    // 尝试发送slots中的packets
     for _, pkt := range oq.slots {
         if sent >= oq.outBandwidth {
             newSlots = append(newSlots, pkt)
             continue
         }
 
-        // ✅ 通过内部接口发送
-        if oq.outPort.SendToDownstream(pkt.Cycle, pkt.Packet) {
+        // 发送到下游（使用InPort接口）
+        if oq.toDownstream.Send(pkt.Cycle, pkt) {
             sent++
         } else {
-            // 下游未准备好，保留数据包
+            // 下游未ready，保留packet
             newSlots = append(newSlots, pkt)
         }
     }
 
     oq.slots = newSlots
-    oq.setDone(cycle)
+
+    // 标记完成
+    oq.toDownstream.MarkDone(cycle)
+
     return nil
+}
+```
+
+---
+
+## 7. 类型安全保证
+
+### 7.1 编译时检查
+
+```go
+// ✅ 正确用法
+queue := NewInputQueue(32, 8)
+queue.fromUpstream.Receive(0)        // ✅ OutPort有这个方法
+queue.fromUpstream.UpdateReady(1, true)  // ✅ OutPort有这个方法
+
+// ❌ 编译错误
+queue.fromUpstream.Send(0, pkt)      // ❌ 编译失败：OutPort没有Send方法
+queue.fromUpstream.MarkDone(0)       // ❌ 编译失败：OutPort没有MarkDone方法
+```
+
+### 7.2 接口视图对照表
+
+| 组件角色 | 持有的接口类型 | 可以调用的方法 | 不能调用的方法 |
+|---------|--------------|--------------|---------------|
+| **上游组件**（发送方） | `InPort` | `Send()`, `IsDownstreamReady()`, `MarkDone()` | `Receive()`, `WaitUpstreamDone()`, `UpdateReady()` |
+| **下游组件**（接收方） | `OutPort` | `Receive()`, `WaitUpstreamDone()`, `GetUpstreamDone()`, `UpdateReady()` | `Send()`, `IsDownstreamReady()`, `MarkDone()` |
+| **Link**（双重角色） | `OutPort` (from上游)<br>`InPort` (to下游) | 两端分别有不同的方法 | - |
+
+---
+
+## 8. 设计优势
+
+### 8.1 Port作为独立实体
+
+**之前**：
+- Port属于组件（Link有inPort/outPort成员）
+- 一个连接需要两个Port实例
+- Plug模式复杂
+
+**之后**：
+- Port是独立的连接对象
+- 一个连接只需一个Port实例
+- 直接设置引用，简单清晰
+
+### 8.2 同步逻辑集中
+
+**之前**：
+- 每个组件都要处理ComponentSync
+- Ready/Done逻辑分散
+- 代码重复
+
+**之后**：
+- 所有同步逻辑在Port内部
+- 组件只调用Port的API
+- Link/Queue只关注业务逻辑
+
+### 8.3 类型安全
+
+**通过接口视图防止误用**：
+- InputQueue只能获得OutPort视图（不能发送）
+- OutputQueue只能获得InPort视图（不能接收）
+- Link两端有不同的视图
+
+### 8.4 代码简化
+
+| 方面 | 之前 | 之后 |
+|-----|------|------|
+| **Port类型数量** | BaseInPort + BaseOutPort | 统一的Port |
+| **组件port字段** | linkInPort + linkOutPort | fromUpstream + toDownstream |
+| **同步逻辑** | 组件内部处理 | Port内部处理 |
+| **连接代码** | Plug(upstream, downstream) | Connect(upstream, downstream) |
+
+---
+
+## 9. 实现计划
+
+### Phase 1: Port核心实现
+- [ ] 实现Port结构体
+- [ ] 实现InPort接口方法（Send、IsDownstreamReady、MarkDone）
+- [ ] 实现OutPort接口方法（Receive、WaitUpstreamDone、GetUpstreamDone、UpdateReady）
+- [ ] 实现AsInPort/AsOutPort视图转换
+- [ ] 编写Port单元测试
+
+### Phase 2: Link重构
+- [ ] 修改Link结构体（使用接口类型引用Port）
+- [ ] 重构Link.Tick方法
+- [ ] 移除linkInPort/linkOutPort类型
+- [ ] 更新Link测试
+
+### Phase 3: Queue重构
+- [ ] 修改InputQueue结构体
+- [ ] 修改OutputQueue结构体
+- [ ] 重构Tick方法
+- [ ] 移除inputQueueInPort等类型
+- [ ] 更新Queue测试
+
+### Phase 4: Network集成
+- [ ] 实现Connect函数
+- [ ] 更新Network.AddLink等方法
+- [ ] 更新Network测试
+- [ ] 集成测试
+
+### Phase 5: 清理
+- [ ] 移除BaseInPort/BaseOutPort
+- [ ] 移除Plug相关代码
+- [ ] 移除ComponentSync从组件中（移到Port）
+- [ ] 更新文档
+
+---
+
+## 10. 兼容性考虑
+
+### 10.1 接口定义变化
+
+**InPort接口**：
+- 移除：`Plug()`
+- 新增：`Send()`, `IsDownstreamReady()`, `MarkDone()`
+
+**OutPort接口**：
+- 移除：`Plug()`
+- 保留：`GetPackets()` → 改为 `Receive()`
+- 新增：`WaitUpstreamDone()`, `GetUpstreamDone()`, `UpdateReady()`
+
+### 10.2 迁移策略
+
+**不兼容改动**：
+- 这是一次完全重构，不保证向后兼容
+- 所有使用Port的代码都需要更新
+
+**渐进式迁移不可行**：
+- Port是核心接口，必须一次性切换
+- 建议在单独的分支进行重构
+
+---
+
+## 11. 总结
+
+### 11.1 核心思想
+
+1. **Port是独立实体**：连接两个组件的桥梁
+2. **一Port双视图**：通过接口保证类型安全
+3. **同步逻辑集中**：Port管理Ready/Done，组件简化
+4. **组件只引用**：不创建Port，只持有接口引用
+
+### 11.2 关键改进
+
+| 方面 | 改进 |
+|-----|------|
+| **架构清晰度** | Port作为独立实体，责任明确 |
+| **代码复用** | 统一Port实现，消除重复 |
+| **类型安全** | 接口视图防止误用API |
+| **维护性** | 同步逻辑集中，易于调试 |
+| **简洁性** | 一个连接一个Port，代码更少 |
+
+### 11.3 下一步
+
+1. 审查本设计文档
+2. 开始Phase 1实现Port核心
+3. 逐步重构Link/Queue
+4. 运行所有测试
+5. 性能验证
+
+---
+
+## 附录：完整示例代码
+
+### A.1 Port完整定义
+
+```go
+package ahead_port
+
+import (
+    "sync"
+    "github.com/Readm/flow_sim/internal/dataflow/packet"
+)
+
+type Port struct {
+    // 通信通道
+    channel chan PacketWithCycle
+
+    // 上游Done状态
+    upstreamDone   int
+    upstreamDoneCh chan int
+    upstreamDoneMu sync.Mutex
+
+    // 下游Ready状态
+    downstreamReady   map[int]bool
+    downstreamReadyCh map[int]chan bool
+    downstreamReadyMu sync.Mutex
+
+    // 数据缓存
+    pendingPackets map[int][]packet.Packet
+    pendingMu      sync.Mutex
+}
+
+func NewPort() *Port {
+    return &Port{
+        channel:           make(chan PacketWithCycle, 8),
+        upstreamDone:      -1,
+        upstreamDoneCh:    make(chan int, 1),
+        downstreamReady:   make(map[int]bool),
+        downstreamReadyCh: make(map[int]chan bool),
+        pendingPackets:    make(map[int][]packet.Packet),
+    }
+}
+
+// ===== InPort接口实现 =====
+
+func (p *Port) Send(cycle int, pkt PacketWithCycle) bool {
+    // 检查下游ready
+    ready, decided := p.IsDownstreamReady(cycle)
+    if !decided || !ready {
+        return false
+    }
+    // 发送到channel
+    p.channel <- pkt
+    return true
+}
+
+func (p *Port) IsDownstreamReady(cycle int) (bool, bool) {
+    p.downstreamReadyMu.Lock()
+    ready, decided := p.downstreamReady[cycle]
+    p.downstreamReadyMu.Unlock()
+    return ready, decided
+}
+
+func (p *Port) MarkDone(cycle int) {
+    p.upstreamDoneMu.Lock()
+    if cycle > p.upstreamDone {
+        p.upstreamDone = cycle
+        select {
+        case p.upstreamDoneCh <- cycle:
+        default:
+        }
+    }
+    p.upstreamDoneMu.Unlock()
+}
+
+// ===== OutPort接口实现 =====
+
+func (p *Port) Receive(cycle int) []packet.Packet {
+    // 1. 检查缓存
+    p.pendingMu.Lock()
+    if cached, ok := p.pendingPackets[cycle]; ok {
+        delete(p.pendingPackets, cycle)
+        p.pendingMu.Unlock()
+        return cached
+    }
+    p.pendingMu.Unlock()
+
+    // 2. 从channel读取
+    var result []packet.Packet
+    for {
+        select {
+        case pwc := <-p.channel:
+            if pwc.Cycle == cycle {
+                result = append(result, pwc.Packet)
+            } else if pwc.Cycle > cycle {
+                // 缓存未来的packet
+                p.pendingMu.Lock()
+                p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
+                p.pendingMu.Unlock()
+            }
+        default:
+            return result
+        }
+    }
+}
+
+func (p *Port) WaitUpstreamDone(cycle int) {
+    for {
+        p.upstreamDoneMu.Lock()
+        if p.upstreamDone >= cycle {
+            p.upstreamDoneMu.Unlock()
+            return
+        }
+        p.upstreamDoneMu.Unlock()
+        <-p.upstreamDoneCh
+    }
+}
+
+func (p *Port) GetUpstreamDone() int {
+    p.upstreamDoneMu.Lock()
+    defer p.upstreamDoneMu.Unlock()
+    return p.upstreamDone
+}
+
+func (p *Port) UpdateReady(cycle int, ready bool) {
+    p.downstreamReadyMu.Lock()
+    p.downstreamReady[cycle] = ready
+    if ch, ok := p.downstreamReadyCh[cycle]; ok {
+        select {
+        case ch <- ready:
+        default:
+        }
+        delete(p.downstreamReadyCh, cycle)
+    }
+    p.downstreamReadyMu.Unlock()
+}
+
+// ===== 视图转换 =====
+
+func (p *Port) AsInPort() InPort {
+    return p
+}
+
+func (p *Port) AsOutPort() OutPort {
+    return p
+}
+```
+
+### A.2 Connect函数实现
+
+```go
+func Connect(upstream, downstream interface{}) *Port {
+    port := NewPort()
+
+    // 设置上游
+    if setter, ok := upstream.(interface{ SetDownstreamPort(InPort) }); ok {
+        setter.SetDownstreamPort(port.AsInPort())
+    } else {
+        panic("upstream does not have SetDownstreamPort method")
+    }
+
+    // 设置下游
+    if setter, ok := downstream.(interface{ SetUpstreamPort(OutPort) }); ok {
+        setter.SetUpstreamPort(port.AsOutPort())
+    } else {
+        panic("downstream does not have SetUpstreamPort method")
+    }
+
+    return port
 }
 ```

@@ -65,18 +65,10 @@ func TestCreateFlowControlStrategy_Unknown(t *testing.T) {
 // TestNewLinkWithFlowControl_Buffered tests creating Link with BufferedFlowControl.
 func TestNewLinkWithFlowControl_Buffered(t *testing.T) {
 	fc := NewBufferedFlowControl(3, 2)
-	link, linkIn, linkOut := NewLinkWithFlowControl(0, 1, 3, 2, fc)
+	link := NewLinkWithFlowControl(0, 1, 3, 2, fc)
 
 	if link == nil {
 		t.Fatal("NewLinkWithFlowControl returned nil link")
-	}
-
-	if linkIn == nil {
-		t.Fatal("NewLinkWithFlowControl returned nil inPort")
-	}
-
-	if linkOut == nil {
-		t.Fatal("NewLinkWithFlowControl returned nil outPort")
 	}
 
 	if link.latency != 3 {
@@ -91,18 +83,10 @@ func TestNewLinkWithFlowControl_Buffered(t *testing.T) {
 // TestNewLinkWithFlowControl_Bufferless tests creating Link with BufferlessFlowControl.
 func TestNewLinkWithFlowControl_Bufferless(t *testing.T) {
 	fc := NewBufferlessFlowControl()
-	link, linkIn, linkOut := NewLinkWithFlowControl(0, 1, 0, 1, fc)
+	link := NewLinkWithFlowControl(0, 1, 0, 1, fc)
 
 	if link == nil {
 		t.Fatal("NewLinkWithFlowControl returned nil link")
-	}
-
-	if linkIn == nil {
-		t.Fatal("NewLinkWithFlowControl returned nil inPort")
-	}
-
-	if linkOut == nil {
-		t.Fatal("NewLinkWithFlowControl returned nil outPort")
 	}
 
 	// Verify the link uses bufferless flow control
@@ -149,18 +133,10 @@ func TestNewLinkWithFlowControl_InvalidParams(t *testing.T) {
 
 // TestNewLink_DefaultsToBuffered tests that NewLink creates BufferedFlowControl by default.
 func TestNewLink_DefaultsToBuffered(t *testing.T) {
-	link, linkIn, linkOut := NewLink(0, 1, 3, 2)
+	link := NewLink(0, 1, 3, 2)
 
 	if link == nil {
 		t.Fatal("NewLink returned nil link")
-	}
-
-	if linkIn == nil {
-		t.Fatal("NewLink returned nil inPort")
-	}
-
-	if linkOut == nil {
-		t.Fatal("NewLink returned nil outPort")
 	}
 
 	// The default NewLink should create a BufferedFlowControl
@@ -190,9 +166,9 @@ func TestFactoryIntegration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fc := CreateFlowControlStrategy(tt.strategyType, tt.latency, tt.bandwidth)
-			link, linkIn, linkOut := NewLinkWithFlowControl(0, 1, tt.latency, tt.bandwidth, fc)
+			link := NewLinkWithFlowControl(0, 1, tt.latency, tt.bandwidth, fc)
 
-			if link == nil || linkIn == nil || linkOut == nil {
+			if link == nil {
 				t.Fatal("Factory integration failed to create link")
 			}
 

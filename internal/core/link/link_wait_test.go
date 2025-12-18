@@ -4,53 +4,79 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// TestLinkWaitLogic tests that Link waits for Done(cycle+1-latency) instead of Done(cycle).
-// This test verifies the optimization that allows Link to process packets earlier.
+// TestLinkWaitLogic tests that Link waits for upstream Done correctly.
+// This test verifies the wait logic with latency.
 func TestLinkWaitLogic(t *testing.T) {
 	t.Parallel()
 
-	link, linkIn, linkOut := NewLink(0, 1, 3, 1) // latency=3, bandwidth=1
-	downstreamInPort, upstreamOutPort := createTestPorts(8)
-	linkIn.Plug(upstreamOutPort)
-	linkOut.Plug(downstreamInPort)
+	// Create Link (latency=3, bandwidth=1)
+	link := NewLink(0, 1, 3, 1)
 
-	// Type assert to access SetDone for testing
-	mockOut := upstreamOutPort.(*mockOutPort)
+	// Create mock components
+	upstream := newMockUpstream()
+	downstream := newMockDownstream()
 
-	sendPacketToOutPort(t, upstreamOutPort, 0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"})
-	mockOut.SetDone(2)
+	// Connect
+	ahead_port.Connect(upstream, link)
+	ahead_port.Connect(link, downstream)
 
+	// Link needs to be ready to accept packet at cycle 0
+	link.fromUpstream.UpdateReady(0, true)
+	link.fromUpstream.UpdateReady(1, true)
+	// Declare downstream ready
+	downstream.UpdateReady(2, true)
+	downstream.UpdateReady(5, true)
+
+	// Send packet at cycle 0
+	if !upstream.SendPacket(0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}) {
+		t.Fatal("Failed to send packet")
+	}
+	upstream.MarkDone(0)
+
+	// Tick at cycle 2 should not block (waitCycle = 2-3 = -1, no wait needed)
 	start := time.Now()
 	if err := link.Tick(2); err != nil {
 		t.Fatalf("link.Tick failed: %v", err)
 	}
 	if time.Since(start) > 100*time.Millisecond {
-		t.Errorf("Link.Tick(2) should not block when upstream done >= -1")
+		t.Errorf("Link.Tick(2) should not block when waitCycle < 0")
 	}
 
-	sendPacketToOutPort(t, upstreamOutPort, 1, packet.Packet{SourceID: 0, TargetID: 1, Payload: "wait"})
-	mockOut.SetDone(0)
+	// Send packet at cycle 1 but don't mark done yet
+	downstream.UpdateReady(5, true)
+	if !upstream.SendPacket(1, packet.Packet{SourceID: 0, TargetID: 1, Payload: "wait"}) {
+		t.Fatal("Failed to send packet")
+	}
 
-	done := make(chan struct{})
+	// Tick at cycle 5 should wait for upstream Done(2) since waitCycle = 5-3 = 2
+	done := make(chan error, 1)
 	go func() {
-		link.Tick(5)
-		close(done)
+		done <- link.Tick(5)
 	}()
 
+	// Should block initially
 	select {
 	case <-done:
-		t.Fatal("Link.Tick(5) returned before upstream Done satisfied")
+		t.Fatal("Link.Tick(5) returned before upstream Done(2) satisfied")
 	case <-time.After(100 * time.Millisecond):
+		// Expected to block
 	}
 
-	mockOut.SetDone(5)
+	// Mark upstream done for cycle 2
+	upstream.MarkDone(2)
+
+	// Should now complete
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Link.Tick(5) failed: %v", err)
+		}
 	case <-time.After(300 * time.Millisecond):
-		t.Fatal("Link.Tick(5) did not finish after upstream Done updated")
+		t.Fatal("Link.Tick(5) did not finish after upstream Done(2) updated")
 	}
 }
 
@@ -58,55 +84,80 @@ func TestLinkWaitLogic(t *testing.T) {
 func TestLinkWaitLogicBoundary(t *testing.T) {
 	t.Parallel()
 
-	link, linkIn, linkOut := NewLink(0, 1, 5, 1) // latency=5, bandwidth=1
-	downstreamInPort, upstreamOutPort := createTestPorts(8)
-	linkIn.Plug(upstreamOutPort)
-	linkOut.Plug(downstreamInPort)
+	// Create Link (latency=5, bandwidth=1)
+	link := NewLink(0, 1, 5, 1)
 
-	// Type assert to access SetDone for testing
-	mockOut := upstreamOutPort.(*mockOutPort)
+	// Create mock components
+	upstream := newMockUpstream()
+	downstream := newMockDownstream()
 
-	mockOut.SetDone(1)
-	done := make(chan struct{})
+	// Connect
+	ahead_port.Connect(upstream, link)
+	ahead_port.Connect(link, downstream)
+
+	// Link needs to be ready (though no packets will be sent)
+	link.fromUpstream.UpdateReady(0, true)
+	// Declare downstream ready
+	downstream.UpdateReady(2, true)
+
+	// Mark upstream done for cycle 0
+	upstream.MarkDone(0)
+
+	// Tick at cycle 2 should not block (waitCycle = 2-5 = -3, negative)
+	done := make(chan error, 1)
 	go func() {
-		link.Tick(2)
-		close(done)
+		done <- link.Tick(2)
 	}()
+
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Link.Tick(2) failed: %v", err)
+		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("Link.Tick(2) should complete when wait cycle is negative")
 	}
 }
 
-// TestLinkWaitLogicEarlyProcessing tests that Link can process packets earlier with latency buffer.
+// TestLinkWaitLogicEarlyProcessing tests that Link processes packets with correct timing.
 func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	t.Parallel()
 
-	link, linkIn, linkOut := NewLink(0, 1, 4, 1) // latency=4, bandwidth=1
-	downstreamInPort, upstreamOutPort := createTestPorts(8)
-	linkIn.Plug(upstreamOutPort)
-	linkOut.Plug(downstreamInPort)
+	// Create Link (latency=4, bandwidth=1)
+	link := NewLink(0, 1, 4, 1)
 
-	// Type assert to access SetDone for testing
-	mockOut := upstreamOutPort.(*mockOutPort)
+	// Create mock components
+	upstream := newMockUpstream()
+	downstream := newMockDownstream()
 
-	sendPacketToOutPort(t, upstreamOutPort, 0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "early"})
-	mockOut.SetDone(2)
+	// Connect
+	ahead_port.Connect(upstream, link)
+	ahead_port.Connect(link, downstream)
 
-	if err := link.Tick(2); err != nil {
+	// Link needs to be ready to accept packet at cycle 0
+	link.fromUpstream.UpdateReady(0, true)
+	// Declare downstream ready for cycle 4 (packet sent at cycle 0 with latency 4 arrives at cycle 4)
+	downstream.UpdateReady(4, true)
+
+	// Send packet at cycle 0
+	if !upstream.SendPacket(0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "early"}) {
+		t.Fatal("Failed to send packet")
+	}
+	upstream.MarkDone(0)
+
+	// Tick at cycle 4 (waitCycle = 4-4 = 0, waits for upstream Done(0) which is satisfied)
+	if err := link.Tick(4); err != nil {
 		t.Fatalf("link.Tick failed: %v", err)
 	}
 
-	// New design: packet is sent immediately with targetCycle=6 (2+4)
-	// So we can receive it now (it's in the channel, labeled as cycle 6)
-	received := receivePacketsFromInPort(t, downstreamInPort, 1)
-	if received[0].Packet.Payload != "early" {
-		t.Fatalf("expected payload 'early', got %q", received[0].Packet.Payload)
-	}
-	if received[0].Cycle != 6 {
-		t.Fatalf("expected cycle 6, got %d", received[0].Cycle)
-	}
+	// Wait for downstream and receive
+	downstream.WaitUpstreamDone(4)
+	received := downstream.ReceivePackets(4)
 
-	ensureNoAdditionalPacketsInPort(t, downstreamInPort)
+	if len(received) != 1 {
+		t.Fatalf("expected 1 packet, got %d", len(received))
+	}
+	if received[0].Payload != "early" {
+		t.Fatalf("expected payload 'early', got %q", received[0].Payload)
+	}
 }

@@ -2,8 +2,6 @@ package queue
 
 import (
 	"fmt"
-	"sync"
-	"sync/atomic"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
@@ -12,57 +10,30 @@ import (
 )
 
 // OutputQueue is a simple wrapper for buffering and sending packets to downstream.
-// It acts as a bridge between Node's packet generation and the network's OutPort interface.
+// It acts as a bridge between Node's packet generation and the network.
 // This is NOT a full Queue component - it only handles output direction.
 //
 // Design:
 // - Packets are injected via InjectPackets() by the Node
 // - Packets are stored in a simple array with capacity limit
 // - Tick() sends packets to downstream respecting bandwidth limits
-// - Exposes an OutPort interface for network connections
 type OutputQueue struct {
-	// Storage
+	// ===== Port reference (not owned) =====
+	toDownstream ahead_port.InPort // Send to downstream
+
+	// ===== Storage =====
 	slots    []packet.PacketWithCycle // Array storage for packets
 	capacity int                      // Maximum capacity
 
-	// Bandwidth control
+	// ===== Configuration parameters =====
 	outBandwidth int // Max packets per cycle to send
 
-	// Port for downstream connection
-	outPort *outputQueueOutPort
-
-	// Hooks
+	// ===== Hooks =====
 	onPacketSent func(packet.Packet)
-
-	// Synchronization
-	done     int64      // Done cycle (atomic)
-	doneMu   sync.Mutex // Protects done updates
-	doneCond *sync.Cond // Condition variable for WaitDone
-}
-
-// outputQueueOutPort implements OutPort interface for OutputQueue.
-type outputQueueOutPort struct {
-	ahead_port.BaseOutPort
-	outputQueue *OutputQueue
-}
-
-// WaitDone waits for OutputQueue to complete the target cycle.
-func (p *outputQueueOutPort) WaitDone(targetCycle int) {
-	p.outputQueue.waitDone(targetCycle)
-}
-
-// GetDone returns OutputQueue's current done cycle.
-func (p *outputQueueOutPort) GetDone() int {
-	return p.outputQueue.getDone()
-}
-
-// Plug overrides BaseOutPort.Plug to pass self.
-func (p *outputQueueOutPort) Plug(in ahead_port.InPort) chan ahead_port.PacketWithCycle {
-	return p.BaseOutPort.PlugWithSelf(p, in)
 }
 
 // NewOutputQueue creates a new OutputQueue with the specified capacity and bandwidth.
-// inBandwidth is not used internally but validated for API consistency.
+// Port must be set separately using SetDownstreamPort, or via Connect().
 func NewOutputQueue(capacity int, inBandwidth int, outBandwidth int) *OutputQueue {
 	if capacity <= 0 {
 		capacity = 8
@@ -74,41 +45,28 @@ func NewOutputQueue(capacity int, inBandwidth int, outBandwidth int) *OutputQueu
 		panic("outBandwidth must be positive")
 	}
 
-	oq := &OutputQueue{
+	return &OutputQueue{
 		slots:        make([]packet.PacketWithCycle, 0, capacity),
 		capacity:     capacity,
 		outBandwidth: outBandwidth,
-		done:         -1,
 	}
-	oq.doneCond = sync.NewCond(&oq.doneMu)
-
-	oq.outPort = &outputQueueOutPort{
-		outputQueue: oq,
-	}
-
-	return oq
 }
 
-// QueueInPort returns nil - OutputQueue doesn't have an input port.
-// This method exists for API compatibility but should not be used.
-func (oq *OutputQueue) QueueInPort() ahead_port.InPort {
-	return nil
-}
-
-// QueueOutPort returns the OutPort for downstream connections.
-func (oq *OutputQueue) QueueOutPort() ahead_port.OutPort {
-	return oq.outPort
+// SetDownstreamPort sets the port for sending data to downstream.
+// OutputQueue acts as upstream for this port.
+func (oq *OutputQueue) SetDownstreamPort(port ahead_port.InPort) {
+	oq.toDownstream = port
 }
 
 // Tick sends up to outBandwidth packets to downstream.
+// This is dramatically simpler than the old implementation because Port handles all synchronization.
 func (oq *OutputQueue) Tick(cycle int) error {
-	// If no downstream connected, just mark done
-	if oq.outPort.BaseOutPort.DownstreamIn == nil {
-		oq.setDone(cycle)
+	// If no downstream connected, nothing to do
+	if oq.toDownstream == nil {
 		return nil
 	}
 
-	// Send up to outBandwidth packets
+	// ===== 1. Send up to outBandwidth packets =====
 	sent := 0
 	newSlots := make([]packet.PacketWithCycle, 0, len(oq.slots))
 
@@ -119,20 +77,29 @@ func (oq *OutputQueue) Tick(cycle int) error {
 			continue
 		}
 
-		// Try to send packet (blocks on ready check, returns false if not ready)
-		if oq.outPort.SendToDownstream(pkt) {
+		// Try to send packet
+		pwc := ahead_port.PacketWithCycle{
+			Cycle:  cycle,
+			Packet: pkt.Packet,
+		}
+		if oq.toDownstream.TrySend(cycle, pwc) {
 			sent++
 			if oq.onPacketSent != nil {
 				oq.onPacketSent(pkt.Packet)
 			}
+			debug.Logf("OutputQueue: Sent packet: Src=%d Dst=%d at cycle %d", pkt.Packet.SourceID, pkt.Packet.TargetID, cycle)
 		} else {
 			// Not ready, keep packet for next cycle
 			newSlots = append(newSlots, pkt)
+			debug.Logf("OutputQueue: Downstream not ready, buffered packet: Src=%d Dst=%d at cycle %d", pkt.Packet.SourceID, pkt.Packet.TargetID, cycle)
 		}
 	}
 
 	oq.slots = newSlots
-	oq.setDone(cycle)
+
+	// ===== 2. Mark this cycle as done for downstream =====
+	oq.toDownstream.MarkDone(cycle)
+
 	return nil
 }
 
@@ -177,29 +144,6 @@ func (oq *OutputQueue) SetPacketSentHook(hook func(packet.Packet)) {
 	oq.onPacketSent = hook
 }
 
-// setDone sets the done cycle and broadcasts to waiters.
-func (oq *OutputQueue) setDone(cycle int) {
-	oq.doneMu.Lock()
-	atomic.StoreInt64(&oq.done, int64(cycle))
-	oq.doneCond.Broadcast()
-	oq.doneMu.Unlock()
-}
-
-// getDone returns the current done cycle.
-func (oq *OutputQueue) getDone() int {
-	return int(atomic.LoadInt64(&oq.done))
-}
-
-// waitDone blocks until done >= targetCycle using condition variable.
-func (oq *OutputQueue) waitDone(targetCycle int) {
-	oq.doneMu.Lock()
-	defer oq.doneMu.Unlock()
-
-	for oq.getDone() < targetCycle {
-		oq.doneCond.Wait()
-	}
-}
-
 // GetVisualState returns the visual representation of this output queue.
 func (oq *OutputQueue) GetVisualState() string {
 	if visualization.VisualizationMode == "none" {
@@ -207,7 +151,6 @@ func (oq *OutputQueue) GetVisualState() string {
 	}
 
 	if visualization.VisualizationMode == "ascii" {
-		// 格式: [len/cap]
 		return fmt.Sprintf("[%d/%d]", oq.Length(), oq.Capacity())
 	}
 

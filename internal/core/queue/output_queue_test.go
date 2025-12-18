@@ -106,7 +106,7 @@ func TestInjectPacketsOverflow(t *testing.T) {
 	}
 }
 
-// TestTickWithoutOutPort tests Tick when outPort is not set.
+// TestTickWithoutOutPort tests Tick when port is not set.
 func TestTickWithoutOutPort(t *testing.T) {
 	t.Parallel()
 
@@ -115,7 +115,7 @@ func TestTickWithoutOutPort(t *testing.T) {
 	packets := []packet.Packet{{SourceID: 1, TargetID: 2, Payload: "test"}}
 	oq.InjectPackets(0, packets)
 
-	// Should not panic when outPort is nil
+	// Should not panic when port is nil
 	err := oq.Tick(0)
 	if err != nil {
 		t.Fatalf("Tick failed: %v", err)
@@ -133,14 +133,12 @@ func TestTickSendPackets(t *testing.T) {
 
 	oq := NewOutputQueue(10, 2, 2)
 
-	// Create a simple downstream InPort to receive packets (not a full Queue)
-	downstreamPort := &testInPort{
-		ready:   true,
-		packets: make([]packet.PacketWithCycle, 0),
-	}
+	// Create downstream mock and connect
+	downstream := newMockDownstream()
+	ahead_port.Connect(oq, downstream)
 
-	// Connect OutputQueue's OutPort to downstream InPort using Plug
-	ch := oq.QueueOutPort().Plug(downstreamPort)
+	// Declare downstream ready
+	downstream.UpdateReady(0, true)
 
 	// Inject packets
 	packets := []packet.Packet{
@@ -164,50 +162,14 @@ func TestTickSendPackets(t *testing.T) {
 		t.Fatalf("expected length 0 after Tick, got %d", oq.Length())
 	}
 
-	// Verify packets were sent to channel
-	if len(ch) != 2 {
-		t.Fatalf("expected 2 packets in channel, got %d", len(ch))
+	// Wait for downstream and receive
+	downstream.WaitUpstreamDone(0)
+	received := downstream.ReceivePackets(0)
+
+	// Verify packets were received
+	if len(received) != 2 {
+		t.Fatalf("expected 2 packets received, got %d", len(received))
 	}
-
-	// Read packets from channel
-	receivedCount := 0
-	for i := 0; i < 2; i++ {
-		select {
-		case <-ch:
-			receivedCount++
-		default:
-		}
-	}
-
-	if receivedCount != 2 {
-		t.Fatalf("expected 2 packets received, got %d", receivedCount)
-	}
-}
-
-// testInPort is a simple test implementation of InPort
-type testInPort struct {
-	ahead_port.BaseInPort
-	ready   bool
-	packets []packet.PacketWithCycle
-}
-
-func (t *testInPort) TrySendPacket(cycle int, pkt ahead_port.PacketWithCycle) bool {
-	if !t.ready {
-		return false
-	}
-	if t.InputChan == nil {
-		panic("testInPort.TrySendPacket() called before Plug()")
-	}
-	t.InputChan <- pkt
-	return true
-}
-
-func (t *testInPort) IsReadyNonBlocking(cycle int) (bool, bool) {
-	return t.ready, true
-}
-
-func (t *testInPort) Plug(out ahead_port.OutPort) chan ahead_port.PacketWithCycle {
-	return t.BaseInPort.PlugWithSelf(t, out)
 }
 
 // TestTickRespectsBandwidth tests that outBandwidth is respected.
@@ -216,9 +178,13 @@ func TestTickRespectsBandwidth(t *testing.T) {
 
 	oq := NewOutputQueue(10, 2, 2) // outBandwidth = 2
 
-	// Create downstream to receive packets
-	downstreamPort := &testInPort{ready: true}
-	ch := oq.QueueOutPort().Plug(downstreamPort)
+	// Create downstream mock and connect
+	downstream := newMockDownstream()
+	ahead_port.Connect(oq, downstream)
+
+	// Declare downstream ready
+	downstream.UpdateReady(0, true)
+	downstream.UpdateReady(1, true)
 
 	// Inject 4 packets
 	packets := make([]packet.Packet, 4)
@@ -241,14 +207,11 @@ func TestTickRespectsBandwidth(t *testing.T) {
 		t.Fatalf("expected length 2 after first Tick (bandwidth=2), got %d", oq.Length())
 	}
 
-	// Verify 2 packets in channel
-	if len(ch) != 2 {
-		t.Fatalf("expected 2 packets in channel after first Tick, got %d", len(ch))
-	}
-
-	// Drain channel
-	for len(ch) > 0 {
-		<-ch
+	// Verify 2 packets received
+	downstream.WaitUpstreamDone(0)
+	received := downstream.ReceivePackets(0)
+	if len(received) != 2 {
+		t.Fatalf("expected 2 packets received after first Tick, got %d", len(received))
 	}
 
 	// Second tick should send remaining 2 packets
@@ -261,25 +224,26 @@ func TestTickRespectsBandwidth(t *testing.T) {
 		t.Fatalf("expected length 0 after second Tick, got %d", oq.Length())
 	}
 
-	// Verify 2 more packets in channel
-	if len(ch) != 2 {
-		t.Fatalf("expected 2 packets in channel after second Tick, got %d", len(ch))
+	// Verify 2 more packets received
+	downstream.WaitUpstreamDone(1)
+	received = downstream.ReceivePackets(1)
+	if len(received) != 2 {
+		t.Fatalf("expected 2 packets received after second Tick, got %d", len(received))
 	}
 }
 
 // TestPacketSentHook tests the onPacketSent hook.
-// Note: Hook functionality is currently not implemented in the new Queue-based design.
-// This test is skipped until hooks are re-implemented.
 func TestPacketSentHook(t *testing.T) {
-	t.Skip("PacketSentHook not yet implemented in Queue-based OutputQueue")
 	t.Parallel()
 
 	oq := NewOutputQueue(10, 2, 2)
 
-	// Create downstream
-	// Create downstream
-	downstream := &testInPort{ready: true}
-	oq.QueueOutPort().Plug(downstream)
+	// Create downstream mock and connect
+	downstream := newMockDownstream()
+	ahead_port.Connect(oq, downstream)
+
+	// Declare downstream ready
+	downstream.UpdateReady(0, true)
 
 	// Set up hook to count sent packets
 	sentCount := 0
@@ -307,23 +271,6 @@ func TestPacketSentHook(t *testing.T) {
 
 	if len(sentPackets) != 2 {
 		t.Fatalf("expected 2 packets in hook, got %d", len(sentPackets))
-	}
-}
-
-// TestOutPortGetter tests QueueOutPort getter method.
-func TestOutPortGetter(t *testing.T) {
-	t.Parallel()
-
-	oq := NewOutputQueue(10, 1, 1)
-
-	// QueueOutPort should always be available after creation
-	if oq.QueueOutPort() == nil {
-		t.Fatal("expected QueueOutPort to be non-nil")
-	}
-
-	// Verify it's the correct type
-	if _, ok := oq.QueueOutPort().(ahead_port.OutPort); !ok {
-		t.Fatal("QueueOutPort should implement ahead_port.OutPort")
 	}
 }
 

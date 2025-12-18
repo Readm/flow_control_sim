@@ -146,19 +146,18 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 		return nil, fmt.Errorf("queues for connection %d->%d must not be nil", sourceID, targetID)
 	}
 
-	// Create Link with new API (returns 3 values)
-	linkInstance, linkIn, linkOut := link.NewLink(
+	// Create Link with new API (returns only link instance)
+	linkInstance := link.NewLink(
 		sourceID,
 		targetID,
 		latency,
 		bandwidth,
 	)
 
-	// Connect using Plug pattern
-	// Link.InPort (receives) plugs OutputQueue's internal Queue.OutPort (sends)
-	// Link.OutPort (sends) plugs InputQueue (receives via its InPort)
-	linkIn.Plug(sourceOutput.QueueOutPort())
-	linkOut.Plug(targetInput.AsInPort())
+	// Connect using ahead_port.Connect
+	// OutputQueue -> Link -> InputQueue
+	ahead_port.Connect(sourceOutput, linkInstance)
+	ahead_port.Connect(linkInstance, targetInput)
 
 	n.links = append(n.links, linkInstance)
 	return linkInstance, nil
