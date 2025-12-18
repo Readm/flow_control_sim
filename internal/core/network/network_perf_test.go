@@ -21,10 +21,7 @@ import (
 // Last node receives and drops packets.
 // Runs for 10,000 cycles with both single-core and multi-core modes.
 func TestNetworkLargeRing50Nodes(t *testing.T) {
-	nodeCount := runtime.NumCPU() / 2
-	if nodeCount < 2 {
-		nodeCount = 2 // Minimum 2 nodes
-	}
+	nodeCount := 50
 
 	const (
 		linkLatency    = 10
