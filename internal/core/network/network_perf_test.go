@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"math/rand"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -88,10 +87,10 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 
 			// Setup forwarding: nodes 1 to nodeCount-2 forward from input to output with random delay
 			// Node0 and last node will have custom hooks set later
-			// Delay: 2-20us per node, simulating GEM5 O3CPU execution time
+			// Delay: 5-20us per node, simulating GEM5 O3CPU execution time
 			for i := 1; i < nodeCount-1; i++ {
 				output := allOutputs[i]
-				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(forwardWithDelayHook(output, 2, 20))
+				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(forwardWithDelayHook(output, 5, 20))
 			}
 
 			// Connect nodes in a ring: 0->1->2->...->49->0
@@ -108,6 +107,9 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 			// Node0 is the source - it only injects new packets, doesn't forward
 			var injectedCount int64
 			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, inputs [][]packet.Packet) error {
+				// Each node execution simulates GEM5 O3 CPU core processing
+				node.SpinWait(5, 20)
+
 				// Drop any incoming packets (break the ring at Node0)
 				// This prevents multiple packets being sent in the same cycle
 
@@ -135,6 +137,8 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 
 			// Last node should NOT forward (drop packets)
 			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, inputs [][]packet.Packet) error {
+				// Each node execution simulates GEM5 O3 CPU core processing
+				node.SpinWait(5, 20)
 				// Drop all packets by not forwarding them
 				return nil
 			})
@@ -205,17 +209,12 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 // forwardWithDelayHook creates a ProcessHook that forwards packets with random delay.
 func forwardWithDelayHook(output *queue.OutputQueue, minUs, maxUs int) func(ctx context.Context, cycle uint64, inputs [][]packet.Packet) error {
 	return func(_ context.Context, cycle uint64, inputs [][]packet.Packet) error {
+		// Each node execution simulates GEM5 O3 CPU core processing
+		node.SpinWait(minUs, maxUs)
+
 		var buffer []packet.Packet
 		for _, b := range inputs {
 			buffer = append(buffer, b...)
-		}
-		// Add random delay (0-100us)
-		delayUs := minUs
-		if maxUs > minUs {
-			delayUs += rand.Intn(maxUs - minUs)
-		}
-		if delayUs > 0 {
-			time.Sleep(time.Duration(delayUs) * time.Microsecond)
 		}
 
 		// Forward packets

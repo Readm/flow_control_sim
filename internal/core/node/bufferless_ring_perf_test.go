@@ -3,11 +3,9 @@ package node
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"runtime"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/link"
@@ -534,11 +532,5 @@ func runBufferlessRingSimulation(
 
 // mockDelay simulates processing delay (similar to network tests).
 func mockDelay(minUs, maxUs int) {
-	delayUs := minUs
-	if maxUs > minUs {
-		delayUs += rand.Intn(maxUs - minUs)
-	}
-	if delayUs > 0 {
-		time.Sleep(time.Duration(delayUs) * time.Microsecond)
-	}
+	SpinWait(minUs, maxUs)
 }
