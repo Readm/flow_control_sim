@@ -136,6 +136,13 @@ func benchmarkBufferlessRing(b *testing.B, nodeCount, cycles int) {
 		// Run simulation
 		ctx := context.Background()
 		for cycle := 0; cycle < cycles; cycle++ {
+			// Tick links first
+			for _, l := range ringLinks {
+				if err := l.Tick(cycle); err != nil {
+					b.Fatalf("Link tick failed: %v", err)
+				}
+			}
+
 			// Tick routers
 			for _, r := range routers {
 				if err := r.Tick(ctx, uint64(cycle), 0); err != nil {
@@ -147,18 +154,6 @@ func benchmarkBufferlessRing(b *testing.B, nodeCount, cycles int) {
 			for _, w := range workers {
 				if err := w.Tick(ctx, uint64(cycle), 0); err != nil {
 					b.Fatalf("Worker tick failed: %v", err)
-				}
-			}
-
-			// Tick queues
-			// 3. Queues (Handled by Nodes)
-
-			// 4. Output Queues (Handled by Nodes)
-
-			// Tick links
-			for _, l := range ringLinks {
-				if err := l.Tick(cycle); err != nil {
-					b.Fatalf("Link tick failed: %v", err)
 				}
 			}
 		}
@@ -299,6 +294,11 @@ func benchmarkBufferlessRingBackpressure(b *testing.B, nodeCount, cycles int) {
 		ctx := context.Background()
 		// Inline simulation to allow skipping Worker1 tick
 		for cycle := 0; cycle < cycles; cycle++ {
+			// Tick links first
+			for _, l := range ringLinks {
+				l.Tick(cycle)
+			}
+
 			// Tick routers
 			for _, r := range routers {
 				r.Tick(ctx, uint64(cycle), 0)
@@ -310,16 +310,6 @@ func benchmarkBufferlessRingBackpressure(b *testing.B, nodeCount, cycles int) {
 					continue // Worker 1 is blocked/stalled
 				}
 				w.Tick(ctx, uint64(cycle), 0)
-			}
-
-			// Links are ticked by runBufferlessRingSimulation? No, manual tick needed if inlining.
-			// Queues are ticked by Nodes (Routers/Workers).
-			// Since Worker 1 is NOT ticked, its queues (WorkerIn/WorkerOut) are NOT ticked.
-			// This is fine for backpressure on WorkerIn.
-
-			// Tick links
-			for _, l := range ringLinks {
-				l.Tick(cycle)
 			}
 		}
 
@@ -468,17 +458,40 @@ func buildBufferlessRingNetworkBench(b *testing.B, nodeCount, ringLatency, route
 	}
 
 	// Create local connections
+	// Create local connections (Needs latency to avoid combinational loop Deadlock)
+	// Worker(N) <-> Router(N) dependency cycle if latency is 0.
+	// We add 1 cycle latency links.
+	localLinks := make([]*link.Link, 0)
 	for i := 0; i < nodeCount; i++ {
 		// Worker -> Router
-		p1 := ahead_port.NewPort()
-		workerOutQueues[i].SetDownstreamPort(p1.AsInPort())
-		localInQueues[i].SetUpstreamPort(p1.AsOutPort())
+		fc1 := link.NewBufferlessFlowControl()
+		l1 := link.NewLinkWithFlowControl(i, 100+i, 1, queueBandwidth, fc1)
+
+		p1_out := ahead_port.NewPort()
+		workerOutQueues[i].SetDownstreamPort(p1_out.AsInPort())
+		l1.SetUpstreamPort(p1_out.AsOutPort())
+
+		p1_in := ahead_port.NewPort()
+		l1.SetDownstreamPort(p1_in.AsInPort())
+		localInQueues[i].SetUpstreamPort(p1_in.AsOutPort())
 
 		// Router -> Worker
-		p2 := ahead_port.NewPort()
-		localOutQueues[i].SetDownstreamPort(p2.AsInPort())
-		workerInQueues[i].SetUpstreamPort(p2.AsOutPort())
+		fc2 := link.NewBufferlessFlowControl()
+		l2 := link.NewLinkWithFlowControl(100+i, i, 1, queueBandwidth, fc2)
+
+		p2_out := ahead_port.NewPort()
+		localOutQueues[i].SetDownstreamPort(p2_out.AsInPort())
+		l2.SetUpstreamPort(p2_out.AsOutPort())
+
+		p2_in := ahead_port.NewPort()
+		l2.SetDownstreamPort(p2_in.AsInPort())
+		workerInQueues[i].SetUpstreamPort(p2_in.AsOutPort())
+
+		localLinks = append(localLinks, l1, l2)
 	}
+
+	// Combine all links
+	allLinks := append(ringLinks, localLinks...)
 
 	queues := &QueueCollection{
 		RingIn:    ringInQueues,
@@ -489,7 +502,7 @@ func buildBufferlessRingNetworkBench(b *testing.B, nodeCount, ringLatency, route
 		WorkerOut: workerOutQueues,
 	}
 
-	return routers, workers, queues, ringLinks
+	return routers, workers, queues, allLinks
 }
 
 // runBufferlessRingSimulation runs the simulation for the given number of cycles.

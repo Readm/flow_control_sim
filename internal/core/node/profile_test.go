@@ -170,17 +170,31 @@ func buildBufferlessRingNetworkTest(
 		ringInQueues[nextRouter].SetUpstreamPort(p2.AsOutPort())
 	}
 
-	// Create local connections
+	// Create local connections (Needs latency to avoid combinational loop Deadlock)
 	for i := 0; i < nodeCount; i++ {
 		// Worker -> Router
-		p1 := ahead_port.NewPort()
-		workerOutQueues[i].SetDownstreamPort(p1.AsInPort())
-		localInQueues[i].SetUpstreamPort(p1.AsOutPort())
+		fc1 := link.NewBufferlessFlowControl()
+		l1 := link.NewLinkWithFlowControl(i, 100+i, 1, queueBandwidth, fc1)
+
+		p1_out := ahead_port.NewPort()
+		workerOutQueues[i].SetDownstreamPort(p1_out.AsInPort())
+		l1.SetUpstreamPort(p1_out.AsOutPort())
+
+		p1_in := ahead_port.NewPort()
+		l1.SetDownstreamPort(p1_in.AsInPort())
+		localInQueues[i].SetUpstreamPort(p1_in.AsOutPort())
 
 		// Router -> Worker
-		p2 := ahead_port.NewPort()
-		localOutQueues[i].SetDownstreamPort(p2.AsInPort())
-		workerInQueues[i].SetUpstreamPort(p2.AsOutPort())
+		fc2 := link.NewBufferlessFlowControl()
+		l2 := link.NewLinkWithFlowControl(100+i, i, 1, queueBandwidth, fc2)
+
+		p2_out := ahead_port.NewPort()
+		localOutQueues[i].SetDownstreamPort(p2_out.AsInPort())
+		l2.SetUpstreamPort(p2_out.AsOutPort())
+
+		p2_in := ahead_port.NewPort()
+		l2.SetDownstreamPort(p2_in.AsInPort())
+		workerInQueues[i].SetUpstreamPort(p2_in.AsOutPort())
 	}
 
 	queues := &QueueCollection{

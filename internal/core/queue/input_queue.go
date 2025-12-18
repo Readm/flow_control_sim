@@ -67,6 +67,13 @@ func NewInputQueue(capacity int, inBandwidth int) *InputQueue {
 // InputQueue acts as downstream for this port.
 func (iq *InputQueue) SetUpstreamPort(port ahead_port.OutPort) {
 	iq.fromUpstream = port
+	// Initialize ready state for cycle 0 and 1
+	// We initialize cycle 1 as well to support links with latency=1 checking ahead
+	if iq.fromUpstream != nil {
+		hasCapacity := iq.Length() < iq.Capacity()
+		iq.fromUpstream.UpdateReady(0, hasCapacity)
+		iq.fromUpstream.UpdateReady(1, hasCapacity)
+	}
 }
 
 // Tick processes a cycle by receiving packets from upstream and storing them internally.

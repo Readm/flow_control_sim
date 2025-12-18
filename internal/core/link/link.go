@@ -163,13 +163,11 @@ func (l *Link) Tick(cycle int) error {
 	l.pendingPackets = newPending
 
 	// ===== 4. Update ready state for upstream =====
-	if l.fromUpstream != nil && l.toDownstream != nil {
-		// Check if downstream is ready for next cycle
-		downstreamReady, _ := l.toDownstream.PeekReady(cycle + 1)
-		l.fromUpstream.UpdateReady(cycle+1, downstreamReady)
-	} else if l.fromUpstream != nil {
-		// No downstream, always ready
-		l.fromUpstream.UpdateReady(cycle+1, true)
+	// ===== 4. Update ready state for upstream =====
+	// We delegate readiness logic to the Flow Control strategy.
+	if l.fromUpstream != nil {
+		ready := l.flowControl.IsReady(cycle + 1)
+		l.fromUpstream.UpdateReady(cycle+1, ready)
 	}
 
 	// ===== 5. Mark this cycle as done for downstream =====
