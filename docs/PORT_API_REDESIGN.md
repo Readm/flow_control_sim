@@ -753,3 +753,62 @@ func Connect(upstream, downstream interface{}) *Port {
     return port
 }
 ```
+
+---
+
+## 12. 周期依赖与死锁分析 (Cycle Dependency & Deadlock Analysis)
+
+在 `ahead_port` 架构中，**OutputQueue**, **Link**, **InputQueue** 三者在 Cycle `N` 的依赖关系如下：
+
+### 12.1 数据流依赖 (Data Flow: Forward)
+数据从上游流向下游。下游组件处理 Cycle `N` 的数据时，依赖上游组件在 Cycle `N` (或更早) 的输出。
+
+*   **OutputQueue (Cycle N)**
+    *   **依赖**: `Node` 在 Cycle `N` 注入的数据。
+    *   **行为**: 尝试将数据 `Push` 给 Link。
+
+*   **Link (Cycle N)**
+    *   **依赖**: `OutputQueue` 在 Cycle `N-Latency` 产生的数据。
+    *   **行为**: 将数据 `Push` 给 InputQueue。
+    *   **关键点**: Link 内部充当了时间的 "传送带"。
+
+*   **InputQueue (Cycle N)**
+    *   **依赖**: `Link` 在 Cycle `N` 的输出。
+    *   **行为**: 等待 Link 完成 Cycle `N` (`WaitUpstreamDone(N)`)，然后读取所有属于 Cycle `N` 的包。
+    *   **时序**: **必须等待 Link 执行完 Cycle N 的逻辑**。
+
+### 12.2 反压信号依赖 (Backpressure: Backward)
+Ready 信号从下游流向上游。这是打破死锁的关键，也是跨周期依赖的核心。
+
+*   **InputQueue @ Cycle N (结尾)**
+    *   **行为**: 在 Cycle `N` 结束时，计算自己 **Cycle `N+1`** 是否有空位。
+    *   **动作**: 调用 `UpdateReady(Cycle=N+1)`。
+    *   **意义**: 提前通知上游 "下一周期我不堵"。
+
+*   **Link @ Cycle N+1 (开始)**
+    *   **依赖**: `InputQueue` 在 **Cycle `N`** 产生的 Ready 信号。
+    *   **行为**: 调用 `PeekReady(Cycle=N+1)`。
+    *   **无死锁原因**: 因为这个信号由 **上一个周期 (N)** 产生，所以 Link 在 Cycle `N+1` 读取时 **不需要等待** InputQueue 在 Cycle `N+1` 运行。
+
+### 12.3 执行顺序与死锁避免
+
+**结论：** 模拟器必须先执行 **Link.Tick**，再执行 **Node.Tick (InputQueue.Tick)**。
+
+**死锁场景 (错误的执行顺序)**：
+1. 先执行 **Node.Tick(T)** -> 调用 `WaitUpstreamDone(T)` -> 阻塞等待 Link。
+2. 此时 Link 还没运行，无法发出 Done 信号。
+3. 主线程阻塞在 Node，Link 永远无法运行 -> **死锁**。
+
+**正确场景 (先 Link 后 Node)**：
+1. **Link.Tick(T)** 率先执行:
+    * 读取 `Ready(T)` 信号 (由 `Node(T-1)` 产生，已就绪)。
+    * 推送数据。
+    * 发出 `MarkDone(T)` 信号。
+2. **Node.Tick(T)** 随后执行:
+    * 调用 `WaitUpstreamDone(T)`。
+    * 收到 Link 刚发出的 Done 信号，**立即返回**，不阻塞。
+    * 读取数据。
+
+此模型解耦了当前的执行依赖：
+*   **数据** 是当前周期的 (Strict Sync)。
+*   **Ready信号** 是跨周期的 (Lookahead)。

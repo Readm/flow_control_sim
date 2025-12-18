@@ -611,19 +611,7 @@ func TestNewInputQueuePanicOnZeroBandwidth(t *testing.T) {
 			t.Fatalf("Expected panic for zero inBandwidth, got none")
 		}
 	}()
-	queue.NewInputQueue(8, 0, 4)
-}
-
-func TestNewInputQueuePanicOnZeroOutBandwidth(t *testing.T) {
-	t.Parallel()
-
-	// Test panic on zero outBandwidth
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatalf("Expected panic for zero outBandwidth, got none")
-		}
-	}()
-	queue.NewInputQueue(8, 4, 0)
+	queue.NewInputQueue(8, 0)
 }
 
 func TestNewOutputQueuePanicOnZeroBandwidth(t *testing.T) {
@@ -661,37 +649,37 @@ func TestNetworkResetWithCacheAndDirectory(t *testing.T) {
 				NodeID: 0,
 				InPorts: []PortSchema{
 					{
-						BufferSize:  16,
-						InBandwidth: 4,
+						BufferSize:   16,
+						InBandwidth:  4,
 						OutBandwidth: 4,
 					},
 				},
 				OutPorts: []PortSchema{
 					{
-						BufferSize:  16,
-						InBandwidth: 2,
+						BufferSize:   16,
+						InBandwidth:  2,
 						OutBandwidth: 2,
 					},
 				},
 				Cache: &CacheConfigSchema{
-					Capacity:         64,
-					NumSets:          1,
+					Capacity:          64,
+					NumSets:           1,
 					ReplacementPolicy: "random",
-					States:           "MESI",
+					States:            "MESI",
 				},
 				Directory: &DirectoryConfigSchema{
-					Capacity:         128,
-					NumSets:          1,
+					Capacity:          128,
+					NumSets:           1,
 					ReplacementPolicy: "random",
-					States:           "MESI",
+					States:            "MESI",
 				},
 			},
 			{
 				NodeID: 1,
 				InPorts: []PortSchema{
 					{
-						BufferSize:  16,
-						InBandwidth: 4,
+						BufferSize:   16,
+						InBandwidth:  4,
 						OutBandwidth: 4,
 					},
 				},

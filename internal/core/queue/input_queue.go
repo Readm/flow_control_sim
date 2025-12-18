@@ -77,9 +77,8 @@ func (iq *InputQueue) Tick(cycle int) error {
 	}
 
 	// ===== 1. Wait for upstream to complete =====
-	if cycle > 0 {
-		iq.fromUpstream.WaitUpstreamDone(cycle - 1)
-	}
+	// We wait for the current cycle because upstream produces data for this cycle.
+	iq.fromUpstream.WaitUpstreamDone(cycle)
 
 	// ===== 2. Receive packets from upstream =====
 	packets := iq.fromUpstream.Receive(cycle)

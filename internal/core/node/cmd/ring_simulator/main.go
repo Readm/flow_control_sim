@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -27,21 +28,22 @@ type QueueCollection struct {
 
 // NetworkState 网络状态快照（用于高亮变化）
 type NetworkState struct {
-	routerBuffers  [4]int
-	queueLengths   map[string]int
-	linkPackets    [4]int
+	routerBuffers [4]int
+	queueLengths  map[string]int
+	linkPackets   [4]int
 }
 
 // RingSimulator 交互式ring网络模拟器
 type RingSimulator struct {
-	routers      []*node.BufferlessRingRouterNode
-	workers      []*node.Node
-	queues       *QueueCollection
-	ringLinks    []*link.Link
-	cycle        int
-	ctx          context.Context
-	prevState    *NetworkState
-	highlightOn  bool
+	routers        []*node.BufferlessRingRouterNode
+	workers        []*node.WorkerNode
+	queues         *QueueCollection
+	ringLinks      []*link.Link
+	cycle          int
+	ctx            context.Context
+	prevState      *NetworkState
+	highlightOn    bool
+	blockedWorkers map[int]bool
 }
 
 // NewRingSimulator 创建一个新的ring模拟器
@@ -56,13 +58,13 @@ func NewRingSimulator() *RingSimulator {
 
 	// Create routers and workers
 	routers := make([]*node.BufferlessRingRouterNode, numRouters)
-	workers := make([]*node.Node, numRouters)
+	workers := make([]*node.WorkerNode, numRouters)
 
 	for i := 0; i < numRouters; i++ {
 		routerID := 100 + i
 		workerID := i
 		routers[i] = node.NewBufferlessRingRouter(routerID, workerID, routerBuffer)
-		workers[i] = node.New(workerID)
+		workers[i] = node.NewWorkerNode(workerID)
 	}
 
 	// Create queues
@@ -74,11 +76,11 @@ func NewRingSimulator() *RingSimulator {
 	workerOutQueues := make([]*queue.OutputQueue, numRouters)
 
 	for i := 0; i < numRouters; i++ {
-		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		ringOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		localOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		workerOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
 	}
 
@@ -104,17 +106,31 @@ func NewRingSimulator() *RingSimulator {
 		targetID := 100 + nextRouter
 
 		fc := link.NewBufferlessFlowControl()
-		ringLink, linkIn, linkOut := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
+		ringLink := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
 		ringLinks[i] = ringLink
 
-		linkIn.Plug(ringOutQueues[i].QueueOutPort())
-		linkOut.Plug(ringInQueues[nextRouter].AsInPort())
+		// OutputQueue -> Link
+		p1 := ahead_port.NewPort()
+		ringOutQueues[i].SetDownstreamPort(p1.AsInPort())
+		ringLink.SetUpstreamPort(p1.AsOutPort())
+
+		// Link -> InputQueue
+		p2 := ahead_port.NewPort()
+		ringLink.SetDownstreamPort(p2.AsInPort())
+		ringInQueues[nextRouter].SetUpstreamPort(p2.AsOutPort())
 	}
 
 	// Create local connections
 	for i := 0; i < numRouters; i++ {
-		workerOutQueues[i].QueueOutPort().Plug(localInQueues[i].QueueInPort())
-		localOutQueues[i].QueueOutPort().Plug(workerInQueues[i].QueueInPort())
+		// Worker -> Router
+		p1 := ahead_port.NewPort()
+		workerOutQueues[i].SetDownstreamPort(p1.AsInPort())
+		localInQueues[i].SetUpstreamPort(p1.AsOutPort())
+
+		// Router -> Worker
+		p2 := ahead_port.NewPort()
+		localOutQueues[i].SetDownstreamPort(p2.AsInPort())
+		workerInQueues[i].SetUpstreamPort(p2.AsOutPort())
 	}
 
 	queues := &QueueCollection{
@@ -127,13 +143,14 @@ func NewRingSimulator() *RingSimulator {
 	}
 
 	return &RingSimulator{
-		routers:     routers,
-		workers:     workers,
-		queues:      queues,
-		ringLinks:   ringLinks,
-		cycle:       0,
-		ctx:         context.Background(),
-		highlightOn: true, // 默认开启高亮
+		routers:        routers,
+		workers:        workers,
+		queues:         queues,
+		ringLinks:      ringLinks,
+		cycle:          0,
+		ctx:            context.Background(),
+		highlightOn:    true, // 默认开启高亮
+		blockedWorkers: make(map[int]bool),
 	}
 }
 
@@ -173,42 +190,29 @@ func (sim *RingSimulator) Step() error {
 	// 捕获执行前的状态
 	sim.prevState = sim.captureState()
 
+	// Tick all links first (Latency handling requires links to move data first or concurrent to nodes)
+	// With sequential execution and Latency > 0, Link(T) depends on Node(T-L).
+	// Node(T) depends on Link(T).
+	// So Link must run first to provide data for Node(T).
+	for _, l := range sim.ringLinks {
+		if err := l.Tick(sim.cycle); err != nil {
+			return fmt.Errorf("link tick failed: %w", err)
+		}
+	}
+
 	// Tick all components
 	for _, r := range sim.routers {
 		if err := r.Tick(sim.ctx, uint64(sim.cycle), 0); err != nil {
 			return fmt.Errorf("router tick failed: %w", err)
 		}
 	}
-	for _, w := range sim.workers {
+	// Tick workers (skip blocked ones)
+	for i, w := range sim.workers {
+		if sim.blockedWorkers[i] {
+			continue
+		}
 		if err := w.Tick(sim.ctx, uint64(sim.cycle), 0); err != nil {
 			return fmt.Errorf("worker tick failed: %w", err)
-		}
-	}
-
-	// Tick all input queues
-	allQueues := [][]*queue.InputQueue{sim.queues.RingIn, sim.queues.LocalIn, sim.queues.WorkerIn}
-	for _, queueList := range allQueues {
-		for _, q := range queueList {
-			if err := q.Tick(sim.cycle); err != nil {
-				return fmt.Errorf("input queue tick failed: %w", err)
-			}
-		}
-	}
-
-	// Tick all output queues
-	allOutputQueues := [][]*queue.OutputQueue{sim.queues.RingOut, sim.queues.LocalOut, sim.queues.WorkerOut}
-	for _, queueList := range allOutputQueues {
-		for _, q := range queueList {
-			if err := q.Tick(sim.cycle); err != nil {
-				return fmt.Errorf("output queue tick failed: %w", err)
-			}
-		}
-	}
-
-	// Tick all links
-	for _, l := range sim.ringLinks {
-		if err := l.Tick(sim.cycle); err != nil {
-			return fmt.Errorf("link tick failed: %w", err)
 		}
 	}
 
@@ -393,10 +397,8 @@ var testScenarios = map[string]TestScenario{
 			// WorkerIn[1]容量仅8，必然产生反压和circulation
 
 			// 关键：禁止Worker1 Pick packets，让packets堆积在WorkerIn[1]
-			sim.workers[1].SetPickHook(func(ctx context.Context, cycle uint64, defaultPick func() []packet.Packet) ([]packet.Packet, error) {
-				// 返回空数组，不Pick任何packet，模拟Worker1繁忙无法处理
-				return []packet.Packet{}, nil
-			})
+			// 通过设置blockedWorkers标志，Step()中将跳过该Worker的Tick
+			sim.blockedWorkers[1] = true
 
 			return nil
 		},

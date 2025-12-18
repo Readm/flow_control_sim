@@ -14,12 +14,22 @@ func (m *MockUpstream) SetDownstreamPort(port InPort) {
 }
 
 // SendPacket sends a packet to the downstream component.
+// This uses the blocking TrySend method.
 func (m *MockUpstream) SendPacket(cycle int, pkt packet.Packet) bool {
 	pwc := PacketWithCycle{
 		Cycle:  cycle,
 		Packet: pkt,
 	}
 	return m.toDownstream.TrySend(cycle, pwc)
+}
+
+// TryPeekSendPacket attempts to send a packet using non-blocking TryPeekSend.
+func (m *MockUpstream) TryPeekSendPacket(cycle int, pkt packet.Packet) bool {
+	pwc := PacketWithCycle{
+		Cycle:  cycle,
+		Packet: pkt,
+	}
+	return m.toDownstream.TryPeekSend(cycle, pwc)
 }
 
 // MarkDone marks a cycle as done.

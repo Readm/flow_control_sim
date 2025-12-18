@@ -21,7 +21,7 @@ func TestDeadlockDiagnosis(t *testing.T) {
 
 	// Create Node0 (source)
 	node0 := node.New(0)
-	input0 := queue.NewInputQueue(8, 1, 1)
+	input0 := queue.NewInputQueue(8, 1)
 	output0 := queue.NewOutputQueue(8, 1, 1)
 	if err := node0.AddInputQueue(input0); err != nil {
 		t.Fatalf("Node0 AddInputQueue: %v", err)
@@ -38,7 +38,7 @@ func TestDeadlockDiagnosis(t *testing.T) {
 
 	// Create Node1 (destination)
 	node1 := node.New(1)
-	input1 := queue.NewInputQueue(8, 1, 1)
+	input1 := queue.NewInputQueue(8, 1)
 	output1 := queue.NewOutputQueue(8, 1, 1)
 	if err := node1.AddInputQueue(input1); err != nil {
 		t.Fatalf("Node1 AddInputQueue: %v", err)

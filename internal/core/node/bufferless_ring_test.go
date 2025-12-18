@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/core/visualization"
@@ -25,7 +26,7 @@ func TestBufferlessRing_Basic(t *testing.T) {
 	// Create 4 routers (IDs: 100, 101, 102, 103)
 	// Create 4 workers (IDs: 0, 1, 2, 3)
 	routers := make([]*BufferlessRingRouterNode, numRouters)
-	workers := make([]*Node, numRouters)
+	workers := make([]*TestNode, numRouters)
 
 	for i := 0; i < numRouters; i++ {
 		routerID := 100 + i
@@ -35,7 +36,7 @@ func TestBufferlessRing_Basic(t *testing.T) {
 		routers[i] = NewBufferlessRingRouter(routerID, workerID, routerBuffer)
 
 		// Create worker (simple node with input/output queues)
-		workers[i] = New(workerID)
+		workers[i] = NewTestNode(workerID)
 	}
 
 	// Create queues for connections
@@ -57,11 +58,11 @@ func TestBufferlessRing_Basic(t *testing.T) {
 	workerOutQueues := make([]*queue.OutputQueue, numRouters)
 
 	for i := 0; i < numRouters; i++ {
-		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		ringOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		localOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		workerOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
 	}
 
@@ -100,27 +101,36 @@ func TestBufferlessRing_Basic(t *testing.T) {
 
 		// Create bufferless link
 		fc := link.NewBufferlessFlowControl()
-		ringLink, linkIn, linkOut := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
+		ringLink := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
 		ringLinks[i] = ringLink
 
 		// Connect link to router queues
 		// ringOutQueues[i] (OutputQueue) -> link -> ringInQueues[nextRouter] (InputQueue)
-		// Pattern: linkIn.Plug(OutputQueue.QueueOutPort())
-		//         linkOut.Plug(InputQueue.AsInPort())
-		linkIn.Plug(ringOutQueues[i].QueueOutPort())
-		linkOut.Plug(ringInQueues[nextRouter].AsInPort())
+
+		// 1. OutputQueue -> Link
+		p1 := ahead_port.NewPort()
+		ringOutQueues[i].SetDownstreamPort(p1.AsInPort())
+		ringLink.SetUpstreamPort(p1.AsOutPort())
+
+		// 2. Link -> InputQueue
+		p2 := ahead_port.NewPort()
+		ringLink.SetDownstreamPort(p2.AsInPort())
+		ringInQueues[nextRouter].SetUpstreamPort(p2.AsOutPort())
 	}
 
 	// Create direct connections between workers and routers (no links needed for local connections)
 	for i := 0; i < numRouters; i++ {
 		// Worker -> Router (local injection)
 		// workerOutQueues[i] (OutputQueue) -> localInQueues[i] (InputQueue)
-		// Pattern: OutputQueue.QueueOutPort().Plug(InputQueue.QueueInPort())
-		workerOutQueues[i].QueueOutPort().Plug(localInQueues[i].QueueInPort())
+		p1 := ahead_port.NewPort()
+		workerOutQueues[i].SetDownstreamPort(p1.AsInPort())
+		localInQueues[i].SetUpstreamPort(p1.AsOutPort())
 
 		// Router -> Worker (local ejection)
 		// localOutQueues[i] (OutputQueue) -> workerInQueues[i] (InputQueue)
-		localOutQueues[i].QueueOutPort().Plug(workerInQueues[i].QueueInPort())
+		p2 := ahead_port.NewPort()
+		localOutQueues[i].SetDownstreamPort(p2.AsInPort())
+		workerInQueues[i].SetUpstreamPort(p2.AsOutPort())
 	}
 
 	// Basic validation
@@ -147,7 +157,7 @@ type QueueCollection struct {
 // Returns: routers, workers, queues, ringLinks
 func buildBufferlessRingNetwork(t *testing.T) (
 	[]*BufferlessRingRouterNode,
-	[]*Node,
+	[]*TestNode,
 	*QueueCollection,
 	[]*link.Link,
 ) {
@@ -161,13 +171,13 @@ func buildBufferlessRingNetwork(t *testing.T) (
 
 	// Create routers and workers
 	routers := make([]*BufferlessRingRouterNode, numRouters)
-	workers := make([]*Node, numRouters)
+	workers := make([]*TestNode, numRouters)
 
 	for i := 0; i < numRouters; i++ {
 		routerID := 100 + i
 		workerID := i
 		routers[i] = NewBufferlessRingRouter(routerID, workerID, routerBuffer)
-		workers[i] = New(workerID)
+		workers[i] = NewTestNode(workerID)
 	}
 
 	// Create queues
@@ -179,11 +189,11 @@ func buildBufferlessRingNetwork(t *testing.T) (
 	workerOutQueues := make([]*queue.OutputQueue, numRouters)
 
 	for i := 0; i < numRouters; i++ {
-		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		ringOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		localOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		workerOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
 	}
 
@@ -221,17 +231,31 @@ func buildBufferlessRingNetwork(t *testing.T) (
 		targetID := 100 + nextRouter
 
 		fc := link.NewBufferlessFlowControl()
-		ringLink, linkIn, linkOut := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
+		ringLink := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
 		ringLinks[i] = ringLink
 
-		linkIn.Plug(ringOutQueues[i].QueueOutPort())
-		linkOut.Plug(ringInQueues[nextRouter].AsInPort())
+		// OutputQueue -> Link
+		p1 := ahead_port.NewPort()
+		ringOutQueues[i].SetDownstreamPort(p1.AsInPort())
+		ringLink.SetUpstreamPort(p1.AsOutPort())
+
+		// Link -> InputQueue
+		p2 := ahead_port.NewPort()
+		ringLink.SetDownstreamPort(p2.AsInPort())
+		ringInQueues[nextRouter].SetUpstreamPort(p2.AsOutPort())
 	}
 
 	// Create local connections
 	for i := 0; i < numRouters; i++ {
-		workerOutQueues[i].QueueOutPort().Plug(localInQueues[i].QueueInPort())
-		localOutQueues[i].QueueOutPort().Plug(workerInQueues[i].QueueInPort())
+		// Worker -> Router
+		p1 := ahead_port.NewPort()
+		workerOutQueues[i].SetDownstreamPort(p1.AsInPort())
+		localInQueues[i].SetUpstreamPort(p1.AsOutPort())
+
+		// Router -> Worker
+		p2 := ahead_port.NewPort()
+		localOutQueues[i].SetDownstreamPort(p2.AsInPort())
+		workerInQueues[i].SetUpstreamPort(p2.AsOutPort())
 	}
 
 	// Package queues into a collection
@@ -264,13 +288,13 @@ func TestBufferlessRing_SinglePacket(t *testing.T) {
 
 	// === 1. Build network (same as Basic test) ===
 	routers := make([]*BufferlessRingRouterNode, numRouters)
-	workers := make([]*Node, numRouters)
+	workers := make([]*TestNode, numRouters)
 
 	for i := 0; i < numRouters; i++ {
 		routerID := 100 + i
 		workerID := i
 		routers[i] = NewBufferlessRingRouter(routerID, workerID, routerBuffer)
-		workers[i] = New(workerID)
+		workers[i] = NewTestNode(workerID)
 
 		// Add debug hook to router
 		routerIndex := i
@@ -288,11 +312,11 @@ func TestBufferlessRing_SinglePacket(t *testing.T) {
 	workerOutQueues := make([]*queue.OutputQueue, numRouters)
 
 	for i := 0; i < numRouters; i++ {
-		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		ringOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		localOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		workerOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
 	}
 
@@ -330,17 +354,31 @@ func TestBufferlessRing_SinglePacket(t *testing.T) {
 		targetID := 100 + nextRouter
 
 		fc := link.NewBufferlessFlowControl()
-		ringLink, linkIn, linkOut := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
+		ringLink := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
 		ringLinks[i] = ringLink
 
-		linkIn.Plug(ringOutQueues[i].QueueOutPort())
-		linkOut.Plug(ringInQueues[nextRouter].AsInPort())
+		// OutputQueue -> Link
+		p1 := ahead_port.NewPort()
+		ringOutQueues[i].SetDownstreamPort(p1.AsInPort())
+		ringLink.SetUpstreamPort(p1.AsOutPort())
+
+		// Link -> InputQueue
+		p2 := ahead_port.NewPort()
+		ringLink.SetDownstreamPort(p2.AsInPort())
+		ringInQueues[nextRouter].SetUpstreamPort(p2.AsOutPort())
 	}
 
 	// Create local connections
 	for i := 0; i < numRouters; i++ {
-		workerOutQueues[i].QueueOutPort().Plug(localInQueues[i].QueueInPort())
-		localOutQueues[i].QueueOutPort().Plug(workerInQueues[i].QueueInPort())
+		// Worker -> Router
+		p1 := ahead_port.NewPort()
+		workerOutQueues[i].SetDownstreamPort(p1.AsInPort())
+		localInQueues[i].SetUpstreamPort(p1.AsOutPort())
+
+		// Router -> Worker
+		p2 := ahead_port.NewPort()
+		localOutQueues[i].SetDownstreamPort(p2.AsInPort())
+		workerInQueues[i].SetUpstreamPort(p2.AsOutPort())
 	}
 
 	t.Log("✅ Network constructed")
@@ -392,27 +430,8 @@ func TestBufferlessRing_SinglePacket(t *testing.T) {
 			}
 		}
 
-		// 3. Tick all queues (they update Ready states)
-		for i := 0; i < numRouters; i++ {
-			if err := ringInQueues[i].Tick(cycle); err != nil {
-				t.Fatalf("ringInQueue %d tick failed at cycle %d: %v", i, cycle, err)
-			}
-			if err := ringOutQueues[i].Tick(cycle); err != nil {
-				t.Fatalf("ringOutQueue %d tick failed at cycle %d: %v", i, cycle, err)
-			}
-			if err := localInQueues[i].Tick(cycle); err != nil {
-				t.Fatalf("localInQueue %d tick failed at cycle %d: %v", i, cycle, err)
-			}
-			if err := localOutQueues[i].Tick(cycle); err != nil {
-				t.Fatalf("localOutQueue %d tick failed at cycle %d: %v", i, cycle, err)
-			}
-			if err := workerInQueues[i].Tick(cycle); err != nil {
-				t.Fatalf("workerInQueue %d tick failed at cycle %d: %v", i, cycle, err)
-			}
-			if err := workerOutQueues[i].Tick(cycle); err != nil {
-				t.Fatalf("workerOutQueue %d tick failed at cycle %d: %v", i, cycle, err)
-			}
-		}
+		// 3. Queues are ticked automatically by their owners (Routers/Workers)
+		// during their Tick() calls. No manual ticking needed.
 
 		// 4. Tick links (they check Ready and send packets)
 		for i, l := range ringLinks {
@@ -488,6 +507,13 @@ func TestBufferlessRing_TwoHops(t *testing.T) {
 		t.Logf("  Router[1] buffer: %d/%d", routers[1].GetInjectionBufferOccupancy(), routers[1].GetBufferCapacity())
 		t.Logf("  Router[2] buffer: %d/%d", routers[2].GetInjectionBufferOccupancy(), routers[2].GetBufferCapacity())
 
+		// Tick all links first
+		for _, link := range ringLinks {
+			if err := link.Tick(cycle); err != nil {
+				t.Fatalf("Link tick failed at cycle %d: %v", cycle, err)
+			}
+		}
+
 		// Tick all components
 		for _, r := range routers {
 			if err := r.Tick(ctx, uint64(cycle), 0); err != nil {
@@ -497,36 +523,6 @@ func TestBufferlessRing_TwoHops(t *testing.T) {
 		for _, w := range workers {
 			if err := w.Tick(ctx, uint64(cycle), 0); err != nil {
 				t.Fatalf("Worker tick failed at cycle %d: %v", cycle, err)
-			}
-		}
-		// Tick all queues
-		allQueues := [][]*queue.InputQueue{
-			queues.RingIn,
-			queues.LocalIn,
-			queues.WorkerIn,
-		}
-		for _, queueList := range allQueues {
-			for _, q := range queueList {
-				if err := q.Tick(cycle); err != nil {
-					t.Fatalf("Input queue tick failed at cycle %d: %v", cycle, err)
-				}
-			}
-		}
-		allOutputQueues := [][]*queue.OutputQueue{
-			queues.RingOut,
-			queues.LocalOut,
-			queues.WorkerOut,
-		}
-		for _, queueList := range allOutputQueues {
-			for _, q := range queueList {
-				if err := q.Tick(cycle); err != nil {
-					t.Fatalf("Output queue tick failed at cycle %d: %v", cycle, err)
-				}
-			}
-		}
-		for _, link := range ringLinks {
-			if err := link.Tick(cycle); err != nil {
-				t.Fatalf("Link tick failed at cycle %d: %v", cycle, err)
 			}
 		}
 
@@ -746,22 +742,7 @@ func TestBufferlessRing_Concurrent(t *testing.T) {
 				t.Fatalf("Worker tick failed at cycle %d: %v", cycle, err)
 			}
 		}
-		allQueues := [][]*queue.InputQueue{queues.RingIn, queues.LocalIn, queues.WorkerIn}
-		for _, queueList := range allQueues {
-			for _, q := range queueList {
-				if err := q.Tick(cycle); err != nil {
-					t.Fatalf("Input queue tick failed at cycle %d: %v", cycle, err)
-				}
-			}
-		}
-		allOutputQueues := [][]*queue.OutputQueue{queues.RingOut, queues.LocalOut, queues.WorkerOut}
-		for _, queueList := range allOutputQueues {
-			for _, q := range queueList {
-				if err := q.Tick(cycle); err != nil {
-					t.Fatalf("Output queue tick failed at cycle %d: %v", cycle, err)
-				}
-			}
-		}
+		// Queues are ticked automatically by Nodes.
 		for _, link := range ringLinks {
 			if err := link.Tick(cycle); err != nil {
 				t.Fatalf("Link tick failed at cycle %d: %v", cycle, err)
@@ -937,22 +918,7 @@ func TestBufferlessRing_Visualized(t *testing.T) {
 				t.Fatalf("Worker tick failed at cycle %d: %v", cycle, err)
 			}
 		}
-		allQueues := [][]*queue.InputQueue{queues.RingIn, queues.LocalIn, queues.WorkerIn}
-		for _, queueList := range allQueues {
-			for _, q := range queueList {
-				if err := q.Tick(cycle); err != nil {
-					t.Fatalf("Input queue tick failed at cycle %d: %v", cycle, err)
-				}
-			}
-		}
-		allOutputQueues := [][]*queue.OutputQueue{queues.RingOut, queues.LocalOut, queues.WorkerOut}
-		for _, queueList := range allOutputQueues {
-			for _, q := range queueList {
-				if err := q.Tick(cycle); err != nil {
-					t.Fatalf("Output queue tick failed at cycle %d: %v", cycle, err)
-				}
-			}
-		}
+		// Queues are ticked automatically by Nodes.
 		for _, link := range ringLinks {
 			if err := link.Tick(cycle); err != nil {
 				t.Fatalf("Link tick failed at cycle %d: %v", cycle, err)

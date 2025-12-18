@@ -13,8 +13,9 @@ import (
 
 // BenchmarkNetworkScaling tests network performance with different node counts.
 // This benchmark is designed for profiling with:
-//   go test -bench=BenchmarkNetworkScaling -cpuprofile=cpu.prof -memprofile=mem.prof
-//   go tool pprof cpu.prof
+//
+//	go test -bench=BenchmarkNetworkScaling -cpuprofile=cpu.prof -memprofile=mem.prof
+//	go tool pprof cpu.prof
 func BenchmarkNetworkScaling(b *testing.B) {
 	testCases := []struct {
 		name      string
@@ -46,7 +47,7 @@ func BenchmarkNetworkScaling(b *testing.B) {
 
 			for i := 0; i < nodeCount; i++ {
 				n := node.New(i)
-				input := queue.NewInputQueue(64, 1, 1)
+				input := queue.NewInputQueue(64, 1)
 				output := queue.NewOutputQueue(64, 1, 1)
 
 				if err := n.AddInputQueue(input); err != nil {
@@ -158,7 +159,7 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 
 			for i := 0; i < nodeCount; i++ {
 				n := node.New(i)
-				input := queue.NewInputQueue(64, 1, 1)
+				input := queue.NewInputQueue(64, 1)
 				output := queue.NewOutputQueue(64, 1, 1)
 
 				if err := n.AddInputQueue(input); err != nil {

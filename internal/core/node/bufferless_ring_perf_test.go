@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
@@ -111,7 +112,7 @@ func benchmarkBufferlessRing(b *testing.B, nodeCount, cycles int) {
 
 		// Setup packet injection from Worker0
 		var injectedCount int64
-		workers[0].SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
+		workers[0].SetProcessHook(func(_ context.Context, cycle uint64, _ [][]packet.Packet) error {
 			// Inject new packet every N cycles
 			if cycle%injectInterval == 0 && int(cycle) < cycles {
 				pkt := packet.Packet{
@@ -123,7 +124,7 @@ func benchmarkBufferlessRing(b *testing.B, nodeCount, cycles int) {
 					atomic.AddInt64(&injectedCount, 1)
 				}
 			}
-			return buffer, nil
+			return nil
 		})
 
 		// Setup packet reception at last worker
@@ -150,23 +151,9 @@ func benchmarkBufferlessRing(b *testing.B, nodeCount, cycles int) {
 			}
 
 			// Tick queues
-			allQueues := [][]*queue.InputQueue{queues.RingIn, queues.LocalIn, queues.WorkerIn}
-			for _, queueList := range allQueues {
-				for _, q := range queueList {
-					if err := q.Tick(cycle); err != nil {
-						b.Fatalf("Input queue tick failed: %v", err)
-					}
-				}
-			}
+			// 3. Queues (Handled by Nodes)
 
-			allOutputQueues := [][]*queue.OutputQueue{queues.RingOut, queues.LocalOut, queues.WorkerOut}
-			for _, queueList := range allOutputQueues {
-				for _, q := range queueList {
-					if err := q.Tick(cycle); err != nil {
-						b.Fatalf("Output queue tick failed: %v", err)
-					}
-				}
-			}
+			// 4. Output Queues (Handled by Nodes)
 
 			// Tick links
 			for _, l := range ringLinks {
@@ -206,7 +193,7 @@ func benchmarkBufferlessRingThroughput(b *testing.B, nodeCount, cycles, injectIn
 		var injectedCount, receivedCount, droppedCount int64
 
 		// Inject packets from Worker0
-		workers[0].SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
+		workers[0].SetProcessHook(func(_ context.Context, cycle uint64, _ [][]packet.Packet) error {
 			if cycle%uint64(injectInterval) == 0 && int(cycle) < cycles {
 				pkt := packet.Packet{
 					SourceID: 0,
@@ -219,7 +206,7 @@ func benchmarkBufferlessRingThroughput(b *testing.B, nodeCount, cycles, injectIn
 					atomic.AddInt64(&droppedCount, 1)
 				}
 			}
-			return buffer, nil
+			return nil
 		})
 
 		queues.WorkerIn[nodeCount-1].SetPacketReceivedHook(func(pkt packet.Packet) {
@@ -260,14 +247,41 @@ func benchmarkBufferlessRingBackpressure(b *testing.B, nodeCount, cycles int) {
 		)
 
 		// Block Worker1 to create backpressure
-		workers[1].SetPickHook(func(ctx context.Context, cycle uint64, defaultPick func() []packet.Packet) ([]packet.Packet, error) {
-			return []packet.Packet{}, nil // Don't pick any packets
-		})
+		// Block Worker1 to create backpressure
+		// We do this by filling its output queue so it cannot eject packets from network
+		// (Assuming worker logic: process input -> send to output. If output full, input not processed?)
+		// Actually, TestNode with no hook consumes everything.
+		// To simulate backpressure with TestNode, we need a hook that FAILS to process if backpressure is desired?
+		// No, BaseNode.Tick() picks from input.
+		// The only way to stop picking is if the input queue is empty.
+		// PROPER BACKPRESSURE in this architecture:
+		// BaseNode picks packets.
+		// TestNode.Process buffer them.
+		// If we want to simulate "Network cannot deliver to Worker", we need the ROUTER to fail to eject.
+		// Router ejects to LocalOut. LocalOut connects to WorkerIn.
+		// If WorkerIn is full, Router cannot eject.
+		// Worker consumes from WorkerIn.
+		// So to create backpressure, we must STOP Worker from consuming from WorkerIn.
+		// But BaseNode ALWAYS consumes from input (Pick).
+
+		// Wait, if BaseNode ALWAYS picks, then WorkerIn never fills up (unless arrival > 1/cycle).
+		// We need a test node that DOES NOT pick?
+		// BaseNode is designed to always Pick.
+		// "Pick" moves packets from Queue to "received" buffer.
+
+		// If we want to test Router backpressure logic, we need `WorkerIn` to be full.
+		// But `Worker` drains it every cycle.
+		// So we must NOT tick the worker?
+		// If we don't tick Worker1, it won't pick. Queue will fill. Backpressure propagates.
+
+		// Strategy: In the simulation loop, SKIP ticking Worker1.
+
+		// Remove SetPickHook call here. We will handle it in the loop.
 
 		var injectedCount, circulatingCount int64
 
 		// Inject packets targeting Worker1 (will circulate)
-		workers[0].SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
+		workers[0].SetProcessHook(func(_ context.Context, cycle uint64, _ [][]packet.Packet) error {
 			if cycle%injectInterval == 0 && int(cycle) < cycles/2 { // Only inject in first half
 				pkt := packet.Packet{
 					SourceID: 0,
@@ -278,12 +292,36 @@ func benchmarkBufferlessRingBackpressure(b *testing.B, nodeCount, cycles int) {
 					atomic.AddInt64(&injectedCount, 1)
 				}
 			}
-			return buffer, nil
+			return nil
 		})
 
 		// Count packets stuck in ring
 		ctx := context.Background()
-		runBufferlessRingSimulation(ctx, routers, workers, queues, ringLinks, cycles)
+		// Inline simulation to allow skipping Worker1 tick
+		for cycle := 0; cycle < cycles; cycle++ {
+			// Tick routers
+			for _, r := range routers {
+				r.Tick(ctx, uint64(cycle), 0)
+			}
+
+			// Tick workers (SKIP Worker 1 to create backpressure)
+			for i, w := range workers {
+				if i == 1 {
+					continue // Worker 1 is blocked/stalled
+				}
+				w.Tick(ctx, uint64(cycle), 0)
+			}
+
+			// Links are ticked by runBufferlessRingSimulation? No, manual tick needed if inlining.
+			// Queues are ticked by Nodes (Routers/Workers).
+			// Since Worker 1 is NOT ticked, its queues (WorkerIn/WorkerOut) are NOT ticked.
+			// This is fine for backpressure on WorkerIn.
+
+			// Tick links
+			for _, l := range ringLinks {
+				l.Tick(cycle)
+			}
+		}
 
 		// Measure queue occupancy at end
 		for _, q := range queues.RingIn {
@@ -318,7 +356,7 @@ func benchmarkBufferlessRingBufferSize(b *testing.B, nodeCount, cycles, bufferSi
 
 		var injectedCount, receivedCount int64
 
-		workers[0].SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
+		workers[0].SetProcessHook(func(_ context.Context, cycle uint64, _ [][]packet.Packet) error {
 			if cycle%injectInterval == 0 && int(cycle) < cycles {
 				pkt := packet.Packet{
 					SourceID: 0,
@@ -329,7 +367,7 @@ func benchmarkBufferlessRingBufferSize(b *testing.B, nodeCount, cycles, bufferSi
 					atomic.AddInt64(&injectedCount, 1)
 				}
 			}
-			return buffer, nil
+			return nil
 		})
 
 		queues.WorkerIn[nodeCount-1].SetPacketReceivedHook(func(pkt packet.Packet) {
@@ -348,19 +386,19 @@ func benchmarkBufferlessRingBufferSize(b *testing.B, nodeCount, cycles, bufferSi
 // buildBufferlessRingNetworkBench builds a bufferless ring network for benchmarking.
 func buildBufferlessRingNetworkBench(b *testing.B, nodeCount, ringLatency, routerBuffer, queueSize, queueBandwidth int) (
 	[]*BufferlessRingRouterNode,
-	[]*Node,
+	[]*TestNode,
 	*QueueCollection,
 	[]*link.Link,
 ) {
 	// Create routers and workers
 	routers := make([]*BufferlessRingRouterNode, nodeCount)
-	workers := make([]*Node, nodeCount)
+	workers := make([]*TestNode, nodeCount)
 
 	for i := 0; i < nodeCount; i++ {
 		routerID := 100 + i
 		workerID := i
 		routers[i] = NewBufferlessRingRouter(routerID, workerID, routerBuffer)
-		workers[i] = New(workerID)
+		workers[i] = NewTestNode(workerID)
 	}
 
 	// Create queues
@@ -372,16 +410,13 @@ func buildBufferlessRingNetworkBench(b *testing.B, nodeCount, ringLatency, route
 	workerOutQueues := make([]*queue.OutputQueue, nodeCount)
 
 	for i := 0; i < nodeCount; i++ {
-		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		ringOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		localOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth, queueBandwidth)
+		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
 		workerOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
 
-		ringInQueues[i].EnableAlwaysReady()
-		localInQueues[i].EnableAlwaysReady()
-		workerInQueues[i].EnableAlwaysReady()
 	}
 
 	// Connect routers
@@ -418,17 +453,31 @@ func buildBufferlessRingNetworkBench(b *testing.B, nodeCount, ringLatency, route
 		targetID := 100 + nextRouter
 
 		fc := link.NewBufferlessFlowControl()
-		ringLink, linkIn, linkOut := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
+		ringLink := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
 		ringLinks[i] = ringLink
 
-		linkIn.Plug(ringOutQueues[i].QueueOutPort())
-		linkOut.Plug(ringInQueues[nextRouter].AsInPort())
+		// OutputQueue -> Link
+		p1 := ahead_port.NewPort()
+		ringOutQueues[i].SetDownstreamPort(p1.AsInPort())
+		ringLink.SetUpstreamPort(p1.AsOutPort())
+
+		// Link -> InputQueue
+		p2 := ahead_port.NewPort()
+		ringLink.SetDownstreamPort(p2.AsInPort())
+		ringInQueues[nextRouter].SetUpstreamPort(p2.AsOutPort())
 	}
 
 	// Create local connections
 	for i := 0; i < nodeCount; i++ {
-		workerOutQueues[i].QueueOutPort().Plug(localInQueues[i].QueueInPort())
-		localOutQueues[i].QueueOutPort().Plug(workerInQueues[i].QueueInPort())
+		// Worker -> Router
+		p1 := ahead_port.NewPort()
+		workerOutQueues[i].SetDownstreamPort(p1.AsInPort())
+		localInQueues[i].SetUpstreamPort(p1.AsOutPort())
+
+		// Router -> Worker
+		p2 := ahead_port.NewPort()
+		localOutQueues[i].SetDownstreamPort(p2.AsInPort())
+		workerInQueues[i].SetUpstreamPort(p2.AsOutPort())
 	}
 
 	queues := &QueueCollection{
@@ -447,12 +496,17 @@ func buildBufferlessRingNetworkBench(b *testing.B, nodeCount, ringLatency, route
 func runBufferlessRingSimulation(
 	ctx context.Context,
 	routers []*BufferlessRingRouterNode,
-	workers []*Node,
+	workers []*TestNode,
 	queues *QueueCollection,
 	ringLinks []*link.Link,
 	cycles int,
 ) {
 	for cycle := 0; cycle < cycles; cycle++ {
+		// Tick links first
+		for _, l := range ringLinks {
+			l.Tick(cycle)
+		}
+
 		// Tick routers
 		for _, r := range routers {
 			r.Tick(ctx, uint64(cycle), 0)
@@ -461,26 +515,6 @@ func runBufferlessRingSimulation(
 		// Tick workers
 		for _, w := range workers {
 			w.Tick(ctx, uint64(cycle), 0)
-		}
-
-		// Tick queues
-		allQueues := [][]*queue.InputQueue{queues.RingIn, queues.LocalIn, queues.WorkerIn}
-		for _, queueList := range allQueues {
-			for _, q := range queueList {
-				q.Tick(cycle)
-			}
-		}
-
-		allOutputQueues := [][]*queue.OutputQueue{queues.RingOut, queues.LocalOut, queues.WorkerOut}
-		for _, queueList := range allOutputQueues {
-			for _, q := range queueList {
-				q.Tick(cycle)
-			}
-		}
-
-		// Tick links
-		for _, l := range ringLinks {
-			l.Tick(cycle)
 		}
 	}
 }

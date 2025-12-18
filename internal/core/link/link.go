@@ -103,6 +103,8 @@ func NewLinkWithFlowControl(sourceID, targetID, latency, bandwidth int, flowCont
 // Link acts as downstream for this port.
 func (l *Link) SetUpstreamPort(port ahead_port.OutPort) {
 	l.fromUpstream = port
+	// Initialize ready state for cycle 0
+	l.fromUpstream.UpdateReady(0, true)
 }
 
 // SetDownstreamPort sets the port for sending data to downstream.
@@ -204,25 +206,36 @@ func (l *Link) processPacketsBuffered(
 			Cycle:  targetCycle,
 			Packet: pkt,
 		}
-		return l.toDownstream.TrySend(targetCycle, pwc)
+		return l.toDownstream.TryPeekSend(targetCycle, pwc)
 	}
 
 	// 1. Process pending packets
 	for _, pkt := range l.pendingPackets {
 		targetCycle := pkt.Cycle
-		if !fc.CanAcceptPacket(cycle, targetCycle) {
-			*newPending = append(*newPending, pkt)
-			continue
+		// If packet was targeted for a past cycle, reschedule for now
+		if targetCycle < cycle {
+			targetCycle = cycle
+			pkt.Cycle = cycle
 		}
-		fc.AddToSlot(pkt, targetCycle)
+
+		if fc.CanAcceptPacket(cycle, targetCycle) {
+			fc.AddToSlot(pkt, targetCycle)
+		} else {
+			*newPending = append(*newPending, pkt)
+		}
 	}
 
 	// 2. Process new packets from upstream
 	for _, pkt := range packets {
 		targetCycle := cycle
-		// Try to send immediately
-		if !sendPacket(targetCycle, pkt) {
-			// Downstream not ready, buffer for retry
+		if fc.CanAcceptPacket(cycle, targetCycle) {
+			pwc := ahead_port.PacketWithCycle{
+				Cycle:  targetCycle,
+				Packet: pkt,
+			}
+			fc.AddToSlot(pwc, targetCycle)
+		} else {
+			// Cannot accept (bandwidth full or outside window), keep as pending
 			*newPending = append(*newPending, ahead_port.PacketWithCycle{
 				Cycle:  targetCycle,
 				Packet: pkt,
@@ -270,7 +283,7 @@ func (l *Link) processPacketsBufferless(
 			Cycle:  targetCycle,
 			Packet: pkt,
 		}
-		return l.toDownstream.TrySend(targetCycle, pwc)
+		return l.toDownstream.TryPeekSend(targetCycle, pwc)
 	}
 
 	// 1. Process pending packets

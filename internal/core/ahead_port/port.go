@@ -15,8 +15,13 @@ type Packet = packet.Packet
 // InPort represents the upstream view of a port (sender's perspective).
 // Upstream components use this interface to send data to downstream components.
 type InPort interface {
-	// TrySend attempts to send a packet to the downstream component.
+	// TryPeekSend attempts to send a packet to the downstream component without blocking.
 	// Returns true if the packet was sent successfully, false if downstream is not ready.
+	TryPeekSend(cycle int, pkt PacketWithCycle) bool
+
+	// TrySend attempts to send a packet to the downstream component.
+	// This blocks until the downstream component decides its ready state.
+	// Returns true if the packet was sent successfully, false if downstream is declared not ready.
 	TrySend(cycle int, pkt PacketWithCycle) bool
 
 	// PeekReady checks if the downstream component is ready to receive data for the given cycle.
@@ -24,6 +29,11 @@ type InPort interface {
 	//   - ready: true if downstream is ready, false otherwise
 	//   - decided: true if the ready state has been determined, false if undecided
 	PeekReady(cycle int) (ready bool, decided bool)
+
+	// IsReady blocks until the downstream component has decided its ready state for the given cycle.
+	// Returns the ready state: true if ready, false if not ready.
+	// This is a blocking call that waits for the decision to be made.
+	IsReady(cycle int) bool
 
 	// MarkDone marks that the upstream component has completed the specified cycle.
 	// This allows the downstream component to safely read data for this cycle.
@@ -92,12 +102,25 @@ func NewPort() *Port {
 
 // ===== InPort interface implementation (upstream view) =====
 
-// TrySend attempts to send a packet to the downstream component.
+// TryPeekSend attempts to send a packet to the downstream component without blocking.
 // Returns true if the packet was sent successfully, false if downstream is not ready.
-func (p *Port) TrySend(cycle int, pkt PacketWithCycle) bool {
+func (p *Port) TryPeekSend(cycle int, pkt PacketWithCycle) bool {
 	// Check if downstream is ready
 	ready, decided := p.PeekReady(cycle)
 	if !decided || !ready {
+		return false
+	}
+
+	// Send packet to channel
+	p.channel <- pkt
+	return true
+}
+
+// TrySend attempts to send a packet to the downstream component.
+// This blocks until the downstream component decides its ready state.
+// Returns true if the packet was sent successfully, false if downstream is declared not ready.
+func (p *Port) TrySend(cycle int, pkt PacketWithCycle) bool {
+	if !p.IsReady(cycle) {
 		return false
 	}
 
@@ -115,6 +138,29 @@ func (p *Port) PeekReady(cycle int) (bool, bool) {
 	ready, decided := p.downstreamReady[cycle]
 	p.downstreamReadyMu.Unlock()
 	return ready, decided
+}
+
+// IsReady blocks until the downstream component has decided its ready state for the given cycle.
+// Returns the ready state: true if ready, false if not ready.
+func (p *Port) IsReady(cycle int) bool {
+	p.downstreamReadyMu.Lock()
+
+	// Check if already decided
+	if ready, decided := p.downstreamReady[cycle]; decided {
+		p.downstreamReadyMu.Unlock()
+		return ready
+	}
+
+	// Create channel for waiting if doesn't exist
+	if _, exists := p.downstreamReadyCh[cycle]; !exists {
+		p.downstreamReadyCh[cycle] = make(chan bool, 1)
+	}
+	ch := p.downstreamReadyCh[cycle]
+	p.downstreamReadyMu.Unlock()
+
+	// Block until notified
+	ready := <-ch
+	return ready
 }
 
 // MarkDone marks that the upstream component has completed the specified cycle.

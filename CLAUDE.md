@@ -1,5 +1,9 @@
 # Flow Simulation Project Memory
 
+## General Guidelines
+- **主要语言**: 中文 (Chinese)。请始终使用中文与用户交流，包括解释、文档和提交信息。
+
+
 ## Testing Configuration
 - **Go Test Timeout**: 所有 `go test` 命令使用 `-timeout=3s` 标志
   - 示例: `go test -timeout=3s ./...`

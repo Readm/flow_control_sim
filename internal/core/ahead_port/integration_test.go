@@ -2,11 +2,17 @@ package ahead_port
 
 import (
 	"testing"
+	"time"
 
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
 // Mock types are now defined in mocks.go
+
+// timeAfter is a helper function for timeout tests
+func timeAfter(ms int) <-chan time.Time {
+	return time.After(time.Duration(ms) * time.Millisecond)
+}
 
 func TestConnect_BasicFlow(t *testing.T) {
 	upstream := &MockUpstream{}
@@ -101,9 +107,9 @@ func TestConnect_Backpressure(t *testing.T) {
 		TargetID: 2,
 	}
 
-	// Send should fail
-	if upstream.SendPacket(0, pkt) {
-		t.Fatal("Send should fail when downstream is not ready")
+	// Send should fail (using non-blocking check)
+	if upstream.TryPeekSendPacket(0, pkt) {
+		t.Fatal("TryPeekSendPacket should fail when downstream is not ready")
 	}
 
 	// Now downstream becomes ready
@@ -159,5 +165,91 @@ func TestConnectWithPort(t *testing.T) {
 	packets := downstream.ReceivePackets(0)
 	if len(packets) != 1 {
 		t.Fatalf("Expected 1 packet, got %d", len(packets))
+	}
+}
+
+func TestIsReady_Blocking(t *testing.T) {
+	upstream := &MockUpstream{}
+	downstream := &MockDownstream{}
+
+	Connect(upstream, downstream)
+
+	// Test 1: IsReady blocks when state is undecided
+	done := make(chan bool, 1)
+	go func() {
+		ready := upstream.toDownstream.IsReady(0)
+		done <- ready
+	}()
+
+	// Verify it's blocking (should not return immediately)
+	select {
+	case <-done:
+		t.Fatal("IsReady returned before ready state was decided")
+	case <-timeAfter(50):
+		// Expected to block
+	}
+
+	// Now downstream declares ready
+	downstream.UpdateReady(0, true)
+
+	// Now IsReady should return
+	select {
+	case ready := <-done:
+		if !ready {
+			t.Fatal("Expected ready=true, got false")
+		}
+	case <-timeAfter(100):
+		t.Fatal("IsReady did not return after UpdateReady")
+	}
+}
+
+func TestIsReady_ImmediateReturn(t *testing.T) {
+	upstream := &MockUpstream{}
+	downstream := &MockDownstream{}
+
+	Connect(upstream, downstream)
+
+	// Downstream declares ready BEFORE IsReady
+	downstream.UpdateReady(0, true)
+
+	// IsReady should return immediately
+	ready := upstream.toDownstream.IsReady(0)
+	if !ready {
+		t.Fatal("Expected ready=true, got false")
+	}
+}
+
+func TestIsReady_NotReady(t *testing.T) {
+	upstream := &MockUpstream{}
+	downstream := &MockDownstream{}
+
+	Connect(upstream, downstream)
+
+	// Test blocking when downstream is NOT ready
+	done := make(chan bool, 1)
+	go func() {
+		ready := upstream.toDownstream.IsReady(0)
+		done <- ready
+	}()
+
+	// Verify it's blocking
+	select {
+	case <-done:
+		t.Fatal("IsReady returned before ready state was decided")
+	case <-timeAfter(50):
+		// Expected to block
+	}
+
+	// Downstream declares NOT ready
+	downstream.UpdateReady(0, false)
+
+	// IsReady should return false
+	select {
+	case ready := <-done:
+		if ready {
+			t.Fatal("Expected ready=false, got true")
+		}
+	case <-timeAfter(100):
+		t.Fatal("IsReady did not return after UpdateReady")
 	}
 }

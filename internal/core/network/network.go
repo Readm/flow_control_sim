@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/capability/cache"
 	"github.com/Readm/flow_sim/internal/core/capability/directory"
 	"github.com/Readm/flow_sim/internal/core/debug"
@@ -11,6 +12,8 @@ import (
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
 )
+
+// ... (rest of imports and structs unchanged) ...
 
 // NodeHandle keeps the node instance together with the concrete queues used to connect links.
 type NodeHandle struct {
@@ -213,7 +216,7 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 			if outBandwidth <= 0 {
 				return fmt.Errorf("node %d input port %d: outBandwidth must be positive, got %d", nodeSchema.NodeID, i, outBandwidth)
 			}
-			iq := queue.NewInputQueue(bufferSize, inBandwidth, outBandwidth)
+			iq := queue.NewInputQueue(bufferSize, inBandwidth)
 			inputs = append(inputs, iq)
 			if err := newNode.AddInputQueue(iq); err != nil {
 				return fmt.Errorf("failed to add input queue to node %d port %d: %w", nodeSchema.NodeID, i, err)
@@ -284,17 +287,18 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 		latency := 1
 		bandwidth := 1
 
-		// Create Link with new API (returns 3 values)
-		linkInstance, linkIn, linkOut := link.NewLink(
+		// Create Link
+		linkInstance := link.NewLink(
 			edgeSchema.SrcNodeID,
 			edgeSchema.DstNodeID,
 			latency,
 			bandwidth,
 		)
 
-		// Connect using Plug pattern
-		linkIn.Plug(sourceOutput.QueueOutPort())
-		linkOut.Plug(targetInput.AsInPort())
+		// Connect using ahead_port.Connect
+		// OutputQueue -> Link -> InputQueue
+		ahead_port.Connect(sourceOutput, linkInstance)
+		ahead_port.Connect(linkInstance, targetInput)
 
 		n.links = append(n.links, linkInstance)
 	}

@@ -36,7 +36,7 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 
 	// Test both single-core and multi-core
 	testCases := []struct {
-		name      string
+		name       string
 		gomaxprocs int
 	}{
 		{"SingleCore", 1},
@@ -65,7 +65,7 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 				// Create input and output queues with reasonable buffer sizes
 				// IMPORTANT: OutputQueue bandwidth must match or be less than Link bandwidth
 				// to avoid overwhelming links. With Link bandwidth=1, use OutputQueue bandwidth=1
-				input := queue.NewInputQueue(64, 1, 1)
+				input := queue.NewInputQueue(64, 1)
 				output := queue.NewOutputQueue(64, 1, 1)
 
 				if err := n.AddInputQueue(input); err != nil {

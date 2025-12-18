@@ -82,7 +82,7 @@ func (oq *OutputQueue) Tick(cycle int) error {
 			Cycle:  cycle,
 			Packet: pkt.Packet,
 		}
-		if oq.toDownstream.TrySend(cycle, pwc) {
+		if oq.toDownstream.TryPeekSend(cycle, pwc) {
 			sent++
 			if oq.onPacketSent != nil {
 				oq.onPacketSent(pkt.Packet)

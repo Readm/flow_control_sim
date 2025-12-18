@@ -10,7 +10,7 @@ import "sync"
 // tickQueuesConcurrently executes all queue Tick operations concurrently using goroutines.
 // This version is available when building with: go build -tags async
 // It spawns one goroutine per queue for parallel execution.
-func (n *Node) tickQueuesConcurrently(cycle int) error {
+func (n *BaseNode) tickQueuesConcurrently(cycle int) error {
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(n.inputs)+len(n.outputs))
 

@@ -154,6 +154,9 @@ func TestLinkBandwidthLimit(t *testing.T) {
 		t.Fatalf("expected at most 2 packets in cycle 2, got %d", len(received1))
 	}
 
+	// Mark upstream done for cycle 1 (required for Link.Tick(3) which reads cycle 1)
+	upstream.MarkDone(1)
+
 	// Tick Link at cycle 3 to send remaining packets
 	if err := link.Tick(3); err != nil {
 		t.Fatalf("link.Tick(3) failed: %v", err)

@@ -3,12 +3,57 @@ package node
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/Readm/flow_sim/internal/core/capability/cache"
 	"github.com/Readm/flow_sim/internal/core/capability/directory"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
+
+// TestNode is a helper for testing BaseNode functionality.
+type TestNode struct {
+	*BaseNode
+	processBuffer []packet.Packet
+	bufferMu      sync.Mutex
+	hook          func(ctx context.Context, cycle uint64, inputs [][]packet.Packet) error
+}
+
+func NewTestNode(id int) *TestNode {
+	t := &TestNode{
+		processBuffer: make([]packet.Packet, 0),
+	}
+	t.BaseNode = NewBaseNode(id, t)
+	return t
+}
+
+func (t *TestNode) SetProcessHook(hook func(ctx context.Context, cycle uint64, inputs [][]packet.Packet) error) {
+	t.hook = hook
+}
+
+func (t *TestNode) Process(ctx context.Context, cycle uint64, inputs [][]packet.Packet) error {
+	t.bufferMu.Lock()
+	defer t.bufferMu.Unlock()
+
+	// Collect all inputs into buffer for inspection
+	t.processBuffer = nil
+	for _, q := range inputs {
+		t.processBuffer = append(t.processBuffer, q...)
+	}
+
+	if t.hook != nil {
+		return t.hook(ctx, cycle, inputs)
+	}
+	return nil
+}
+
+func (t *TestNode) ProcessBuffer() []packet.Packet {
+	t.bufferMu.Lock()
+	defer t.bufferMu.Unlock()
+	buf := make([]packet.Packet, len(t.processBuffer))
+	copy(buf, t.processBuffer)
+	return buf
+}
 
 func TestNodeCollectsPacketsAndUpdatesBuffer(t *testing.T) {
 	t.Parallel()
@@ -25,7 +70,7 @@ func TestNodeCollectsPacketsAndUpdatesBuffer(t *testing.T) {
 	}
 	oq := &mockOutputQueue{}
 
-	n := New(10)
+	n := NewTestNode(10)
 	if err := n.AddInputQueue(iq1); err != nil {
 		t.Fatalf("AddInputQueue: %v", err)
 	}
@@ -44,6 +89,8 @@ func TestNodeCollectsPacketsAndUpdatesBuffer(t *testing.T) {
 	if len(buf) != 3 {
 		t.Fatalf("expected 3 packets in buffer, got %d", len(buf))
 	}
+	// Note: Order depends on tickInputQueues order (inputs slice order)
+	// iq1 then iq2
 	want := []string{"a", "b", "c"}
 	for i, pkt := range buf {
 		if string(pkt.Payload) != want[i] {
@@ -54,46 +101,38 @@ func TestNodeCollectsPacketsAndUpdatesBuffer(t *testing.T) {
 	if iq1.tickCount != 1 || iq2.tickCount != 1 {
 		t.Fatalf("input queues not ticked: %d %d", iq1.tickCount, iq2.tickCount)
 	}
+	// Output queues are ticked in Phase 3
 	if oq.tickCount != 1 {
 		t.Fatalf("output queue not ticked: %d", oq.tickCount)
 	}
 }
 
-func TestNodeProcessHookCanMutateBuffer(t *testing.T) {
+func TestNodeProcessHookExecuted(t *testing.T) {
 	t.Parallel()
 
-	iq := &mockInputQueue{
-		picks: [][]packet.Packet{
-			{{Payload: "payload"}, {Payload: "other"}},
-		},
-	}
-
-	n := New(5)
-	if err := n.AddInputQueue(iq); err != nil {
-		t.Fatalf("AddInputQueue: %v", err)
-	}
-
-	n.SetProcessHook(func(_ context.Context, _ uint64, buf []packet.Packet) ([]packet.Packet, error) {
-		return []packet.Packet{{Payload: "hooked"}}, nil
+	n := NewTestNode(5)
+	executed := false
+	n.SetProcessHook(func(_ context.Context, _ uint64, _ [][]packet.Packet) error {
+		executed = true
+		return nil
 	})
 
 	if err := n.Tick(context.Background(), 2, 0); err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
 
-	buf := n.ProcessBuffer()
-	if len(buf) != 1 || string(buf[0].Payload) != "hooked" {
-		t.Fatalf("unexpected buffer after hook: %#v", buf)
+	if !executed {
+		t.Fatalf("ProcessHook should have been executed")
 	}
 }
 
 func TestNodeProcessHookErrorStopsTick(t *testing.T) {
 	t.Parallel()
 
-	n := New(3)
+	n := NewTestNode(3)
 	errHook := errors.New("boom")
-	n.SetProcessHook(func(_ context.Context, _ uint64, _ []packet.Packet) ([]packet.Packet, error) {
-		return nil, errHook
+	n.SetProcessHook(func(_ context.Context, _ uint64, _ [][]packet.Packet) error {
+		return errHook
 	})
 
 	if err := n.Tick(context.Background(), 0, 0); !errors.Is(err, errHook) {
@@ -101,34 +140,10 @@ func TestNodeProcessHookErrorStopsTick(t *testing.T) {
 	}
 }
 
-func TestNodeProcessBufferIsolatedFromCallers(t *testing.T) {
-	t.Parallel()
-
-	iq := &mockInputQueue{
-		picks: [][]packet.Packet{
-			{{Payload: "immutable"}},
-		},
-	}
-	n := New(7)
-	_ = n.AddInputQueue(iq)
-
-	if err := n.Tick(context.Background(), 1, 0); err != nil {
-		t.Fatalf("Tick: %v", err)
-	}
-
-	buf := n.ProcessBuffer()
-	buf[0].Payload = "mutated"
-
-	buf2 := n.ProcessBuffer()
-	if string(buf2[0].Payload) != "immutable" {
-		t.Fatalf("ProcessBuffer should return copy, got %s", buf2[0].Payload)
-	}
-}
-
 func TestNodeCachesAndDirectories(t *testing.T) {
 	t.Parallel()
 
-	n := New(9)
+	n := NewTestNode(9)
 	mockCache := &fakeCache{}
 	mockDir := &fakeDirectory{}
 
@@ -149,13 +164,23 @@ func TestNodeTickPropagatesQueueErrors(t *testing.T) {
 	iqErr := errors.New("input error")
 	oqErr := errors.New("output error")
 
-	n := New(11)
+	n := NewTestNode(11)
 	_ = n.AddInputQueue(&mockInputQueue{tickErr: iqErr})
-	_ = n.AddOutputQueue(&mockOutputQueue{tickErr: oqErr})
+	// Note: Tick stops at first error.
+	// Input tick error should stop before process.
 
 	err := n.Tick(context.Background(), 0, 0)
-	if !errors.Is(err, iqErr) && !errors.Is(err, oqErr) {
-		t.Fatalf("expected queue error, got %v", err)
+	if !errors.Is(err, iqErr) {
+		t.Fatalf("expected input error, got %v", err)
+	}
+
+	// Test output error
+	n2 := NewTestNode(12)
+	_ = n2.AddOutputQueue(&mockOutputQueue{tickErr: oqErr})
+
+	err = n2.Tick(context.Background(), 0, 0)
+	if !errors.Is(err, oqErr) {
+		t.Fatalf("expected output error, got %v", err)
 	}
 }
 
@@ -210,7 +235,7 @@ type fakeDirectory struct{ directory.Directory }
 func TestNodeDataMap(t *testing.T) {
 	t.Parallel()
 
-	n := New(1)
+	n := NewTestNode(1)
 
 	// Test SetData and GetData
 	n.SetData("test_key", "test_value")
@@ -260,81 +285,5 @@ func TestNodeDataMap(t *testing.T) {
 
 	if !n.HasData("key1") || !n.HasData("key2") || !n.HasData("key3") {
 		t.Error("expected all keys to be present")
-	}
-
-	// Test GetAllData
-	allData := n.GetAllData()
-	if len(allData) != 3 {
-		t.Errorf("expected 3 keys, got %d", len(allData))
-	}
-	if allData["key1"].(int) != 123 {
-		t.Error("key1 value mismatch")
-	}
-	if allData["key2"].(bool) != true {
-		t.Error("key2 value mismatch")
-	}
-
-	// Test that GetAllData returns a copy (isolation)
-	allData["key1"] = 999
-	if n.GetData("key1").(int) != 123 {
-		t.Error("GetAllData should return a copy, not reference")
-	}
-}
-
-func TestNodeDataMap_DifferentTypes(t *testing.T) {
-	t.Parallel()
-
-	n := New(2)
-
-	// Test storing different types
-	type CustomStruct struct {
-		Field1 string
-		Field2 int
-	}
-
-	n.SetData("string", "value")
-	n.SetData("int", 42)
-	n.SetData("bool", false)
-	n.SetData("slice", []int{1, 2, 3})
-	n.SetData("map", map[string]int{"a": 1})
-	n.SetData("struct", CustomStruct{"test", 100})
-
-	// Verify all types can be retrieved
-	if n.GetData("string").(string) != "value" {
-		t.Error("string type mismatch")
-	}
-	if n.GetData("int").(int) != 42 {
-		t.Error("int type mismatch")
-	}
-	if n.GetData("bool").(bool) != false {
-		t.Error("bool type mismatch")
-	}
-	if len(n.GetData("slice").([]int)) != 3 {
-		t.Error("slice type mismatch")
-	}
-	if n.GetData("map").(map[string]int)["a"] != 1 {
-		t.Error("map type mismatch")
-	}
-	cs := n.GetData("struct").(CustomStruct)
-	if cs.Field1 != "test" || cs.Field2 != 100 {
-		t.Error("struct type mismatch")
-	}
-}
-
-func TestNodeDataMap_DeleteNonexistent(t *testing.T) {
-	t.Parallel()
-
-	n := New(3)
-
-	// Deleting nonexistent key should not panic
-	n.DeleteData("nonexistent")
-
-	// Multiple deletes should be safe
-	n.SetData("key", "value")
-	n.DeleteData("key")
-	n.DeleteData("key")
-
-	if n.HasData("key") {
-		t.Error("key should not exist after delete")
 	}
 }

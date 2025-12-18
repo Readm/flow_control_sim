@@ -3,7 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
-	"time"
+	"sync"
 
 	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/core/visualization"
@@ -29,13 +29,14 @@ import (
 // - outputs[0]: ringOutQueue (to next router)
 // - outputs[1]: localOutQueue (to local worker)
 type BufferlessRingRouterNode struct {
-	*Node // Embed Node for base functionality
+	*BaseNode // Embed BaseNode for base functionality
 
-	workerID       int                // ID of the connected worker node
-	bufferCapacity int                // Internal buffer capacity
+	workerID       int // ID of the connected worker node
+	bufferCapacity int // Internal buffer capacity
 
 	// Only one buffer for local injection (ring traffic never buffered in router)
-	injectionBuffer []packet.Packet   // Buffer for local packets waiting to inject onto ring
+	injectionBuffer []packet.Packet // Buffer for local packets waiting to inject onto ring
+	bufferMu        sync.Mutex      // Protects injectionBuffer
 }
 
 // NewBufferlessRingRouter creates a router node for bufferless ring topology.
@@ -45,40 +46,37 @@ type BufferlessRingRouterNode struct {
 // - workerID: ID of the connected worker node
 // - bufferCapacity: internal buffer size for injection queue
 func NewBufferlessRingRouter(routerID, workerID, bufferCapacity int) *BufferlessRingRouterNode {
-	baseNode := New(routerID)
-
 	router := &BufferlessRingRouterNode{
-		Node:            baseNode,
 		workerID:        workerID,
 		bufferCapacity:  bufferCapacity,
 		injectionBuffer: make([]packet.Packet, 0, bufferCapacity),
 	}
-
+	router.BaseNode = NewBaseNode(routerID, router)
 	return router
 }
 
-// Tick overrides Node's Tick to implement custom packet collection and routing.
-// This is necessary because the Router needs to distinguish between ring and local traffic,
-// which requires picking from input queues separately rather than using Node's collectPackets().
-func (r *BufferlessRingRouterNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
-	inputs := r.Node.InputQueues()
-	outputs := r.Node.OutputQueues()
-
+// Process implements the NodeHandler interface.
+// It replaces the old Tick logic for custom packet collection and routing.
+func (r *BufferlessRingRouterNode) Process(ctx context.Context, cycle uint64, inputs [][]packet.Packet) error {
 	if len(inputs) < 2 {
 		return fmt.Errorf("router node %d: expected 2 input queues, got %d", r.id, len(inputs))
 	}
+
+	outputs := r.OutputQueues()
 	if len(outputs) < 2 {
 		return fmt.Errorf("router node %d: expected 2 output queues, got %d", r.id, len(outputs))
 	}
 
-	ringInQueue := inputs[0]
-	localInQueue := inputs[1]
+	// Map inputs/outputs
+	// inputs[0] is ringIn, inputs[1] is localIn
+	ringInPackets := inputs[0]
+	localInPackets := inputs[1]
+
 	ringOutQueue := outputs[0]
 	localOutQueue := outputs[1]
 
-	// Collect packets from each input separately to distinguish ring vs local traffic
-	ringInPackets := ringInQueue.Pick()
-	localInPackets := localInQueue.Pick()
+	r.bufferMu.Lock()
+	defer r.bufferMu.Unlock()
 
 	debug.Logf("Router[%d]: cycle=%d, ringIn=%d, localIn=%d, buffer=%d",
 		r.id, cycle, len(ringInPackets), len(localInPackets), len(r.injectionBuffer))
