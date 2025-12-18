@@ -13,8 +13,8 @@ import (
 // where the transaction goroutine stays on the originating node.
 func TestSegmentedTransaction(t *testing.T) {
 	// Create two nodes: RN (node 1) and HN (node 2)
-	rn := node.New(1)
-	hn := node.New(2)
+	rn := node.NewWorkerNode(1)
+	hn := node.NewWorkerNode(2)
 
 	// Create TxnManagers for both nodes
 	rnManager := NewTxnManager(rn)
@@ -126,8 +126,8 @@ func TestSegmentedTransaction(t *testing.T) {
 // where the transaction migrates across nodes.
 func TestContinuousTransaction(t *testing.T) {
 	// Create two nodes: RN (node 1) and HN (node 2)
-	rn := node.New(1)
-	hn := node.New(2)
+	rn := node.NewWorkerNode(1)
+	hn := node.NewWorkerNode(2)
 
 	// Create TxnManagers
 	rnManager := NewTxnManager(rn)
@@ -267,9 +267,9 @@ func TestContinuousTransaction(t *testing.T) {
 // can run simultaneously in the same system.
 func TestBothModesCoexist(t *testing.T) {
 	// Create three nodes
-	node1 := node.New(1)
-	node2 := node.New(2)
-	node3 := node.New(3)
+	node1 := node.NewWorkerNode(1)
+	node2 := node.NewWorkerNode(2)
+	node3 := node.NewWorkerNode(3)
 
 	mgr1 := NewTxnManager(node1)
 	mgr2 := NewTxnManager(node2)
@@ -392,7 +392,7 @@ func TestBothModesCoexist(t *testing.T) {
 
 // TestMigrationResult tests that MigrationResult provides correct NodeAccessor
 func TestMigrationResult(t *testing.T) {
-	n := node.New(10)
+	n := node.NewWorkerNode(10)
 	accessor := NewLocalNodeAccessor(n)
 
 	result := &MigrationResult{

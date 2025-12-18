@@ -22,6 +22,11 @@
   2. 分析每个选项的优缺点
   3. 等待用户明确选择
   4. 然后再实施用户选择的方案
+## Design Principles
+- **零丢包 (Zero-Drop Packet)**: 仿真系统在任何情况下都不应发生静默丢包 (Silent Drop)。
+  - 如果缓冲区溢出，必须通过 `UpdateReady` 协议产生背压，或返回 `error` 中断仿真。
+  - 对于 Bufferless 链路，如果下游未就绪，包应缓存在链路内（pending）模拟延迟，而非丢弃。
+  - 对于超出同步周期的包，必须抛出 `panic` 以暴露逻辑错误。
 
 ## Project Information
 - 项目名称: 流仿真

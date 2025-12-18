@@ -110,16 +110,17 @@ func (iq *InputQueue) Tick(cycle int) error {
 				iq.onPacketReceived(pkt)
 			}
 		} else {
-			// Queue full - shouldn't happen if Ready protocol is obeyed
-			debug.Logf("InputQueue: DROPPED packet (queue full): Src=%d Dst=%d at cycle %d",
-				pkt.SourceID, pkt.TargetID, cycle)
+			return fmt.Errorf("InputQueue: capacity exceeded (%d/%d), cannot store packet Src=%d Dst=%d at cycle %d",
+				iq.Length(), iq.capacity, pkt.SourceID, pkt.TargetID, cycle)
 		}
 	}
 
 	iq.lastCyclePackets = received
 
 	// ===== 4. Update ready state for upstream =====
-	hasCapacity := iq.Length() < iq.Capacity()
+	// Only signal Ready if we have enough space for a full bandwidth burst in the next cycle.
+	// This prevents overflow if the upstream component obeys the Ready signal.
+	hasCapacity := iq.Length()+iq.inBandwidth <= iq.capacity
 	iq.fromUpstream.UpdateReady(cycle+1, hasCapacity)
 
 	return nil

@@ -60,7 +60,7 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 			var allOutputs []*queue.OutputQueue
 
 			for i := 0; i < nodeCount; i++ {
-				n := node.New(i)
+				n := node.NewWorkerNode(i)
 
 				// Create input and output queues with reasonable buffer sizes
 				// IMPORTANT: OutputQueue bandwidth must match or be less than Link bandwidth
@@ -94,7 +94,7 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 			// Delay: 2-20us per node, simulating GEM5 O3CPU execution time
 			for i := 1; i < nodeCount-1; i++ {
 				output := allOutputs[i]
-				nodeHandles[i].Node.SetProcessHook(forwardWithDelayHook(output, 2, 20))
+				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(forwardWithDelayHook(output, 2, 20))
 			}
 
 			// Connect nodes in a ring: 0->1->2->...->49->0
@@ -110,7 +110,7 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 			// Setup packet injection from Node0 every 3 cycles
 			// Node0 is the source - it only injects new packets, doesn't forward
 			var injectedCount int64
-			nodeHandles[0].Node.SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
+			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, inputs [][]packet.Packet) error {
 				// Drop any incoming packets (break the ring at Node0)
 				// This prevents multiple packets being sent in the same cycle
 
@@ -125,7 +125,7 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 						atomic.AddInt64(&injectedCount, 1)
 					}
 				}
-				return buffer, nil
+				return nil
 			})
 
 			// Setup packet reception and drop at last node
@@ -137,9 +137,9 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 			})
 
 			// Last node should NOT forward (drop packets)
-			nodeHandles[lastNodeIndex].Node.SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
+			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, inputs [][]packet.Packet) error {
 				// Drop all packets by not forwarding them
-				return nil, nil
+				return nil
 			})
 
 			// Run simulation and measure time
@@ -206,8 +206,12 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 }
 
 // forwardWithDelayHook creates a ProcessHook that forwards packets with random delay.
-func forwardWithDelayHook(output *queue.OutputQueue, minUs, maxUs int) node.ProcessHook {
-	return func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
+func forwardWithDelayHook(output *queue.OutputQueue, minUs, maxUs int) func(ctx context.Context, cycle uint64, inputs [][]packet.Packet) error {
+	return func(_ context.Context, cycle uint64, inputs [][]packet.Packet) error {
+		var buffer []packet.Packet
+		for _, b := range inputs {
+			buffer = append(buffer, b...)
+		}
 		// Add random delay (0-100us)
 		delayUs := minUs
 		if maxUs > minUs {
@@ -220,9 +224,9 @@ func forwardWithDelayHook(output *queue.OutputQueue, minUs, maxUs int) node.Proc
 		// Forward packets
 		if len(buffer) > 0 {
 			if err := output.InjectPackets(int(cycle), clonePackets(buffer)); err != nil {
-				return nil, err
+				return err
 			}
 		}
-		return buffer, nil
+		return nil
 	}
 }

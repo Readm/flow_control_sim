@@ -12,9 +12,8 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/transaction"
 )
 
-// setupSnoopNode creates a node with cache for snoop testing
-func setupSnoopNode(nodeID int) *node.Node {
-	n := node.New(nodeID)
+func setupSnoopNode(nodeID int) *node.WorkerNode {
+	n := node.NewWorkerNode(nodeID)
 	c := cache.NewFullyAssociativeCache(16)
 	n.AddCache(c)
 

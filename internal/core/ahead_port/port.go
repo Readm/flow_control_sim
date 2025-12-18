@@ -73,15 +73,9 @@ type Port struct {
 	// ===== Communication channel =====
 	channel chan PacketWithCycle
 
-	// ===== Upstream Done state =====
-	upstreamDone   int
-	upstreamDoneCh chan int
-	upstreamDoneMu sync.Mutex
-
-	// ===== Downstream Ready state =====
-	downstreamReady   map[int]bool
-	downstreamReadyCh map[int]chan bool
-	downstreamReadyMu sync.Mutex
+	// ===== Synchronization using ComponentSync =====
+	upstreamSync   *ComponentSync
+	downstreamSync *ComponentSync
 
 	// ===== Packet cache for out-of-order packets =====
 	pendingPackets map[int][]packet.Packet
@@ -91,12 +85,10 @@ type Port struct {
 // NewPort creates a new port instance.
 func NewPort() *Port {
 	return &Port{
-		channel:           make(chan PacketWithCycle, 8),
-		upstreamDone:      -1,
-		upstreamDoneCh:    make(chan int, 1),
-		downstreamReady:   make(map[int]bool),
-		downstreamReadyCh: make(map[int]chan bool),
-		pendingPackets:    make(map[int][]packet.Packet),
+		channel:        make(chan PacketWithCycle, 64), // Increased capacity
+		upstreamSync:   NewComponentSync(),
+		downstreamSync: NewComponentSync(),
+		pendingPackets: make(map[int][]packet.Packet),
 	}
 }
 
@@ -130,131 +122,69 @@ func (p *Port) TrySend(cycle int, pkt PacketWithCycle) bool {
 }
 
 // PeekReady checks if the downstream component is ready to receive data for the given cycle.
-// Returns (ready, decided):
-//   - ready: true if downstream is ready, false otherwise
-//   - decided: true if the ready state has been determined, false if undecided
 func (p *Port) PeekReady(cycle int) (bool, bool) {
-	p.downstreamReadyMu.Lock()
-	ready, decided := p.downstreamReady[cycle]
-	p.downstreamReadyMu.Unlock()
-	return ready, decided
+	return p.downstreamSync.IsReadyNonBlocking(cycle)
 }
 
 // IsReady blocks until the downstream component has decided its ready state for the given cycle.
-// Returns the ready state: true if ready, false if not ready.
 func (p *Port) IsReady(cycle int) bool {
-	p.downstreamReadyMu.Lock()
-
-	// Check if already decided
-	if ready, decided := p.downstreamReady[cycle]; decided {
-		p.downstreamReadyMu.Unlock()
-		return ready
-	}
-
-	// Create channel for waiting if doesn't exist
-	if _, exists := p.downstreamReadyCh[cycle]; !exists {
-		p.downstreamReadyCh[cycle] = make(chan bool, 1)
-	}
-	ch := p.downstreamReadyCh[cycle]
-	p.downstreamReadyMu.Unlock()
-
-	// Block until notified
-	ready := <-ch
-	return ready
+	return p.downstreamSync.Ready(cycle)
 }
 
 // MarkDone marks that the upstream component has completed the specified cycle.
-// This allows the downstream component to safely read data for this cycle.
 func (p *Port) MarkDone(cycle int) {
-	p.upstreamDoneMu.Lock()
-	defer p.upstreamDoneMu.Unlock()
-
-	if cycle > p.upstreamDone {
-		p.upstreamDone = cycle
-		// Notify waiting goroutines
-		select {
-		case p.upstreamDoneCh <- cycle:
-		default:
-		}
-	}
+	p.upstreamSync.SetDone(cycle)
 }
 
 // ===== OutPort interface implementation (downstream view) =====
 
 // Receive retrieves all packets for the specified cycle from the upstream component.
-// Returns all packets belonging to this cycle (may be empty).
+// This is now a blocking call that ensures all packets for the cycle are collected.
 func (p *Port) Receive(cycle int) []packet.Packet {
-	// 1. Check cache first
-	p.pendingMu.Lock()
-	if cached, ok := p.pendingPackets[cycle]; ok {
-		delete(p.pendingPackets, cycle)
-		p.pendingMu.Unlock()
-		return cached
-	}
-	p.pendingMu.Unlock()
+	// 1. Drain channel into cache
+	p.drainChannel()
 
-	// 2. Read from channel
-	var result []packet.Packet
+	// 2. Wait for upstream to be done with this cycle
+	p.WaitUpstreamDone(cycle)
+
+	// 3. Final drain to catch anything sent just before MarkDone
+	p.drainChannel()
+
+	// 4. Return cached packets
+	p.pendingMu.Lock()
+	defer p.pendingMu.Unlock()
+	pkts := p.pendingPackets[cycle]
+	delete(p.pendingPackets, cycle)
+	return pkts
+}
+
+// drainChannel reads all currently available packets from the channel into the cache.
+func (p *Port) drainChannel() {
 	for {
 		select {
 		case pwc := <-p.channel:
-			if pwc.Cycle == cycle {
-				// Packet for current cycle
-				result = append(result, pwc.Packet)
-			} else if pwc.Cycle > cycle {
-				// Future packet, cache it
-				p.pendingMu.Lock()
-				p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
-				p.pendingMu.Unlock()
-			}
-			// Past packets (pwc.Cycle < cycle) are silently dropped
+			p.pendingMu.Lock()
+			p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
+			p.pendingMu.Unlock()
 		default:
-			// No more packets available
-			return result
+			return
 		}
 	}
 }
 
 // WaitUpstreamDone blocks until the upstream component has completed the specified cycle.
 func (p *Port) WaitUpstreamDone(cycle int) {
-	for {
-		p.upstreamDoneMu.Lock()
-		currentDone := p.upstreamDone
-		p.upstreamDoneMu.Unlock()
-
-		if currentDone >= cycle {
-			return
-		}
-
-		// Wait for notification
-		<-p.upstreamDoneCh
-	}
+	p.upstreamSync.WaitDone(cycle)
 }
 
 // PeekDone returns the highest cycle that the upstream component has completed.
-// This is a non-blocking query method.
 func (p *Port) PeekDone() int {
-	p.upstreamDoneMu.Lock()
-	defer p.upstreamDoneMu.Unlock()
-	return p.upstreamDone
+	return p.upstreamSync.GetDone()
 }
 
 // UpdateReady updates the downstream component's ready state for the given cycle.
-// This is called by the downstream component to inform the upstream whether it's ready to receive data.
 func (p *Port) UpdateReady(cycle int, ready bool) {
-	p.downstreamReadyMu.Lock()
-	defer p.downstreamReadyMu.Unlock()
-
-	p.downstreamReady[cycle] = ready
-
-	// Notify any waiting goroutines
-	if ch, ok := p.downstreamReadyCh[cycle]; ok {
-		select {
-		case ch <- ready:
-		default:
-		}
-		delete(p.downstreamReadyCh, cycle)
-	}
+	p.downstreamSync.UpdateReady(cycle, ready)
 }
 
 // ===== Interface view conversions (for type safety) =====

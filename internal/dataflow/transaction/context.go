@@ -230,7 +230,7 @@ func (tc *TxnContext) GetDecoder() decoder.Decoder {
 
 // GetNode returns the underlying Node object for the current node.
 // This method is provided for compatibility with existing code.
-func (tc *TxnContext) GetNode() *node.Node {
+func (tc *TxnContext) GetNode() node.Node {
 	if tc.nodeAccessor != nil {
 		return tc.nodeAccessor.GetNode()
 	}

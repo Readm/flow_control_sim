@@ -96,14 +96,15 @@ func TestInjectPacketsOverflow(t *testing.T) {
 	}
 
 	err := oq.InjectPackets(0, packets)
-	if err != nil {
-		t.Fatalf("InjectPackets failed: %v", err)
+	if err == nil {
+		t.Fatal("expected error when injecting more packets than capacity, got nil")
 	}
 
-	// Should only store up to capacity (3), rest dropped
-	if oq.Length() > 3 {
-		t.Fatalf("expected length <= 3, got %d", oq.Length())
+	// Should only store up to capacity (3)
+	if oq.Length() != 3 {
+		t.Fatalf("expected length 3 (full capacity), got %d", oq.Length())
 	}
+
 }
 
 // TestTickWithoutOutPort tests Tick when port is not set.

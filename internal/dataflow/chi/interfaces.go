@@ -48,7 +48,7 @@ package chi
 //
 // CHI transactions follow this pattern:
 //
-//   func ReadCleanTxn(ctx *transaction.TxnContext, n *node.Node, addr uint64) ([]byte, error) {
+//   func ReadCleanTxn(ctx *transaction.TxnContext, n node.Node, addr uint64) ([]byte, error) {
 //       // 1. Get CHI capabilities from node
 //       c := GetCHICache(n)
 //       decoder, _ := GetCHIDecoder(n)

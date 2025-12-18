@@ -34,7 +34,7 @@ func TestNetworkAdvanceMesh(t *testing.T) {
 	}
 
 	// Node1 forwards everything from its input to its single output.
-	node1.Node.SetProcessHook(forwardAllPacketsHook(outputs1[0]))
+	node1.Node.(*node.WorkerNode).SetProcessHook(forwardAllPacketsHook(outputs1[0]))
 
 	// Record packets received along different paths.
 	recNode1 := newPacketRecorder()
@@ -92,9 +92,9 @@ func TestNetworkAdvanceRing(t *testing.T) {
 		t.Fatalf("AddNode node2: %v", err)
 	}
 
-	node0.Node.SetProcessHook(forwardAllPacketsHook(outputs0[0]))
-	node1.Node.SetProcessHook(forwardAllPacketsHook(outputs1[0]))
-	node2.Node.SetProcessHook(forwardAllPacketsHook(outputs2[0]))
+	node0.Node.(*node.WorkerNode).SetProcessHook(forwardAllPacketsHook(outputs0[0]))
+	node1.Node.(*node.WorkerNode).SetProcessHook(forwardAllPacketsHook(outputs1[0]))
+	node2.Node.(*node.WorkerNode).SetProcessHook(forwardAllPacketsHook(outputs2[0]))
 
 	recNode0 := newPacketRecorder()
 	inputs0[0].SetPacketReceivedHook(recNode0.Record)
@@ -136,9 +136,9 @@ func TestNetworkAdvanceInterleavesComponentCycles(t *testing.T) {
 	}
 
 	// Use simple FIFO hooks to keep queues active even without user traffic.
-	node0.Node.SetProcessHook(forwardAllPacketsHook(outputs0[0]))
-	node1.Node.SetProcessHook(forwardAllPacketsHook(outputs1[0]))
-	node2.Node.SetProcessHook(forwardAllPacketsHook(outputs2[0]))
+	node0.Node.(*node.WorkerNode).SetProcessHook(forwardAllPacketsHook(outputs0[0]))
+	node1.Node.(*node.WorkerNode).SetProcessHook(forwardAllPacketsHook(outputs1[0]))
+	node2.Node.(*node.WorkerNode).SetProcessHook(forwardAllPacketsHook(outputs2[0]))
 
 	link01, err := net.Connect(0, 0, 1, 0, 5, 1)
 	if err != nil {
@@ -160,18 +160,22 @@ func TestNetworkAdvanceInterleavesComponentCycles(t *testing.T) {
 	)
 	events := make(chan componentCycle, advanceCycles*componentsPerCycle)
 
-	node0.Node.SetTickHook(func(cycle uint64) {
+	// Test timing: record events to verify interleaving
+	node0.Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
 		recordEvent(events, componentCycle{Component: "node0", Cycle: int(cycle)})
+		return forwardAllPacketsHook(outputs0[0])(context.Background(), cycle, incoming)
 	})
-	node1.Node.SetTickHook(func(cycle uint64) {
+	node1.Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
 		// Slow node1 down to force interleaving with other components.
 		if cycle%2 == 0 {
-			time.Sleep(100 * time.Microsecond)
+			time.Sleep(1 * time.Millisecond)
 		}
 		recordEvent(events, componentCycle{Component: "node1", Cycle: int(cycle)})
+		return forwardAllPacketsHook(outputs1[0])(context.Background(), cycle, incoming)
 	})
-	node2.Node.SetTickHook(func(cycle uint64) {
+	node2.Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
 		recordEvent(events, componentCycle{Component: "node2", Cycle: int(cycle)})
+		return forwardAllPacketsHook(outputs2[0])(context.Background(), cycle, incoming)
 	})
 
 	link01.SetTickHook(func(cycle int) {
@@ -200,10 +204,10 @@ func TestNetworkAdvanceInterleavesComponentCycles(t *testing.T) {
 	}
 	t.Logf("component timeline:\n%s", formatTimeline(timeline))
 
-	// Disable event hooks so subsequent cycles (if any) will not write into the closed channel.
-	node0.Node.SetTickHook(nil)
-	node1.Node.SetTickHook(nil)
-	node2.Node.SetTickHook(nil)
+	// Disable event hooks
+	node0.Node.(*node.WorkerNode).SetProcessHook(nil)
+	node1.Node.(*node.WorkerNode).SetProcessHook(nil)
+	node2.Node.(*node.WorkerNode).SetProcessHook(nil)
 	link01.SetTickHook(nil)
 	link12.SetTickHook(nil)
 	link20.SetTickHook(nil)
@@ -217,9 +221,9 @@ func TestNetworkAdvanceInterleavesComponentCycles(t *testing.T) {
 			t.Fatalf("AddNode %d (functional) failed: %v", handle.Node.ID(), err)
 		}
 	}
-	fnNode0.Node.SetProcessHook(forwardAllPacketsHook(fnOutputs0[0]))
-	fnNode1.Node.SetProcessHook(forwardAllPacketsHook(fnOutputs1[0]))
-	fnNode2.Node.SetProcessHook(forwardAllPacketsHook(fnOutputs2[0]))
+	fnNode0.Node.(*node.WorkerNode).SetProcessHook(forwardAllPacketsHook(fnOutputs0[0]))
+	fnNode1.Node.(*node.WorkerNode).SetProcessHook(forwardAllPacketsHook(fnOutputs1[0]))
+	fnNode2.Node.(*node.WorkerNode).SetProcessHook(forwardAllPacketsHook(fnOutputs2[0]))
 	if _, err := fnNet.Connect(0, 0, 1, 0, 5, 1); err != nil {
 		t.Fatalf("functional connect 0->1: %v", err)
 	}
@@ -244,7 +248,7 @@ func TestNetworkAdvanceInterleavesComponentCycles(t *testing.T) {
 func newTestNodeHandle(t *testing.T, id int, inputCount, outputCount int) (*NodeHandle, []*queue.InputQueue, []*queue.OutputQueue) {
 	t.Helper()
 
-	n := node.New(id)
+	n := node.NewWorkerNode(id)
 	inputs := make([]*queue.InputQueue, inputCount)
 	outputs := make([]*queue.OutputQueue, outputCount)
 
@@ -271,15 +275,16 @@ func newTestNodeHandle(t *testing.T, id int, inputCount, outputCount int) (*Node
 	}, inputs, outputs
 }
 
-func forwardAllPacketsHook(output *queue.OutputQueue) node.ProcessHook {
-	return func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
-		if len(buffer) == 0 {
-			return buffer, nil
+func forwardAllPacketsHook(output *queue.OutputQueue) func(ctx context.Context, cycle uint64, buffer [][]packet.Packet) error {
+	return func(_ context.Context, cycle uint64, buffer [][]packet.Packet) error {
+		var flat []packet.Packet
+		for _, b := range buffer {
+			flat = append(flat, b...)
 		}
-		if err := output.InjectPackets(int(cycle), clonePackets(buffer)); err != nil {
-			return nil, err
+		if len(flat) == 0 {
+			return nil
 		}
-		return buffer, nil
+		return output.InjectPackets(int(cycle), clonePackets(flat))
 	}
 }
 

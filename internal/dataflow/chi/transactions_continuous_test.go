@@ -57,9 +57,8 @@ func (d *TestDecoder) DecodeAddress(addr uint64) (*decoder.DecodeResult, error) 
 	}, nil
 }
 
-// setupTestNode creates a node with Cache, Directory, and Decoder
-func setupTestNode(nodeID int, dec *TestDecoder) *node.Node {
-	n := node.New(nodeID)
+func setupTestNode(nodeID int, dec *TestDecoder) *node.WorkerNode {
+	n := node.NewWorkerNode(nodeID)
 
 	// Add Cache
 	c := cache.NewFullyAssociativeCache(16)
@@ -505,9 +504,9 @@ func TestDecoderDrivenMigration(t *testing.T) {
 
 	// Test addresses from different ranges
 	testCases := []struct {
-		addr           uint64
-		expectedHN     int
-		description    string
+		addr        uint64
+		expectedHN  int
+		description string
 	}{
 		{0x1500, 2, "Address 0x1500 should map to HN 2"},
 		{0x2ABC, 3, "Address 0x2ABC should map to HN 3"},

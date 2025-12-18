@@ -22,7 +22,7 @@ type NodeAccessor interface {
 
 	// GetNode returns the underlying Node object.
 	// This is provided for compatibility with existing code.
-	GetNode() *node.Node
+	GetNode() node.Node
 
 	// NodeID returns the ID of the current node.
 	NodeID() int
@@ -31,11 +31,11 @@ type NodeAccessor interface {
 // LocalNodeAccessor provides direct access to a local node's resources.
 // This is a zero-overhead implementation for accessing the current node.
 type LocalNodeAccessor struct {
-	node *node.Node
+	node node.Node
 }
 
 // NewLocalNodeAccessor creates a LocalNodeAccessor for the given node.
-func NewLocalNodeAccessor(n *node.Node) *LocalNodeAccessor {
+func NewLocalNodeAccessor(n node.Node) *LocalNodeAccessor {
 	return &LocalNodeAccessor{node: n}
 }
 
@@ -72,7 +72,7 @@ func (a *LocalNodeAccessor) GetDecoder() decoder.Decoder {
 }
 
 // GetNode implements NodeAccessor.
-func (a *LocalNodeAccessor) GetNode() *node.Node {
+func (a *LocalNodeAccessor) GetNode() node.Node {
 	return a.node
 }
 

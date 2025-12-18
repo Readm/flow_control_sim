@@ -296,11 +296,6 @@ func TestBufferlessRing_SinglePacket(t *testing.T) {
 		routers[i] = NewBufferlessRingRouter(routerID, workerID, routerBuffer)
 		workers[i] = NewTestNode(workerID)
 
-		// Add debug hook to router
-		routerIndex := i
-		routers[i].SetTickHook(func(cycle uint64) {
-			t.Logf("    Router[%d] Tick done at cycle %d", routerIndex, cycle)
-		})
 	}
 
 	// Create queues

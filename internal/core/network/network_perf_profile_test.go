@@ -46,7 +46,7 @@ func BenchmarkNetworkScaling(b *testing.B) {
 			var allOutputs []*queue.OutputQueue
 
 			for i := 0; i < nodeCount; i++ {
-				n := node.New(i)
+				n := node.NewWorkerNode(i)
 				input := queue.NewInputQueue(64, 1)
 				output := queue.NewOutputQueue(64, 1, 1)
 
@@ -73,13 +73,19 @@ func BenchmarkNetworkScaling(b *testing.B) {
 			// Setup forwarding
 			for i := 1; i < nodeCount-1; i++ {
 				output := allOutputs[i]
-				nodeHandles[i].Node.SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
-					if len(buffer) > 0 {
-						if err := output.InjectPackets(int(cycle), clonePackets(buffer)); err != nil {
-							return nil, err
+				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+					if len(incoming) > 0 {
+						var flat []packet.Packet
+						for _, pkts := range incoming {
+							flat = append(flat, pkts...)
+						}
+						if len(flat) > 0 {
+							if err := output.InjectPackets(int(cycle), clonePackets(flat)); err != nil {
+								return err
+							}
 						}
 					}
-					return buffer, nil
+					return nil
 				})
 			}
 
@@ -94,7 +100,7 @@ func BenchmarkNetworkScaling(b *testing.B) {
 
 			// Setup packet injection from Node0
 			var injectedCount int64
-			nodeHandles[0].Node.SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
+			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
 				if cycle%injectInterval == 0 && int(cycle) < advanceCycles {
 					pkt := packet.Packet{
 						SourceID: 0,
@@ -105,13 +111,13 @@ func BenchmarkNetworkScaling(b *testing.B) {
 						atomic.AddInt64(&injectedCount, 1)
 					}
 				}
-				return buffer, nil
+				return nil
 			})
 
 			// Last node drops packets
 			lastNodeIndex := nodeCount - 1
-			nodeHandles[lastNodeIndex].Node.SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
-				return nil, nil
+			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+				return nil
 			})
 
 			// Reset timer before actual benchmark
@@ -158,7 +164,7 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 			var allOutputs []*queue.OutputQueue
 
 			for i := 0; i < nodeCount; i++ {
-				n := node.New(i)
+				n := node.NewWorkerNode(i)
 				input := queue.NewInputQueue(64, 1)
 				output := queue.NewOutputQueue(64, 1, 1)
 
@@ -184,13 +190,19 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 
 			for i := 1; i < nodeCount-1; i++ {
 				output := allOutputs[i]
-				nodeHandles[i].Node.SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
-					if len(buffer) > 0 {
-						if err := output.InjectPackets(int(cycle), clonePackets(buffer)); err != nil {
-							return nil, err
+				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+					if len(incoming) > 0 {
+						var flat []packet.Packet
+						for _, pkts := range incoming {
+							flat = append(flat, pkts...)
+						}
+						if len(flat) > 0 {
+							if err := output.InjectPackets(int(cycle), clonePackets(flat)); err != nil {
+								return err
+							}
 						}
 					}
-					return buffer, nil
+					return nil
 				})
 			}
 
@@ -203,7 +215,7 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 			}
 
 			var injectedCount int64
-			nodeHandles[0].Node.SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
+			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
 				if cycle%injectInterval == 0 && int(cycle) < advanceCycles {
 					pkt := packet.Packet{
 						SourceID: 0,
@@ -214,12 +226,12 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 						atomic.AddInt64(&injectedCount, 1)
 					}
 				}
-				return buffer, nil
+				return nil
 			})
 
 			lastNodeIndex := nodeCount - 1
-			nodeHandles[lastNodeIndex].Node.SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
-				return nil, nil
+			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+				return nil
 			})
 
 			b.ResetTimer()

@@ -22,7 +22,7 @@ type activeTxn struct {
 
 // TxnManager manages transactions for a node.
 type TxnManager struct {
-	node          *node.Node
+	node          node.Node
 	activeTxns    map[dataflow.TransactionID]*activeTxn
 	pendingByAddr map[Addr][]*activeTxn
 	nextTxnID     int
@@ -42,7 +42,7 @@ type migratedTxn struct {
 }
 
 // NewTxnManager creates a new TxnManager.
-func NewTxnManager(n *node.Node) *TxnManager {
+func NewTxnManager(n node.Node) *TxnManager {
 	return &TxnManager{
 		node:          n,
 		activeTxns:    make(map[dataflow.TransactionID]*activeTxn),

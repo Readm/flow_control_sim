@@ -40,7 +40,7 @@ type ComponentSync struct {
 func NewComponentSync() *ComponentSync {
 	cs := &ComponentSync{
 		done:            -1,
-		readyUntil:      -1,
+		readyUntil:      0, // Start at 0: no cycles are ready yet
 		readyQueue:      make([]readyItem, 0),
 		lastAccessCycle: -1,
 	}

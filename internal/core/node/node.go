@@ -13,6 +13,43 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
+// Node defines the public interface for all simulation nodes.
+type Node interface {
+	ID() int
+	Tick(ctx context.Context, cycle uint64, duration time.Duration) error
+	AddInputQueue(q InputQueue) error
+	AddOutputQueue(q OutputQueue) error
+	InputQueues() []InputQueue
+	OutputQueues() []OutputQueue
+
+	AddCache(c cache.Cache)
+	Caches() []cache.Cache
+	AddDirectory(d directory.Directory)
+	Directories() []directory.Directory
+
+	InjectPacket(pkt packet.Packet) error
+	Advance(cycles int) error
+
+	SetData(key string, value interface{})
+	GetData(key string) interface{}
+	HasData(key string) bool
+	DeleteData(key string)
+}
+
+// Tickable is an interface for components that can be ticked.
+type Tickable interface {
+	Tick(ctx context.Context, cycle uint64, duration time.Duration) error
+}
+
+// CreatePacket is a helper to create a packet (compatibility alias).
+func CreatePacket(src, dst int, payload string) packet.Packet {
+	return packet.Packet{
+		SourceID: src,
+		TargetID: dst,
+		Payload:  payload,
+	}
+}
+
 // InputQueue describes the behaviors Node needs from an input buffer.
 type InputQueue interface {
 	Pick() []packet.Packet
@@ -30,9 +67,6 @@ type OutputQueue interface {
 	IsFull() bool
 	InjectPackets(cycle int, packets []packet.Packet) error
 }
-
-// TickHook allows callers to observe cycle execution.
-type TickHook func(cycle uint64)
 
 // NodeHandler defines the interface that specific node implementations must satisfy.
 type NodeHandler interface {
@@ -67,8 +101,6 @@ type BaseNode struct {
 	handler NodeHandler
 
 	currentCycle uint64
-	tickHookMu   sync.RWMutex
-	tickHook     TickHook
 }
 
 // NewBaseNode creates a new BaseNode.
@@ -156,17 +188,18 @@ func (n *BaseNode) Directories() []directory.Directory {
 	return cp
 }
 
-// SetTickHook registers a callback invoked after each successful Tick.
-func (n *BaseNode) SetTickHook(hook TickHook) {
-	n.tickHookMu.Lock()
-	defer n.tickHookMu.Unlock()
-	n.tickHook = hook
+// InjectPacket is a helper to inject a packet into the first output queue.
+func (n *BaseNode) InjectPacket(pkt packet.Packet) error {
+	if len(n.outputs) == 0 {
+		return errors.New("node has no output queues")
+	}
+	// Use current cycle for injection
+	return n.outputs[0].InjectPackets(int(n.currentCycle), []packet.Packet{pkt})
 }
 
 // Tick executes one cycle of the node's logic.
 // Order: Receive (Input) -> Process (Handler) -> Send (Output)
 func (n *BaseNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
-	n.invokeTickHook(cycle)
 
 	// 1. Phase 1: Receive (Input)
 	// Input queues wait for upstream and receive data for CURRENT cycle.
@@ -214,14 +247,6 @@ func (n *BaseNode) tickOutputQueues(cycle uint64) error {
 		}
 	}
 	return nil
-}
-
-func (n *BaseNode) invokeTickHook(cycle uint64) {
-	n.tickHookMu.RLock()
-	defer n.tickHookMu.RUnlock()
-	if n.tickHook != nil {
-		n.tickHook(cycle)
-	}
 }
 
 // tickQueuesConcurrently executes queue Tick operations.

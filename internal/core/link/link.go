@@ -191,8 +191,7 @@ func (l *Link) processPacketsBuffered(
 		if l.toDownstream == nil {
 			return true
 		}
-		ready, decided := l.toDownstream.PeekReady(targetCycle)
-		return decided && ready
+		return l.toDownstream.IsReady(targetCycle)
 	}
 
 	// Helper to send packet
@@ -204,7 +203,7 @@ func (l *Link) processPacketsBuffered(
 			Cycle:  targetCycle,
 			Packet: pkt,
 		}
-		return l.toDownstream.TryPeekSend(targetCycle, pwc)
+		return l.toDownstream.TrySend(targetCycle, pwc)
 	}
 
 	// 1. Process pending packets
@@ -288,7 +287,9 @@ func (l *Link) processPacketsBufferless(
 	for _, pkt := range l.pendingPackets {
 		if pkt.Cycle <= cycle {
 			if !sendPacket(pkt.Cycle, pkt.Packet) {
-				panic(fmt.Sprintf("Bufferless Link %d->%d failed to send packet at cycle %d", l.sourceID, l.targetID, cycle))
+				// Downstream not ready, buffer this packet for retry in future cycles.
+				// This simulates the packet being "on the wire" or in flight.
+				*newPending = append(*newPending, pkt)
 			}
 		} else {
 			*newPending = append(*newPending, pkt)
@@ -299,7 +300,11 @@ func (l *Link) processPacketsBufferless(
 	for _, pkt := range packets {
 		targetCycle := cycle
 		if !sendPacket(targetCycle, pkt) {
-			panic(fmt.Sprintf("Bufferless Link %d->%d failed to send packet at cycle %d (target %d)", l.sourceID, l.targetID, cycle, targetCycle))
+			// Downstream not ready, buffer this packet for retry.
+			*newPending = append(*newPending, ahead_port.PacketWithCycle{
+				Cycle:  targetCycle,
+				Packet: pkt,
+			})
 		}
 	}
 }

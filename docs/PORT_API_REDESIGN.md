@@ -799,6 +799,12 @@ Ready 信号从下游流向上游。这是打破死锁的关键，也是跨周�
 2. 此时 Link 还没运行，无法发出 Done 信号。
 3. 主线程阻塞在 Node，Link 永远无法运行 -> **死锁**。
 
+---
+
+## 13. 延伸文档
+
+- [强大的异步同步机制规范 (ASYNC_SYNC_SPEC.md)](file:///home/readm/flow_sim/docs/ASYNC_SYNC_SPEC.md) - 详细记录了 Phase 8 & 9 实现的阻塞式同步逻辑及稳健性测试。
+
 **正确场景 (先 Link 后 Node)**：
 1. **Link.Tick(T)** 率先执行:
     * 读取 `Ready(T)` 信号 (由 `Node(T-1)` 产生，已就绪)。

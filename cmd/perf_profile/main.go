@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
+	"sync"
 	"time"
 
 	"github.com/Readm/flow_sim/internal/core/node"
@@ -58,14 +59,7 @@ func main() {
 	fmt.Printf("Running BufferlessRing benchmark for %v with %d nodes...\n", *duration, *nodeCount)
 
 	// Create ring
-	workers, routers := node.NewBufferlessRing(*nodeCount, 8, 1, 1)
-
-	// Collect all tickable components
-	var components []node.Tickable
-	for i := 0; i < *nodeCount; i++ {
-		components = append(components, workers[i])
-		components = append(components, routers[i])
-	}
+	workers, _, components := node.NewBufferlessRing(*nodeCount, 8, 1, 1)
 
 	// Inject packets continuously
 	injectionInterval := 2 // Inject every 2 cycles
@@ -83,17 +77,26 @@ func main() {
 				src := i
 				dst := (i + 1) % *nodeCount
 				pkt := node.CreatePacket(src, dst, fmt.Sprintf("C%d-S%d", cycle, src))
-				workers[src].InjectPacket(pkt)
+				// workers[src] is now *node.WorkerNode which implements Node
+				if err := workers[src].InjectPacket(pkt); err != nil {
+					panic(err)
+				}
 			}
 			nextInjection = cycle + uint64(injectionInterval)
 		}
 
-		// Tick all components
+		// Tick all components in parallel to avoid deadlocks
+		var wg sync.WaitGroup
 		for _, comp := range components {
-			if err := comp.Tick(ctx, cycle, 0); err != nil {
-				panic(err)
-			}
+			wg.Add(1)
+			go func(c node.Tickable) {
+				defer wg.Done()
+				if err := c.Tick(ctx, cycle, 0); err != nil {
+					panic(err)
+				}
+			}(comp)
 		}
+		wg.Wait()
 
 		cycle++
 	}

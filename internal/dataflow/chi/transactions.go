@@ -25,7 +25,7 @@ import (
 // 6. Return data
 func ReadCleanTxn(
 	ctx *transaction.TxnContext,
-	n *node.Node,
+	n node.Node,
 	addr uint64,
 ) ([]byte, error) {
 	// Step 1: Get CHI capabilities from node
@@ -105,7 +105,7 @@ func ReadCleanTxn(
 // Similar to ReadClean, but may involve snooping other caches.
 func ReadSharedTxn(
 	ctx *transaction.TxnContext,
-	n *node.Node,
+	n node.Node,
 	addr uint64,
 ) ([]byte, error) {
 	// Implementation similar to ReadCleanTxn
@@ -183,7 +183,7 @@ func ReadSharedTxn(
 // ReadUniqueTxn implements CHI ReadUnique transaction (for exclusive access).
 func ReadUniqueTxn(
 	ctx *transaction.TxnContext,
-	n *node.Node,
+	n node.Node,
 	addr uint64,
 ) ([]byte, error) {
 	c := GetCHICache(n)
@@ -263,7 +263,7 @@ func ReadUniqueTxn(
 // HomeNodeReadCleanHandler handles ReadClean requests at the Home Node.
 func HomeNodeReadCleanHandler(
 	ctx *transaction.TxnContext,
-	n *node.Node,
+	n node.Node,
 	reqMsg *message.Message,
 ) error {
 	payload, ok := reqMsg.Payload.(*CHIPayload)
@@ -317,7 +317,7 @@ func HomeNodeReadCleanHandler(
 // HomeNodeReadSharedHandler handles ReadShared requests at the Home Node.
 func HomeNodeReadSharedHandler(
 	ctx *transaction.TxnContext,
-	n *node.Node,
+	n node.Node,
 	reqMsg *message.Message,
 ) error {
 	// Similar to ReadClean handler
@@ -331,7 +331,7 @@ func HomeNodeReadSharedHandler(
 // SnpSharedFwdHandler handles SnpSharedFwd at a Request Node.
 func SnpSharedFwdHandler(
 	ctx *transaction.TxnContext,
-	n *node.Node,
+	n node.Node,
 	snpMsg *message.Message,
 ) error {
 	payload, ok := snpMsg.Payload.(*CHIPayload)

@@ -82,7 +82,7 @@ func (oq *OutputQueue) Tick(cycle int) error {
 			Cycle:  cycle,
 			Packet: pkt.Packet,
 		}
-		if oq.toDownstream.TryPeekSend(cycle, pwc) {
+		if oq.toDownstream.TrySend(cycle, pwc) {
 			sent++
 			if oq.onPacketSent != nil {
 				oq.onPacketSent(pkt.Packet)
@@ -107,10 +107,8 @@ func (oq *OutputQueue) Tick(cycle int) error {
 func (oq *OutputQueue) InjectPackets(cycle int, packets []packet.Packet) error {
 	for _, pkt := range packets {
 		if len(oq.slots) >= oq.capacity {
-			// Queue full, drop packet
-			debug.Logf("OutputQueue: DROPPED packet (queue full %d/%d): Src=%d Dst=%d at cycle %d",
-				len(oq.slots), oq.capacity, pkt.SourceID, pkt.TargetID, cycle)
-			continue
+			return fmt.Errorf("OutputQueue: capacity exceeded (%d/%d), cannot inject packet Src=%d Dst=%d",
+				len(oq.slots), oq.capacity, pkt.SourceID, pkt.TargetID)
 		}
 
 		debug.Logf("OutputQueue: Injected packet: Src=%d Dst=%d at cycle %d (queue: %d/%d)",

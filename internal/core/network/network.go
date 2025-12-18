@@ -17,7 +17,7 @@ import (
 
 // NodeHandle keeps the node instance together with the concrete queues used to connect links.
 type NodeHandle struct {
-	Node    *node.Node
+	Node    node.Node
 	Inputs  []*queue.InputQueue
 	Outputs []*queue.OutputQueue
 }
@@ -185,7 +185,7 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 	// Create nodes from schema
 	for _, nodeSchema := range schema.Nodes {
 		// Create node
-		newNode := node.New(nodeSchema.NodeID)
+		newNode := node.NewWorkerNode(nodeSchema.NodeID)
 
 		// Create cache if configured
 		// TODO: adapt cache configs

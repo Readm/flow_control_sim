@@ -27,7 +27,7 @@ const (
 
 // SetupCHINode configures a Node for CHI protocol.
 func SetupCHINode(
-	n *node.Node,
+	n node.Node,
 	role NodeRole,
 	dec decoder.Decoder,
 	c cache.Cache,
@@ -46,7 +46,7 @@ func SetupCHINode(
 }
 
 // GetCHIRole retrieves the CHI role from a Node.
-func GetCHIRole(n *node.Node) (NodeRole, error) {
+func GetCHIRole(n node.Node) (NodeRole, error) {
 	roleData := n.GetData(DataKeyRole)
 	if roleData == nil {
 		return "", fmt.Errorf("CHI role not set for node %d", n.ID())
@@ -59,7 +59,7 @@ func GetCHIRole(n *node.Node) (NodeRole, error) {
 }
 
 // GetCHIDecoder retrieves the Decoder from a Node.
-func GetCHIDecoder(n *node.Node) (decoder.Decoder, error) {
+func GetCHIDecoder(n node.Node) (decoder.Decoder, error) {
 	decData := n.GetData(DataKeyDecoder)
 	if decData == nil {
 		return nil, fmt.Errorf("CHI decoder not set for node %d", n.ID())
@@ -72,7 +72,7 @@ func GetCHIDecoder(n *node.Node) (decoder.Decoder, error) {
 }
 
 // GetCHIMessageBuilder retrieves the MessageBuilder from a Node.
-func GetCHIMessageBuilder(n *node.Node) (*MessageBuilder, error) {
+func GetCHIMessageBuilder(n node.Node) (*MessageBuilder, error) {
 	builderData := n.GetData(DataKeyMessageBuilder)
 	if builderData == nil {
 		return nil, fmt.Errorf("CHI message builder not set for node %d", n.ID())
@@ -85,7 +85,7 @@ func GetCHIMessageBuilder(n *node.Node) (*MessageBuilder, error) {
 }
 
 // GetCHICache retrieves the first Cache from a Node.
-func GetCHICache(n *node.Node) cache.Cache {
+func GetCHICache(n node.Node) cache.Cache {
 	caches := n.Caches()
 	if len(caches) == 0 {
 		return nil
@@ -94,7 +94,7 @@ func GetCHICache(n *node.Node) cache.Cache {
 }
 
 // GetCHIDirectory retrieves the first Directory from a Node.
-func GetCHIDirectory(n *node.Node) directory.Directory {
+func GetCHIDirectory(n node.Node) directory.Directory {
 	dirs := n.Directories()
 	if len(dirs) == 0 {
 		return nil
@@ -103,6 +103,6 @@ func GetCHIDirectory(n *node.Node) directory.Directory {
 }
 
 // IsCHINode checks if a Node is configured for CHI protocol.
-func IsCHINode(n *node.Node) bool {
+func IsCHINode(n node.Node) bool {
 	return n.HasData(DataKeyRole)
 }

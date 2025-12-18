@@ -20,7 +20,7 @@ func TestDeadlockDiagnosis(t *testing.T) {
 	net := New()
 
 	// Create Node0 (source)
-	node0 := node.New(0)
+	node0 := node.NewWorkerNode(0)
 	input0 := queue.NewInputQueue(8, 1)
 	output0 := queue.NewOutputQueue(8, 1, 1)
 	if err := node0.AddInputQueue(input0); err != nil {
@@ -37,7 +37,7 @@ func TestDeadlockDiagnosis(t *testing.T) {
 	}
 
 	// Create Node1 (destination)
-	node1 := node.New(1)
+	node1 := node.NewWorkerNode(1)
 	input1 := queue.NewInputQueue(8, 1)
 	output1 := queue.NewOutputQueue(8, 1, 1)
 	if err := node1.AddInputQueue(input1); err != nil {
@@ -83,18 +83,14 @@ func TestDeadlockDiagnosis(t *testing.T) {
 	// Add hooks to monitor activities
 	fmt.Println("=== Setting up monitoring hooks ===")
 
-	node0.SetTickHook(func(cycle uint64) {
-		fmt.Printf("[Node0 Tick] cycle=%d, OutputQueue0=%d slots\n", cycle, output0.Length())
-	})
+	// BaseNode no longer has SetTickHook, skipping monitoring or use SetProcessHook
 
-	node1.SetTickHook(func(cycle uint64) {
-		fmt.Printf("[Node1 Tick] cycle=%d, InputQueue1=%d/%d\n", cycle, input1.Length(), input1.Capacity())
-	})
+	// BaseNode no longer has SetTickHook
 
 	// Setup Node0 to inject a packet
 	var injected bool
-	node0.SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
-		fmt.Printf("[Node0 ProcessHook] cycle=%d, buffer=%v, injected=%v\n", cycle, buffer, injected)
+	node0.SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+		fmt.Printf("[Node0 ProcessHook] cycle=%d, incoming=%v, injected=%v\n", cycle, incoming, injected)
 		if cycle == 0 && !injected {
 			pkt := packet.Packet{
 				SourceID: 0,
@@ -104,25 +100,27 @@ func TestDeadlockDiagnosis(t *testing.T) {
 			fmt.Printf("[Node0 Hook] Attempting to inject packet at cycle=%d\n", cycle)
 			if err := output0.InjectPackets(int(cycle), []packet.Packet{pkt}); err != nil {
 				fmt.Printf("[Node0 Hook] Injection failed: %v\n", err)
-				return nil, err
+				return err
 			}
 			injected = true
 			fmt.Printf("[Node0 Hook] Packet injected successfully\n")
 		}
-		return buffer, nil
+		return nil
 	})
 
 	// Setup Node1 to receive packets
 	var receivedPackets []packet.Packet
 	var mu sync.Mutex
-	node1.SetProcessHook(func(_ context.Context, cycle uint64, buffer []packet.Packet) ([]packet.Packet, error) {
-		fmt.Printf("[Node1 Hook] cycle=%d, received %d packets\n", cycle, len(buffer))
-		if len(buffer) > 0 {
+	node1.SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+		fmt.Printf("[Node1 Hook] cycle=%d, received %d packet batches\n", cycle, len(incoming))
+		if len(incoming) > 0 {
 			mu.Lock()
-			receivedPackets = append(receivedPackets, buffer...)
+			for _, batch := range incoming {
+				receivedPackets = append(receivedPackets, batch...)
+			}
 			mu.Unlock()
 		}
-		return nil, nil
+		return nil
 	})
 
 	// Add timeout to catch deadlock
