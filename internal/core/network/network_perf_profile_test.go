@@ -369,7 +369,8 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 				// Drop any incoming packets (break the ring at Node0)
 
 				// Inject new packet every 3 cycles
-				if cycle%injectInterval == 0 && int(cycle) < advanceCycles {
+				// continuously throughout the benchmark to maintain load
+				if cycle%injectInterval == 0 {
 					pkt := packet.Packet{
 						SourceID: 0,
 						TargetID: nodeCount - 1,
@@ -407,10 +408,54 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 				}
 			}
 
-			// Report additional stats after benchmark
+			// Stop timer for validation
 			b.StopTimer()
-			b.ReportMetric(float64(atomic.LoadInt64(&injectedCount)), "packets_injected")
-			b.ReportMetric(float64(atomic.LoadInt64(&receivedCount)), "packets_received")
+
+			// Functional correctness validation
+			injected := atomic.LoadInt64(&injectedCount)
+			received := atomic.LoadInt64(&receivedCount)
+
+			// Calculate expected metrics
+			// Since we inject continuously, the network has packets "in flight" that haven't arrived yet.
+			// The number of in-flight packets is roughly: ringLatency / injectInterval
+			ringLatency := nodeCount * linkLatency
+			inFlightPackets := int64(ringLatency / injectInterval)
+
+			// Expected received is total injected minus those still in flight
+			// We allow a small buffer/margin as simulation timing can vary slightly
+			expectedReceived := injected - inFlightPackets
+			if expectedReceived < 0 {
+				expectedReceived = 0
+			}
+
+			// Verify packets were actually transmitted
+			if injected == 0 {
+				b.Fatalf("Correctness check failed: No packets were injected")
+			}
+
+			// Verify data reception logic
+			// In a continuous flow, received count should be close to expected
+			ratio := 0.0
+			if expectedReceived > 0 {
+				ratio = float64(received) / float64(expectedReceived)
+			}
+
+			// We use a slightly lower threshold (90%) because in the very first iteration
+			// the pipeline filling phase might skew the ratio slightly if b.N is small
+			if ratio < 0.90 {
+				b.Fatalf("Correctness check failed: Received only %.1f%% of expected packets (%d received, %d expected, injected %d)",
+					ratio*100, received, expectedReceived, injected)
+			}
+
+			// Warning if ratio is too high (should be impossible in valid logic)
+			if ratio > 1.1 {
+				b.Logf("Warning: Received count %.1f%% higher than expected (maybe timing jitter?)", ratio*100)
+			}
+
+			// Report additional stats after validation
+			b.ReportMetric(float64(injected), "packets_injected")
+			b.ReportMetric(float64(received), "packets_received")
+			b.ReportMetric(ratio*100, "reception_rate_pct")
 		})
 	}
 }
