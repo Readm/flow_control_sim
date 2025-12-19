@@ -295,7 +295,7 @@ func (l *Link) processPacketsBufferless(
 			Cycle:  targetCycle,
 			Packet: pkt,
 		}
-		return l.toDownstream.TryPeekSend(targetCycle, pwc)
+		return l.toDownstream.TrySend(targetCycle, pwc)
 	}
 
 	// 1. Process pending packets

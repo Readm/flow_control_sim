@@ -1,6 +1,7 @@
 package network
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/Readm/flow_sim/internal/core/link"
@@ -112,6 +113,16 @@ func TestBufferlessRing_SinglePacket_v2(t *testing.T) {
 	t.Logf("Successfully injected packet at cycle 0")
 	t.Logf("Worker0 output queue after injection: %d/%d", workerOutputs[0].Length(), workerOutputs[0].Capacity())
 
+	// Check if packet arrived at Worker1
+	workerInQueue1 := workers[1].Inputs[0]
+	var receivedPackets []packet.Packet
+	var mu sync.Mutex
+	workerInQueue1.SetPacketReceivedHook(func(pkt packet.Packet) {
+		mu.Lock()
+		defer mu.Unlock()
+		receivedPackets = append(receivedPackets, pkt)
+	})
+
 	// Run simulation - packet needs to travel through local link (1) + ring link (5) + local link (1) + processing
 	// Total cycles needed: ~10-15 cycles
 	t.Logf("Starting simulation for 50 cycles...")
@@ -119,10 +130,9 @@ func TestBufferlessRing_SinglePacket_v2(t *testing.T) {
 		t.Fatalf("Failed to advance network: %v", err)
 	}
 
-	// Check if packet arrived at Worker1
-	workerInQueue1 := workers[1].Inputs[0]
-	t.Logf("Worker1 input queue length: %d", workerInQueue1.Length())
-	receivedPackets := workerInQueue1.Pick()
+	mu.Lock()
+	defer mu.Unlock()
+	t.Logf("Worker1 received %d packets", len(receivedPackets))
 
 	if len(receivedPackets) == 0 {
 		// Debug: check other queues
@@ -283,21 +293,32 @@ func TestBufferlessRing_TwoHops_v2(t *testing.T) {
 		t.Fatalf("Failed to inject packet: %v", err)
 	}
 
+	// Setup packet reception hook
+	workerInQueue2 := workers[2].Inputs[0]
+	var receivedPackets []packet.Packet
+	var mu sync.Mutex
+	workerInQueue2.SetPacketReceivedHook(func(pkt packet.Packet) {
+		mu.Lock()
+		defer mu.Unlock()
+		receivedPackets = append(receivedPackets, pkt)
+	})
+
 	// 2 hops: local(1) + ring(5) + ring(5) + local(1) + processing ≈ 15-20 cycles
 	t.Logf("Starting simulation for 50 cycles...")
 	if err := net.Advance(50); err != nil {
 		t.Fatalf("Failed to advance: %v", err)
 	}
 
-	t.Logf("Worker2 input queue length: %d", workers[2].Inputs[0].Length())
-	received := workers[2].Inputs[0].Pick()
-	if len(received) == 0 {
+	mu.Lock()
+	defer mu.Unlock()
+	t.Logf("Worker2 received %d packets", len(receivedPackets))
+	if len(receivedPackets) == 0 {
 		t.Fatalf("No packets received at Worker2")
 	}
 
-	if received[0].SourceID != 0 || received[0].TargetID != 2 {
+	if receivedPackets[0].SourceID != 0 || receivedPackets[0].TargetID != 2 {
 		t.Fatalf("Packet content mismatch: expected Src=0 Dst=2, got Src=%d Dst=%d",
-			received[0].SourceID, received[0].TargetID)
+			receivedPackets[0].SourceID, receivedPackets[0].TargetID)
 	}
 
 	t.Log("✅ Test passed: 2-hop packet delivered successfully")
