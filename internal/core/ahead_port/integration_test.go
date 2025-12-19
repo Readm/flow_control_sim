@@ -82,7 +82,7 @@ func TestConnect_MultiCycleFlow(t *testing.T) {
 		upstream.MarkDone(cycle)
 
 		// Downstream waits and receives
-		downstream.WaitUpstreamDone(cycle)
+		downstream.WaitDone(cycle)
 		packets := downstream.ReceivePackets(cycle)
 
 		if len(packets) != 1 {

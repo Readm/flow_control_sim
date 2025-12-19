@@ -52,7 +52,7 @@ type OutPort interface {
 
 	// Receive retrieves all packets for the specified cycle from the upstream component.
 	// This is a blocking call that ensures all packets for the cycle are collected.
-	// Note: It internally handles the wait for upstream to be done (WaitUpstreamDone).
+	// Note: It internally handles the wait for upstream to be done (WaitDone).
 	Receive(cycle int) []packet.Packet
 
 	// UpdateReady updates the downstream component's ready state for the given cycle.
@@ -61,9 +61,9 @@ type OutPort interface {
 
 	// ===== [Advanced/Optimization API] - Use with caution =====
 
-	// WaitUpstreamDone blocks until the upstream component has completed the specified cycle.
+	// WaitDone blocks until the upstream component has completed the specified cycle.
 	// Note: Receive() already calls this internally.
-	WaitUpstreamDone(cycle int)
+	WaitDone(cycle int)
 
 	// PeekDone returns the highest cycle that the upstream component has completed.
 	// This is a non-blocking query method.
@@ -142,7 +142,7 @@ func (p *Port) Receive(cycle int) []packet.Packet {
 	p.drainChannel()
 
 	// 2. Wait for upstream to be done with this cycle
-	p.WaitUpstreamDone(cycle)
+	p.WaitDone(cycle)
 
 	// 3. Final drain to catch anything sent just before MarkDone
 	p.drainChannel()
@@ -169,8 +169,8 @@ func (p *Port) drainChannel() {
 	}
 }
 
-// WaitUpstreamDone blocks until the upstream component has completed the specified cycle.
-func (p *Port) WaitUpstreamDone(cycle int) {
+// WaitDone blocks until the upstream component has completed the specified cycle.
+func (p *Port) WaitDone(cycle int) {
 	p.upstreamSync.WaitDone(cycle)
 }
 

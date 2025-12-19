@@ -38,7 +38,7 @@
 - **验证**：确保 100 个周期的包能够正确累积在 `Port` 的 `pendingPackets` 缓存中，且下游在延迟到达对应周期时，能 100% 正确读取属于该周期的包。
 
 ### 3.2 协议违规容错测试 (`TestProtocolViolation_LateReceive`)
-- **场景**：下游组件跳过 `WaitUpstreamDone` 直接调用 `Receive`，或者上游数据发送极度滞后。
+- **场景**：下游组件跳过 `WaitDone` 直接调用 `Receive`，或者上游数据发送极度滞后。
 - **验证**：验证 `Receive` 内部的阻塞逻辑是否能代为完成同步等待，确保不会因为调用顺序的微小偏差导致读不到数据。
 
 ### 3.3 死锁弹性测试 (`TestBackpressureDeadlockResilience`)

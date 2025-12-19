@@ -111,9 +111,9 @@ type OutPort interface {
     // 返回属于指定cycle的所有packets
     Receive(cycle int) []packet.Packet
 
-    // WaitUpstreamDone 等待上游完成指定周期
+    // WaitDone 等待上游完成指定周期
     // 阻塞直到上游调用了 MarkDone(cycle)
-    WaitUpstreamDone(cycle int)
+    WaitDone(cycle int)
 
     // GetUpstreamDone 获取上游已完成的周期
     // 非阻塞，用于查询状态
@@ -153,7 +153,7 @@ func (p *Port) IsDownstreamReady(cycle int) (bool, bool) { ... }
 func (p *Port) MarkDone(cycle int) { ... }
 
 func (p *Port) Receive(cycle int) []packet.Packet { ... }
-func (p *Port) WaitUpstreamDone(cycle int) { ... }
+func (p *Port) WaitDone(cycle int) { ... }
 func (p *Port) GetUpstreamDone() int { ... }
 func (p *Port) UpdateReady(cycle int, ready bool) { ... }
 
@@ -211,7 +211,7 @@ type InputQueue struct {
     capacity, inBandwidth int
 
     // ===== Port引用（只能接收）=====
-    fromUpstream OutPort  // 只能调用Receive、WaitUpstreamDone、UpdateReady
+    fromUpstream OutPort  // 只能调用Receive、WaitDone、UpdateReady
 
     // ===== Queue自己的业务逻辑 =====
     slots      []PacketWithCycle
@@ -315,7 +315,7 @@ func (l *Link) Tick(cycle int) error {
     if l.fromUpstream != nil {
         waitCycle := cycle - l.latency
         if waitCycle >= 0 {
-            l.fromUpstream.WaitUpstreamDone(waitCycle)
+            l.fromUpstream.WaitDone(waitCycle)
         }
         packets := l.fromUpstream.Receive(waitCycle)
 
@@ -364,7 +364,7 @@ func (iq *InputQueue) Tick(cycle int) error {
     }
 
     // 1. 等待上游完成
-    iq.fromUpstream.WaitUpstreamDone(cycle - 1)
+    iq.fromUpstream.WaitDone(cycle - 1)
 
     // 2. 接收数据（使用OutPort接口）
     packets := iq.fromUpstream.Receive(cycle)
@@ -443,8 +443,8 @@ queue.fromUpstream.MarkDone(0)       // ❌ 编译失败：OutPort没有MarkDone
 
 | 组件角色 | 持有的接口类型 | 可以调用的方法 | 不能调用的方法 |
 |---------|--------------|--------------|---------------|
-| **上游组件**（发送方） | `InPort` | `Send()`, `IsDownstreamReady()`, `MarkDone()` | `Receive()`, `WaitUpstreamDone()`, `UpdateReady()` |
-| **下游组件**（接收方） | `OutPort` | `Receive()`, `WaitUpstreamDone()`, `GetUpstreamDone()`, `UpdateReady()` | `Send()`, `IsDownstreamReady()`, `MarkDone()` |
+| **上游组件**（发送方） | `InPort` | `Send()`, `IsDownstreamReady()`, `MarkDone()` | `Receive()`, `WaitDone()`, `UpdateReady()` |
+| **下游组件**（接收方） | `OutPort` | `Receive()`, `WaitDone()`, `GetUpstreamDone()`, `UpdateReady()` | `Send()`, `IsDownstreamReady()`, `MarkDone()` |
 | **Link**（双重角色） | `OutPort` (from上游)<br>`InPort` (to下游) | 两端分别有不同的方法 | - |
 
 ---
@@ -498,7 +498,7 @@ queue.fromUpstream.MarkDone(0)       // ❌ 编译失败：OutPort没有MarkDone
 ### Phase 1: Port核心实现
 - [ ] 实现Port结构体
 - [ ] 实现InPort接口方法（Send、IsDownstreamReady、MarkDone）
-- [ ] 实现OutPort接口方法（Receive、WaitUpstreamDone、GetUpstreamDone、UpdateReady）
+- [ ] 实现OutPort接口方法（Receive、WaitDone、GetUpstreamDone、UpdateReady）
 - [ ] 实现AsInPort/AsOutPort视图转换
 - [ ] 编写Port单元测试
 
@@ -540,7 +540,7 @@ queue.fromUpstream.MarkDone(0)       // ❌ 编译失败：OutPort没有MarkDone
 **OutPort接口**：
 - 移除：`Plug()`
 - 保留：`GetPackets()` → 改为 `Receive()`
-- 新增：`WaitUpstreamDone()`, `GetUpstreamDone()`, `UpdateReady()`
+- 新增：`WaitDone()`, `GetUpstreamDone()`, `UpdateReady()`
 
 ### 10.2 迁移策略
 
@@ -688,7 +688,7 @@ func (p *Port) Receive(cycle int) []packet.Packet {
     }
 }
 
-func (p *Port) WaitUpstreamDone(cycle int) {
+func (p *Port) WaitDone(cycle int) {
     for {
         p.upstreamDoneMu.Lock()
         if p.upstreamDone >= cycle {
@@ -774,7 +774,7 @@ func Connect(upstream, downstream interface{}) *Port {
 
 *   **InputQueue (Cycle N)**
     *   **依赖**: `Link` 在 Cycle `N` 的输出。
-    *   **行为**: 等待 Link 完成 Cycle `N` (`WaitUpstreamDone(N)`)，然后读取所有属于 Cycle `N` 的包。
+    *   **行为**: 等待 Link 完成 Cycle `N` (`WaitDone(N)`)，然后读取所有属于 Cycle `N` 的包。
     *   **时序**: **必须等待 Link 执行完 Cycle N 的逻辑**。
 
 ### 12.2 反压信号依赖 (Backpressure: Backward)
@@ -795,7 +795,7 @@ Ready 信号从下游流向上游。这是打破死锁的关键，也是跨周�
 **结论：** 模拟器必须先执行 **Link.Tick**，再执行 **Node.Tick (InputQueue.Tick)**。
 
 **死锁场景 (错误的执行顺序)**：
-1. 先执行 **Node.Tick(T)** -> 调用 `WaitUpstreamDone(T)` -> 阻塞等待 Link。
+1. 先执行 **Node.Tick(T)** -> 调用 `WaitDone(T)` -> 阻塞等待 Link。
 2. 此时 Link 还没运行，无法发出 Done 信号。
 3. 主线程阻塞在 Node，Link 永远无法运行 -> **死锁**。
 
@@ -811,7 +811,7 @@ Ready 信号从下游流向上游。这是打破死锁的关键，也是跨周�
     * 推送数据。
     * 发出 `MarkDone(T)` 信号。
 2. **Node.Tick(T)** 随后执行:
-    * 调用 `WaitUpstreamDone(T)`。
+    * 调用 `WaitDone(T)`。
     * 收到 Link 刚发出的 Done 信号，**立即返回**，不阻塞。
     * 读取数据。
 

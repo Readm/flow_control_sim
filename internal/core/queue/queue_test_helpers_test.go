@@ -72,8 +72,8 @@ func (m *mockDownstream) UpdateReady(cycle int, ready bool) {
 	m.fromUpstream.UpdateReady(cycle, ready)
 }
 
-func (m *mockDownstream) WaitUpstreamDone(cycle int) {
-	m.fromUpstream.WaitUpstreamDone(cycle)
+func (m *mockDownstream) WaitDone(cycle int) {
+	m.fromUpstream.WaitDone(cycle)
 }
 
 // createTestConnection creates a Port and connects mock upstream/downstream for testing.

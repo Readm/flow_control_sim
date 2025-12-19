@@ -46,7 +46,7 @@ func TestLinkBasicFunctionality(t *testing.T) {
 	}
 
 	// Wait and receive from downstream
-	downstream.WaitUpstreamDone(2)
+	downstream.WaitDone(2)
 	received := downstream.ReceivePackets(2)
 
 	if len(received) != 1 {
@@ -95,7 +95,7 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	}
 
 	// Receive packets
-	downstream.WaitUpstreamDone(3)
+	downstream.WaitDone(3)
 	received := downstream.ReceivePackets(3)
 
 	if len(received) != 2 {
@@ -147,7 +147,7 @@ func TestLinkBandwidthLimit(t *testing.T) {
 	}
 
 	// Should receive at most 2 packets (bandwidth limit)
-	downstream.WaitUpstreamDone(2)
+	downstream.WaitDone(2)
 	received1 := downstream.ReceivePackets(2)
 
 	if len(received1) > 2 {
@@ -162,7 +162,7 @@ func TestLinkBandwidthLimit(t *testing.T) {
 		t.Fatalf("link.Tick(3) failed: %v", err)
 	}
 
-	downstream.WaitUpstreamDone(3)
+	downstream.WaitDone(3)
 	received2 := downstream.ReceivePackets(3)
 
 	// Total should be 3 packets across both cycles

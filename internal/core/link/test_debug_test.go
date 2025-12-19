@@ -42,7 +42,7 @@ func TestLinkBasicDebug(t *testing.T) {
 	}
 
 	fmt.Printf("After Tick: waiting for upstream done...\n")
-	downstream.WaitUpstreamDone(2)
+	downstream.WaitDone(2)
 
 	received := downstream.ReceivePackets(2)
 	fmt.Printf("Received %d packets\n", len(received))

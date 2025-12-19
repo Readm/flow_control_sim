@@ -55,7 +55,7 @@ func TestAsynchronousDrift(t *testing.T) {
 	}
 }
 
-// TestProtocolViolation_LateReceive verifies that calling Receive before WaitUpstreamDone
+// TestProtocolViolation_LateReceive verifies that calling Receive before WaitDone
 // still works because Receive is now internally blocking and draining.
 func TestProtocolViolation_LateReceive(t *testing.T) {
 	port := NewPort()
@@ -75,7 +75,7 @@ func TestProtocolViolation_LateReceive(t *testing.T) {
 		in.MarkDone(0)
 	}()
 
-	// Downstream calls Receive(0) WITHOUT calling WaitUpstreamDone(0)
+	// Downstream calls Receive(0) WITHOUT calling WaitDone(0)
 	// It should still block and eventually return the packet.
 	pkts := out.Receive(0)
 	if len(pkts) != 1 || pkts[0].Payload != "late" {

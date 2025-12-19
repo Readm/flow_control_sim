@@ -151,7 +151,7 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	}
 
 	// Wait for downstream and receive
-	downstream.WaitUpstreamDone(4)
+	downstream.WaitDone(4)
 	received := downstream.ReceivePackets(4)
 
 	if len(received) != 1 {

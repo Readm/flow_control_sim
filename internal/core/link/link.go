@@ -167,13 +167,7 @@ func (l *Link) Tick(cycle int) error {
 
 	// ===== 4. Update ready state for upstream =====
 	// We delegate readiness logic to the Flow Control strategy.
-	// IMPORTANT: Set ready for CURRENT cycle (for this tick) AND next cycle
 	if l.fromUpstream != nil {
-		// Set ready for current cycle (in case upstream hasn't sent yet)
-		readyCurrent := l.flowControl.IsReady(cycle)
-		l.fromUpstream.UpdateReady(cycle, readyCurrent)
-		debug.Logf("Link %d->%d: Set ready[%d]=%v", l.sourceID, l.targetID, cycle, readyCurrent)
-
 		// Set ready for next cycle (for next tick)
 		readyNext := l.flowControl.IsReady(cycle + 1)
 		l.fromUpstream.UpdateReady(cycle+1, readyNext)

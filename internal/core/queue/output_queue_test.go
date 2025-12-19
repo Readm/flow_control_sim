@@ -164,7 +164,7 @@ func TestTickSendPackets(t *testing.T) {
 	}
 
 	// Wait for downstream and receive
-	downstream.WaitUpstreamDone(0)
+	downstream.WaitDone(0)
 	received := downstream.ReceivePackets(0)
 
 	// Verify packets were received
@@ -209,7 +209,7 @@ func TestTickRespectsBandwidth(t *testing.T) {
 	}
 
 	// Verify 2 packets received
-	downstream.WaitUpstreamDone(0)
+	downstream.WaitDone(0)
 	received := downstream.ReceivePackets(0)
 	if len(received) != 2 {
 		t.Fatalf("expected 2 packets received after first Tick, got %d", len(received))
@@ -226,7 +226,7 @@ func TestTickRespectsBandwidth(t *testing.T) {
 	}
 
 	// Verify 2 more packets received
-	downstream.WaitUpstreamDone(1)
+	downstream.WaitDone(1)
 	received = downstream.ReceivePackets(1)
 	if len(received) != 2 {
 		t.Fatalf("expected 2 packets received after second Tick, got %d", len(received))

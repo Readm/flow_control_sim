@@ -62,7 +62,7 @@ func (m *MockDownstream) UpdateReady(cycle int, ready bool) {
 	m.fromUpstream.UpdateReady(cycle, ready)
 }
 
-// WaitUpstreamDone waits for the upstream to complete a cycle.
-func (m *MockDownstream) WaitUpstreamDone(cycle int) {
-	m.fromUpstream.WaitUpstreamDone(cycle)
+// WaitDone waits for the upstream to complete a cycle.
+func (m *MockDownstream) WaitDone(cycle int) {
+	m.fromUpstream.WaitDone(cycle)
 }
