@@ -140,14 +140,9 @@ func (l *Link) Bandwidth() int {
 // Tick processes a single cycle.
 // This is dramatically simpler than the old implementation because Port handles all synchronization.
 func (l *Link) Tick(cycle int) error {
-	// ===== 1. Wait for upstream to complete necessary cycle =====
-	waitCycle := cycle - l.latency
-	if waitCycle >= 0 && l.fromUpstream != nil {
-		l.fromUpstream.WaitUpstreamDone(waitCycle)
-	}
-
-	// ===== 2. Receive packets from upstream =====
+	// ===== 1. Receive packets from upstream =====
 	var packets []packet.Packet
+	waitCycle := cycle - l.latency
 	if l.fromUpstream != nil && waitCycle >= 0 {
 		packets = l.fromUpstream.Receive(waitCycle)
 		debug.Logf("Link %d->%d: Tick(%d) received %d packets from waitCycle=%d", l.sourceID, l.targetID, cycle, len(packets), waitCycle)

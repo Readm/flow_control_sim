@@ -14,49 +14,65 @@ type Packet = packet.Packet
 
 // InPort represents the upstream view of a port (sender's perspective).
 // Upstream components use this interface to send data to downstream components.
+//
+// Recommended Workflow (Standard API):
+//  1. Check if ready and send data using TrySend().
+//  2. After sending all data for the cycle, call MarkDone().
 type InPort interface {
-	// TryPeekSend attempts to send a packet to the downstream component without blocking.
-	// Returns true if the packet was sent successfully, false if downstream is not ready.
-	TryPeekSend(cycle int, pkt PacketWithCycle) bool
+	// ===== [Standard API] - Most components should only use these =====
 
 	// TrySend attempts to send a packet to the downstream component.
 	// This blocks until the downstream component decides its ready state.
 	// Returns true if the packet was sent successfully, false if downstream is declared not ready.
 	TrySend(cycle int, pkt PacketWithCycle) bool
 
-	// PeekReady checks if the downstream component is ready to receive data for the given cycle.
-	// Returns (ready, decided):
-	//   - ready: true if downstream is ready, false otherwise
-	//   - decided: true if the ready state has been determined, false if undecided
-	PeekReady(cycle int) (ready bool, decided bool)
-
-	// IsReady blocks until the downstream component has decided its ready state for the given cycle.
-	// Returns the ready state: true if ready, false if not ready.
-	// This is a blocking call that waits for the decision to be made.
-	IsReady(cycle int) bool
-
 	// MarkDone marks that the upstream component has completed the specified cycle.
 	// This allows the downstream component to safely read data for this cycle.
 	MarkDone(cycle int)
+
+	// ===== [Advanced/Optimization API] - Only use for custom flow control =====
+
+	// TryPeekSend attempts to send a packet to the downstream component without blocking.
+	// Returns true if the packet was sent successfully, false if downstream is not ready/decided.
+	// Use only when implementing complex non-blocking flow control strategies.
+	TryPeekSend(cycle int, pkt PacketWithCycle) bool
+
+	// PeekReady checks if the downstream component is ready without blocking.
+	// Returns (ready, decided).
+	PeekReady(cycle int) (ready bool, decided bool)
+
+	// IsReady blocks until the downstream component has decided its ready state.
+	// Most components should prefer using TrySend directly.
+	IsReady(cycle int) bool
 }
 
 // OutPort represents the downstream view of a port (receiver's perspective).
 // Downstream components use this interface to receive data from upstream components.
+//
+// Recommended Workflow (Standard API):
+//  1. Retrieve all packets for the cycle using Receive().
+//  2. Determine subsequent readiness and call UpdateReady().
 type OutPort interface {
+	// ===== [Standard API] - Most components should only use these =====
+
 	// Receive retrieves all packets for the specified cycle from the upstream component.
-	// Returns all packets belonging to this cycle (may be empty).
+	// This is a blocking call that ensures all packets for the cycle are collected.
+	// Note: It internally handles the wait for upstream to be done (WaitUpstreamDone).
 	Receive(cycle int) []packet.Packet
 
+	// UpdateReady updates the downstream component's ready state for the given cycle.
+	// This informs the upstream whether it's ready to receive data for the specific cycle.
+	UpdateReady(cycle int, ready bool)
+
+	// ===== [Advanced/Optimization API] - Use with caution =====
+
 	// WaitUpstreamDone blocks until the upstream component has completed the specified cycle.
+	// Note: Receive() already calls this internally.
 	WaitUpstreamDone(cycle int)
 
 	// PeekDone returns the highest cycle that the upstream component has completed.
 	// This is a non-blocking query method.
 	PeekDone() int
-
-	// UpdateReady updates the downstream component's ready state for the given cycle.
-	// This is called by the downstream component to inform the upstream whether it's ready to receive data.
-	UpdateReady(cycle int, ready bool)
 }
 
 // ===== Port Implementation =====

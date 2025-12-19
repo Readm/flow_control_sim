@@ -83,11 +83,8 @@ func (iq *InputQueue) Tick(cycle int) error {
 		return nil
 	}
 
-	// ===== 1. Wait for upstream to complete =====
-	// We wait for the current cycle because upstream produces data for this cycle.
-	iq.fromUpstream.WaitUpstreamDone(cycle)
-
-	// ===== 2. Receive packets from upstream =====
+	// ===== 1. Receive packets from upstream =====
+	// Receive() internally handle synchronization: it waits for the current cycle to be complete.
 	packets := iq.fromUpstream.Receive(cycle)
 
 	// ===== 3. Store packets in slots =====
