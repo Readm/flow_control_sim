@@ -32,11 +32,6 @@ type InPort interface {
 
 	// ===== [Advanced/Optimization API] - Only use for custom flow control =====
 
-	// TryPeekSend attempts to send a packet to the downstream component without blocking.
-	// Returns true if the packet was sent successfully, false if downstream is not ready/decided.
-	// Use only when implementing complex non-blocking flow control strategies.
-	TryPeekSend(cycle int, pkt PacketWithCycle) bool
-
 	// PeekReady checks if the downstream component is ready without blocking.
 	// Returns (ready, decided).
 	PeekReady(cycle int) (ready bool, decided bool)
@@ -109,20 +104,6 @@ func NewPort() *Port {
 }
 
 // ===== InPort interface implementation (upstream view) =====
-
-// TryPeekSend attempts to send a packet to the downstream component without blocking.
-// Returns true if the packet was sent successfully, false if downstream is not ready.
-func (p *Port) TryPeekSend(cycle int, pkt PacketWithCycle) bool {
-	// Check if downstream is ready
-	ready, decided := p.PeekReady(cycle)
-	if !decided || !ready {
-		return false
-	}
-
-	// Send packet to channel
-	p.channel <- pkt
-	return true
-}
 
 // TrySend attempts to send a packet to the downstream component.
 // This blocks until the downstream component decides its ready state.

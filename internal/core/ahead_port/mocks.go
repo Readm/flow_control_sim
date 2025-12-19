@@ -23,13 +23,17 @@ func (m *MockUpstream) SendPacket(cycle int, pkt packet.Packet) bool {
 	return m.toDownstream.TrySend(cycle, pwc)
 }
 
-// TryPeekSendPacket attempts to send a packet using non-blocking TryPeekSend.
+// TryPeekSendPacket attempts to send a packet using non-blocking check.
 func (m *MockUpstream) TryPeekSendPacket(cycle int, pkt packet.Packet) bool {
 	pwc := PacketWithCycle{
 		Cycle:  cycle,
 		Packet: pkt,
 	}
-	return m.toDownstream.TryPeekSend(cycle, pwc)
+	ready, decided := m.toDownstream.PeekReady(cycle)
+	if decided && ready {
+		return m.toDownstream.TrySend(cycle, pwc)
+	}
+	return false
 }
 
 // MarkDone marks a cycle as done.
