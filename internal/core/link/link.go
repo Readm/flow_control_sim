@@ -88,19 +88,31 @@ func NewLinkWithHandler(sourceID, targetID, latency, bandwidth int, handler Link
 // SetUpstreamPort sets the port for receiving data from upstream.
 func (l *Link) SetUpstreamPort(port ahead_port.OutPort) {
 	l.fromUpstream = port
-	// Initial ready signals for the first few cycles
-	if l.fromUpstream != nil {
-		// Default to ready for the first 10 cycles to avoid startup stalls
-		// Handlers can override this in their first process call if needed
-		for i := 0; i < 10; i++ {
-			l.fromUpstream.UpdateReady(i, true)
-		}
-	}
+	// No default ready signals. Handlers must provide them in their Process method.
 }
 
 // SetDownstreamPort sets the port for sending data to downstream.
 func (l *Link) SetDownstreamPort(port ahead_port.InPort) {
 	l.toDownstream = port
+}
+
+// UpdateUpstreamReady updates the ready state of the upstream port for a specific cycle.
+// This is useful for custom LinkHandlers to signal backpressure.
+func (l *Link) UpdateUpstreamReady(cycle int, ready bool) {
+	if l.fromUpstream != nil {
+		l.fromUpstream.UpdateReady(cycle, ready)
+	}
+}
+
+// AddPendingPacket allows external handlers to store a packet back into the link's pending list.
+// This is useful for custom handlers that need to retry sending.
+func (l *Link) AddPendingPacket(pwc ahead_port.PacketWithCycle) {
+	l.pendingPackets = append(l.pendingPackets, pwc)
+}
+
+// Init initializes the link after being connected to the network.
+func (l *Link) Init() {
+	l.handler.Init(l)
 }
 
 // SourceID returns the ID of the upstream node.

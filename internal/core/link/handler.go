@@ -22,4 +22,9 @@ type LinkHandler interface {
 
 	// Reset resets the handler state.
 	Reset()
+
+	// Init initializes the handler after being connected to the network.
+	// It handles bootstrapping tasks like initial ready signaling.
+	// If initialReady is specified on the link, it should be honored.
+	Init(l *Link)
 }

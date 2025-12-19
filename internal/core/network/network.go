@@ -120,11 +120,33 @@ func (n *Network) AddNode(handle *NodeHandle) error {
 	return nil
 }
 
+// ConnectOption is a functional option for configuring a network connection.
+type ConnectOption func(*connectOptions)
+
+type connectOptions struct {
+	handler link.LinkHandler
+}
+
+// WithHandler specifies a custom link handler for the connection.
+func WithHandler(handler link.LinkHandler) ConnectOption {
+	return func(o *connectOptions) {
+		o.handler = handler
+	}
+}
+
 // Connect wires a source output queue to a target input queue with a Link.
 // Must be called before Advance. Panics if network is frozen.
-func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targetInputIdx int, latency int, bandwidth int) (*link.Link, error) {
+func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targetInputIdx int, latency int, bandwidth int, opts ...ConnectOption) (*link.Link, error) {
 	if n.frozen {
 		panic("cannot connect after network is frozen (Advance called)")
+	}
+
+	// Default options
+	options := connectOptions{
+		handler: nil,
+	}
+	for _, opt := range opts {
+		opt(&options)
 	}
 
 	source, ok := n.nodes[sourceID]
@@ -149,68 +171,27 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 		return nil, fmt.Errorf("queues for connection %d->%d must not be nil", sourceID, targetID)
 	}
 
-	// Create Link with new API (returns only link instance)
-	linkInstance := link.NewLink(
-		sourceID,
-		targetID,
-		latency,
-		bandwidth,
-	)
+	// Create Link
+	var linkInstance *link.Link
+	if options.handler != nil {
+		linkInstance = link.NewLinkWithHandler(sourceID, targetID, latency, bandwidth, options.handler)
+	} else {
+		linkInstance = link.NewLink(sourceID, targetID, latency, bandwidth)
+	}
 
 	// Connect using ahead_port.Connect
-	// OutputQueue -> Link -> InputQueue
 	ahead_port.Connect(sourceOutput, linkInstance)
 	ahead_port.Connect(linkInstance, targetInput)
+
+	// Link will be initialized in Advance or explicitly by user
 
 	n.links = append(n.links, linkInstance)
 	return linkInstance, nil
 }
 
-// ConnectWithHandler wires a source output queue to a target input queue with a Link using a custom handler.
-// Must be called before Advance. Panics if network is frozen.
+// ConnectWithHandler is a legacy wrapper. Use Connect(..., WithHandler(h)) instead.
 func (n *Network) ConnectWithHandler(sourceID int, sourceOutputIdx int, targetID int, targetInputIdx int, latency int, bandwidth int, handler link.LinkHandler) (*link.Link, error) {
-	if n.frozen {
-		panic("cannot connect after network is frozen (Advance called)")
-	}
-
-	source, ok := n.nodes[sourceID]
-	if !ok {
-		return nil, fmt.Errorf("source node %d not found", sourceID)
-	}
-	target, ok := n.nodes[targetID]
-	if !ok {
-		return nil, fmt.Errorf("target node %d not found", targetID)
-	}
-
-	if sourceOutputIdx < 0 || sourceOutputIdx >= len(source.Outputs) {
-		return nil, fmt.Errorf("source node %d output index %d invalid", sourceID, sourceOutputIdx)
-	}
-	if targetInputIdx < 0 || targetInputIdx >= len(target.Inputs) {
-		return nil, fmt.Errorf("target node %d input index %d invalid", targetID, targetInputIdx)
-	}
-
-	sourceOutput := source.Outputs[sourceOutputIdx]
-	targetInput := target.Inputs[targetInputIdx]
-	if sourceOutput == nil || targetInput == nil {
-		return nil, fmt.Errorf("queues for connection %d->%d must not be nil", sourceID, targetID)
-	}
-
-	// Create Link with custom handler
-	linkInstance := link.NewLinkWithHandler(
-		sourceID,
-		targetID,
-		latency,
-		bandwidth,
-		handler,
-	)
-
-	// Connect using ahead_port.Connect
-	// OutputQueue -> Link -> InputQueue
-	ahead_port.Connect(sourceOutput, linkInstance)
-	ahead_port.Connect(linkInstance, targetInput)
-
-	n.links = append(n.links, linkInstance)
-	return linkInstance, nil
+	return n.Connect(sourceID, sourceOutputIdx, targetID, targetInputIdx, latency, bandwidth, WithHandler(handler))
 }
 
 // Reset clears the network and rebuilds it from the provided schema.
@@ -347,6 +328,8 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 		ahead_port.Connect(sourceOutput, linkInstance)
 		ahead_port.Connect(linkInstance, targetInput)
 
+		// Link will be initialized in Advance or explicitly by user
+
 		n.links = append(n.links, linkInstance)
 	}
 
@@ -369,6 +352,11 @@ func (n *Network) Advance(cycles int) error {
 		}
 		n.frozen = true
 		debug.Logf("Network.Advance: network frozen, nodes=%d, links=%d", len(n.nodeList), len(n.links))
+
+		// Initialize all links
+		for _, l := range n.links {
+			l.Init()
+		}
 	}
 
 	debug.Logf("Network.Advance: starting cycles=%d", cycles)

@@ -23,7 +23,9 @@ func (h *BufferlessLinkHandler) Process(l *Link, cycle int, incoming []packet.Pa
 
 	for _, pkt := range currentPending {
 		if pkt.Cycle <= cycle {
-			if !h.sendPacket(l, pkt.Cycle, pkt.Packet) {
+			// When retrying in a bufferless link, use the CURRENT cycle.
+			// The original packet cycle is no longer relevant for the downstream port.
+			if !h.sendPacket(l, cycle, pkt.Packet) {
 				l.pendingPackets = append(l.pendingPackets, pkt)
 			}
 		} else {
@@ -53,6 +55,13 @@ func (h *BufferlessLinkHandler) Process(l *Link, cycle int, incoming []packet.Pa
 
 // Reset resets the handler state.
 func (h *BufferlessLinkHandler) Reset() {}
+
+// ReadyDepth returns the number of cycles to pre-mark as ready for bootstrapping.
+// Bufferless links are always ready, but need at least cycle 0 to start.
+func (h *BufferlessLinkHandler) Init(l *Link) {
+	// Signal cycle 0 as ready to start the clock
+	l.UpdateUpstreamReady(0, true)
+}
 
 func (h *BufferlessLinkHandler) sendPacket(l *Link, targetCycle int, pkt packet.Packet) bool {
 	if l.toDownstream == nil {

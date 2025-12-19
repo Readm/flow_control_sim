@@ -131,6 +131,15 @@ func (h *BufferedLinkHandler) Reset() {
 	}
 }
 
+// ReadyDepth returns the number of cycles to pre-mark as ready for bootstrapping.
+// For buffered links, we need to fill the pipeline (latency) plus one for cycle 0.
+func (h *BufferedLinkHandler) Init(l *Link) {
+	depth := h.latency + 1
+	for i := 0; i < depth; i++ {
+		l.UpdateUpstreamReady(i, true)
+	}
+}
+
 func (h *BufferedLinkHandler) CanAcceptPacket(cycle int, targetCycle int) bool {
 	if targetCycle-cycle >= h.latency {
 		return false
