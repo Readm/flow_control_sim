@@ -249,11 +249,6 @@ func (n *BaseNode) tickOutputQueues(cycle uint64) error {
 	return nil
 }
 
-// tickQueuesConcurrently executes queue Tick operations.
-// The implementation is controlled by build tags:
-// - Default (no tags): synchronous/serial execution (defined in node_queues.go)
-// - With -tags async: concurrent execution with goroutines (defined in node_queues_async.go)
-
 // Advance executes the configured number of cycles sequentially using Background context.
 func (n *BaseNode) Advance(cycles int) error {
 	if cycles <= 0 {
