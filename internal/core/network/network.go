@@ -166,6 +166,62 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 	return linkInstance, nil
 }
 
+// ConnectWithFlowControl wires a source output queue to a target input queue with a Link using a custom flow control strategy.
+// Must be called before Advance. Panics if network is frozen.
+//
+// Parameters:
+//   - sourceID: ID of source node
+//   - sourceOutputIdx: index of output queue in source node
+//   - targetID: ID of target node
+//   - targetInputIdx: index of input queue in target node
+//   - latency: number of cycles for packet delivery (must be > 0)
+//   - bandwidth: maximum packets per cycle (must be > 0)
+//   - flowControl: flow control strategy (e.g., BufferlessFlowControl or BufferedFlowControl)
+func (n *Network) ConnectWithFlowControl(sourceID int, sourceOutputIdx int, targetID int, targetInputIdx int, latency int, bandwidth int, flowControl link.FlowControlStrategy) (*link.Link, error) {
+	if n.frozen {
+		panic("cannot connect after network is frozen (Advance called)")
+	}
+
+	source, ok := n.nodes[sourceID]
+	if !ok {
+		return nil, fmt.Errorf("source node %d not found", sourceID)
+	}
+	target, ok := n.nodes[targetID]
+	if !ok {
+		return nil, fmt.Errorf("target node %d not found", targetID)
+	}
+
+	if sourceOutputIdx < 0 || sourceOutputIdx >= len(source.Outputs) {
+		return nil, fmt.Errorf("source node %d output index %d invalid", sourceID, sourceOutputIdx)
+	}
+	if targetInputIdx < 0 || targetInputIdx >= len(target.Inputs) {
+		return nil, fmt.Errorf("target node %d input index %d invalid", targetID, targetInputIdx)
+	}
+
+	sourceOutput := source.Outputs[sourceOutputIdx]
+	targetInput := target.Inputs[targetInputIdx]
+	if sourceOutput == nil || targetInput == nil {
+		return nil, fmt.Errorf("queues for connection %d->%d must not be nil", sourceID, targetID)
+	}
+
+	// Create Link with custom flow control
+	linkInstance := link.NewLinkWithFlowControl(
+		sourceID,
+		targetID,
+		latency,
+		bandwidth,
+		flowControl,
+	)
+
+	// Connect using ahead_port.Connect
+	// OutputQueue -> Link -> InputQueue
+	ahead_port.Connect(sourceOutput, linkInstance)
+	ahead_port.Connect(linkInstance, targetInput)
+
+	n.links = append(n.links, linkInstance)
+	return linkInstance, nil
+}
+
 // Reset clears the network and rebuilds it from the provided schema.
 // Must be called before any Advance. Panics if network is frozen.
 func (n *Network) Reset(schema *NetworkSchema) error {

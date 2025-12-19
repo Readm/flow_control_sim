@@ -31,6 +31,8 @@ type NetworkState struct {
 	routerBuffers [4]int
 	queueLengths  map[string]int
 	linkPackets   [4]int
+	activeRouters map[int]bool // Routers that picked packets this cycle
+	activeWorkers map[int]bool // Workers that picked packets this cycle
 }
 
 // RingSimulator 交互式ring网络模拟器
@@ -39,6 +41,7 @@ type RingSimulator struct {
 	workers        []*node.WorkerNode
 	queues         *QueueCollection
 	ringLinks      []*link.Link
+	localLinks     []*link.Link
 	cycle          int
 	ctx            context.Context
 	prevState      *NetworkState
@@ -54,6 +57,7 @@ func NewRingSimulator() *RingSimulator {
 		routerBuffer   = 4
 		queueSize      = 8
 		queueBandwidth = 2
+		localLatency   = 1
 	)
 
 	// Create routers and workers
@@ -120,17 +124,34 @@ func NewRingSimulator() *RingSimulator {
 		ringInQueues[nextRouter].SetUpstreamPort(p2.AsOutPort())
 	}
 
-	// Create local connections
+	// Create local connections using links with latency
+	localLinks := make([]*link.Link, 0)
 	for i := 0; i < numRouters; i++ {
 		// Worker -> Router
-		p1 := ahead_port.NewPort()
-		workerOutQueues[i].SetDownstreamPort(p1.AsInPort())
-		localInQueues[i].SetUpstreamPort(p1.AsOutPort())
+		fc1 := link.NewBufferlessFlowControl()
+		l1 := link.NewLinkWithFlowControl(i, 100+i, localLatency, queueBandwidth, fc1)
+
+		p1_out := ahead_port.NewPort()
+		workerOutQueues[i].SetDownstreamPort(p1_out.AsInPort())
+		l1.SetUpstreamPort(p1_out.AsOutPort())
+
+		p1_in := ahead_port.NewPort()
+		l1.SetDownstreamPort(p1_in.AsInPort())
+		localInQueues[i].SetUpstreamPort(p1_in.AsOutPort())
 
 		// Router -> Worker
-		p2 := ahead_port.NewPort()
-		localOutQueues[i].SetDownstreamPort(p2.AsInPort())
-		workerInQueues[i].SetUpstreamPort(p2.AsOutPort())
+		fc2 := link.NewBufferlessFlowControl()
+		l2 := link.NewLinkWithFlowControl(100+i, i, localLatency, queueBandwidth, fc2)
+
+		p2_out := ahead_port.NewPort()
+		localOutQueues[i].SetDownstreamPort(p2_out.AsInPort())
+		l2.SetUpstreamPort(p2_out.AsOutPort())
+
+		p2_in := ahead_port.NewPort()
+		l2.SetDownstreamPort(p2_in.AsInPort())
+		workerInQueues[i].SetUpstreamPort(p2_in.AsOutPort())
+
+		localLinks = append(localLinks, l1, l2)
 	}
 
 	queues := &QueueCollection{
@@ -147,6 +168,7 @@ func NewRingSimulator() *RingSimulator {
 		workers:        workers,
 		queues:         queues,
 		ringLinks:      ringLinks,
+		localLinks:     localLinks,
 		cycle:          0,
 		ctx:            context.Background(),
 		highlightOn:    true, // 默认开启高亮
@@ -190,30 +212,86 @@ func (sim *RingSimulator) Step() error {
 	// 捕获执行前的状态
 	sim.prevState = sim.captureState()
 
+	// Track which nodes are active (picked packets) this cycle
+	activeRouters := make(map[int]bool)
+	activeWorkers := make(map[int]bool)
+
 	// Tick all links first (Latency handling requires links to move data first or concurrent to nodes)
 	// With sequential execution and Latency > 0, Link(T) depends on Node(T-L).
 	// Node(T) depends on Link(T).
 	// So Link must run first to provide data for Node(T).
 	for _, l := range sim.ringLinks {
 		if err := l.Tick(sim.cycle); err != nil {
-			return fmt.Errorf("link tick failed: %w", err)
+			return fmt.Errorf("ring link tick failed: %w", err)
+		}
+	}
+	for _, l := range sim.localLinks {
+		if err := l.Tick(sim.cycle); err != nil {
+			return fmt.Errorf("local link tick failed: %w", err)
 		}
 	}
 
 	// Tick all components
-	for _, r := range sim.routers {
+	for i, r := range sim.routers {
+		// Check if router has any input packets before ticking
+		hasInput := false
+		for _, q := range r.InputQueues() {
+			if q.Length() > 0 {
+				hasInput = true
+				break
+			}
+		}
+
 		if err := r.Tick(sim.ctx, uint64(sim.cycle), 0); err != nil {
 			return fmt.Errorf("router tick failed: %w", err)
 		}
+
+		// If router had input, it picked and processed packets
+		if hasInput {
+			activeRouters[i] = true
+		}
 	}
-	// Tick workers (skip blocked ones)
+	// Tick workers
 	for i, w := range sim.workers {
 		if sim.blockedWorkers[i] {
+			// For blocked workers, still tick queues to maintain synchronization
+			// (MarkDone must be called), but don't process packets
+			for _, q := range w.InputQueues() {
+				if err := q.Tick(sim.cycle); err != nil {
+					return fmt.Errorf("blocked worker %d input queue tick failed: %w", i, err)
+				}
+			}
+			for _, q := range w.OutputQueues() {
+				if err := q.Tick(sim.cycle); err != nil {
+					return fmt.Errorf("blocked worker %d output queue tick failed: %w", i, err)
+				}
+			}
 			continue
 		}
+
+		// Check if worker has any input packets before ticking
+		hasInput := false
+		for _, q := range w.InputQueues() {
+			if q.Length() > 0 {
+				hasInput = true
+				break
+			}
+		}
+
 		if err := w.Tick(sim.ctx, uint64(sim.cycle), 0); err != nil {
 			return fmt.Errorf("worker tick failed: %w", err)
 		}
+
+		// If worker had input, it picked and processed packets
+		if hasInput {
+			activeWorkers[i] = true
+		}
+	}
+
+	// Store active nodes in prevState for visualization
+	if sim.prevState != nil {
+		sim.prevState.activeRouters = activeRouters
+		sim.prevState.activeWorkers = activeWorkers
 	}
 
 	sim.cycle++
@@ -242,7 +320,7 @@ func (sim *RingSimulator) InjectPacket(sourceWorker, targetWorker int, payload s
 const (
 	colorReset  = "\033[0m"
 	colorRed    = "\033[31m"
-	colorGreen  = "\033[32m"
+	colorGreen  = "\033[32m" // For active nodes
 	colorYellow = "\033[33m"
 	colorCyan   = "\033[36m"
 	colorBold   = "\033[1m"
@@ -282,19 +360,53 @@ func (sim *RingSimulator) Visualize() string {
 	r1Changed := sim.prevState != nil && sim.prevState.routerBuffers[1] != sim.routers[1].GetInjectionBufferOccupancy()
 	link0Changed := sim.prevState != nil && sim.prevState.linkPackets[0] != len(sim.ringLinks[0].SnapshotOccupancy())
 
+	// Check if nodes are active (picked packets)
+	r0Active := sim.prevState != nil && sim.prevState.activeRouters[0]
+	r1Active := sim.prevState != nil && sim.prevState.activeRouters[1]
+
+	r0Vis := sim.routers[0].GetVisualState()
+	r1Vis := sim.routers[1].GetVisualState()
+
+	// Add green color for active nodes
+	if r0Active && sim.highlightOn {
+		r0Vis = colorGreen + r0Vis + colorReset
+	} else if r0Changed {
+		r0Vis = sim.highlight(r0Vis, true)
+	}
+	if r1Active && sim.highlightOn {
+		r1Vis = colorGreen + r1Vis + colorReset
+	} else if r1Changed {
+		r1Vis = sim.highlight(r1Vis, true)
+	}
+
 	sb.WriteString(fmt.Sprintf("    %s %s %s\n",
-		sim.highlight(sim.routers[0].GetVisualState(), r0Changed),
+		r0Vis,
 		sim.highlight(sim.ringLinks[0].GetVisualState(), link0Changed),
-		sim.highlight(sim.routers[1].GetVisualState(), r1Changed)))
+		r1Vis))
 	sb.WriteString("      ↓              ↓\n")
 
 	r3Changed := sim.prevState != nil && sim.prevState.routerBuffers[3] != sim.routers[3].GetInjectionBufferOccupancy()
 	r2Changed := sim.prevState != nil && sim.prevState.routerBuffers[2] != sim.routers[2].GetInjectionBufferOccupancy()
+	r3Active := sim.prevState != nil && sim.prevState.activeRouters[3]
+	r2Active := sim.prevState != nil && sim.prevState.activeRouters[2]
 
-	sb.WriteString(fmt.Sprintf("    %s %s %s\n",
-		sim.highlight(sim.routers[3].GetVisualState(), r3Changed),
-		"<---",
-		sim.highlight(sim.routers[2].GetVisualState(), r2Changed)))
+	r3Vis := sim.routers[3].GetVisualState()
+	r2Vis := sim.routers[2].GetVisualState()
+
+	if r3Active && sim.highlightOn {
+		r3Vis = colorGreen + r3Vis + colorReset
+	} else if r3Changed {
+		r3Vis = sim.highlight(r3Vis, true)
+	}
+	if r2Active && sim.highlightOn {
+		r2Vis = colorGreen + r2Vis + colorReset
+	} else if r2Changed {
+		r2Vis = sim.highlight(r2Vis, true)
+	}
+
+	sb.WriteString(fmt.Sprintf("    %s <--- %s\n",
+		r3Vis,
+		r2Vis))
 	sb.WriteString("\n")
 
 	// Queue status
@@ -320,15 +432,56 @@ func (sim *RingSimulator) Visualize() string {
 		workerOutKey := fmt.Sprintf("workerOut%d", i)
 		workerInKey := fmt.Sprintf("workerIn%d", i)
 
-		sb.WriteString(fmt.Sprintf("  W%d: Out=%s In=%s\n",
-			i,
+		// Check if worker is active
+		workerActive := sim.prevState != nil && sim.prevState.activeWorkers[i]
+
+		workerLabel := fmt.Sprintf("W%d", i)
+		if workerActive && sim.highlightOn {
+			workerLabel = colorGreen + workerLabel + colorReset
+		}
+
+		sb.WriteString(fmt.Sprintf("  %s: Out=%s In=%s\n",
+			workerLabel,
 			sim.highlight(sim.queues.WorkerOut[i].GetVisualState(), sim.hasChanged(workerOutKey, sim.queues.WorkerOut[i].Length())),
 			sim.highlight(sim.queues.WorkerIn[i].GetVisualState(), sim.hasChanged(workerInKey, sim.queues.WorkerIn[i].Length()))))
 	}
 
 	sb.WriteString("\n")
+
+	// Links status (show packets in flight)
+	sb.WriteString("Links Status:\n")
+	sb.WriteString("  Ring Links:\n")
+	for i := 0; i < 4; i++ {
+		nextRouter := (i + 1) % 4
+		linkKey := fmt.Sprintf("ringLink%d", i)
+		pendingCount := sim.ringLinks[i].PendingPacketCount()
+		sb.WriteString(fmt.Sprintf("    R%d→R%d: %s\n",
+			i, nextRouter,
+			sim.highlight(sim.ringLinks[i].GetVisualState(), sim.hasChanged(linkKey, pendingCount))))
+	}
+	sb.WriteString("  Local Links:\n")
+	for i := 0; i < 4; i++ {
+		// Worker -> Router link
+		workerToRouterIdx := i * 2
+		linkKey1 := fmt.Sprintf("localLink%d", workerToRouterIdx)
+		pendingCount1 := sim.localLinks[workerToRouterIdx].PendingPacketCount()
+		sb.WriteString(fmt.Sprintf("    W%d→R%d: %s\n",
+			i, i,
+			sim.highlight(sim.localLinks[workerToRouterIdx].GetVisualState(), sim.hasChanged(linkKey1, pendingCount1))))
+
+		// Router -> Worker link
+		routerToWorkerIdx := i*2 + 1
+		linkKey2 := fmt.Sprintf("localLink%d", routerToWorkerIdx)
+		pendingCount2 := sim.localLinks[routerToWorkerIdx].PendingPacketCount()
+		sb.WriteString(fmt.Sprintf("    R%d→W%d: %s\n",
+			i, i,
+			sim.highlight(sim.localLinks[routerToWorkerIdx].GetVisualState(), sim.hasChanged(linkKey2, pendingCount2))))
+	}
+
+	sb.WriteString("\n")
 	if sim.highlightOn {
-		sb.WriteString(fmt.Sprintf("Legend: R=Router[buf/cap]W=Worker, [len/cap], -[n]-=packets, %sYELLOW=changed%s\n", colorYellow+colorBold, colorReset))
+		sb.WriteString(fmt.Sprintf("Legend: R=Router[buf/cap]W=Worker, [len/cap], -[n]-=packets, %sYELLOW=changed%s, %sGREEN=active%s\n",
+			colorYellow+colorBold, colorReset, colorGreen+colorBold, colorReset))
 	} else {
 		sb.WriteString("Legend: R=Router[buf/cap]W=Worker, [len/cap], -[n]-=packets in flight\n")
 	}
@@ -548,6 +701,9 @@ func main() {
 
 			fmt.Printf("📋 Loading scenario: %s\n", scenario.Name)
 			fmt.Printf("   %s\n", scenario.Description)
+
+			// Clear previous scenario state
+			sim.blockedWorkers = make(map[int]bool)
 
 			if err := scenario.Setup(sim); err != nil {
 				fmt.Printf("❌ Error setting up scenario: %v\n", err)

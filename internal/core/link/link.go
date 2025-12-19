@@ -78,8 +78,8 @@ func NewLink(sourceID, targetID, latency, bandwidth int) *Link {
 // - bandwidth: maximum packets per cycle (must be > 0)
 // - flowControl: the flow control strategy to use
 func NewLinkWithFlowControl(sourceID, targetID, latency, bandwidth int, flowControl FlowControlStrategy) *Link {
-	if latency < 0 {
-		panic("latency must not be negative")
+	if latency <= 0 {
+		panic("latency must be positive (0-latency creates combinational loops in sequential simulation)")
 	}
 	if bandwidth <= 0 {
 		panic("bandwidth must be positive")
@@ -103,8 +103,12 @@ func NewLinkWithFlowControl(sourceID, targetID, latency, bandwidth int, flowCont
 // Link acts as downstream for this port.
 func (l *Link) SetUpstreamPort(port ahead_port.OutPort) {
 	l.fromUpstream = port
-	// Initialize ready state for cycle 0
-	l.fromUpstream.UpdateReady(0, true)
+	// Initialize ready state for initial cycles
+	// This is necessary because OutputQueue may try to send before Link's first Tick
+	// For bufferless links, we're always ready, so initialize generously
+	for i := 0; i < 10; i++ {
+		l.fromUpstream.UpdateReady(i, l.flowControl.IsReady(i))
+	}
 }
 
 // SetDownstreamPort sets the port for sending data to downstream.
@@ -146,6 +150,9 @@ func (l *Link) Tick(cycle int) error {
 	var packets []packet.Packet
 	if l.fromUpstream != nil && waitCycle >= 0 {
 		packets = l.fromUpstream.Receive(waitCycle)
+		debug.Logf("Link %d->%d: Tick(%d) received %d packets from waitCycle=%d", l.sourceID, l.targetID, cycle, len(packets), waitCycle)
+	} else {
+		debug.Logf("Link %d->%d: Tick(%d) skip receive (waitCycle=%d)", l.sourceID, l.targetID, cycle, waitCycle)
 	}
 
 	// ===== 3. Process packets using flow control strategy =====
@@ -161,13 +168,21 @@ func (l *Link) Tick(cycle int) error {
 	}
 
 	l.pendingPackets = newPending
+	debug.Logf("Link %d->%d: Tick(%d) now has %d pending packets", l.sourceID, l.targetID, cycle, len(newPending))
 
 	// ===== 4. Update ready state for upstream =====
-	// ===== 4. Update ready state for upstream =====
 	// We delegate readiness logic to the Flow Control strategy.
+	// IMPORTANT: Set ready for CURRENT cycle (for this tick) AND next cycle
 	if l.fromUpstream != nil {
-		ready := l.flowControl.IsReady(cycle + 1)
-		l.fromUpstream.UpdateReady(cycle+1, ready)
+		// Set ready for current cycle (in case upstream hasn't sent yet)
+		readyCurrent := l.flowControl.IsReady(cycle)
+		l.fromUpstream.UpdateReady(cycle, readyCurrent)
+		debug.Logf("Link %d->%d: Set ready[%d]=%v", l.sourceID, l.targetID, cycle, readyCurrent)
+
+		// Set ready for next cycle (for next tick)
+		readyNext := l.flowControl.IsReady(cycle + 1)
+		l.fromUpstream.UpdateReady(cycle+1, readyNext)
+		debug.Logf("Link %d->%d: Set ready[%d]=%v", l.sourceID, l.targetID, cycle+1, readyNext)
 	}
 
 	// ===== 5. Mark this cycle as done for downstream =====
