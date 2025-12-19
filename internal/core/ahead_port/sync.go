@@ -126,7 +126,7 @@ func (cs *ComponentSync) checkQueueAndPrune(cycle int) (bool, bool) {
 		if item.cycle == cycle {
 			result = item.ready
 			found = true
-			pruneIdx = i + 1
+			pruneIdx = i
 			break
 		}
 		pruneIdx = i

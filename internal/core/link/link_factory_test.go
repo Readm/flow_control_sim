@@ -83,7 +83,7 @@ func TestNewLinkWithFlowControl_Buffered(t *testing.T) {
 // TestNewLinkWithFlowControl_Bufferless tests creating Link with BufferlessFlowControl.
 func TestNewLinkWithFlowControl_Bufferless(t *testing.T) {
 	fc := NewBufferlessFlowControl()
-	link := NewLinkWithFlowControl(0, 1, 0, 1, fc)
+	link := NewLinkWithFlowControl(0, 1, 1, 1, fc)
 
 	if link == nil {
 		t.Fatal("NewLinkWithFlowControl returned nil link")
@@ -160,7 +160,7 @@ func TestFactoryIntegration(t *testing.T) {
 		bandwidth    int
 	}{
 		{"buffered link", "buffered", 3, 2},
-		{"bufferless link", "bufferless", 0, 1},
+		{"bufferless link", "bufferless", 1, 1},
 	}
 
 	for _, tt := range tests {
