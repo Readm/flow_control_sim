@@ -7,12 +7,12 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// TestNewBufferedFlowControl tests creation with valid parameters.
-func TestNewBufferedFlowControl(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2)
+// TestNewBufferedLinkHandler tests creation with valid parameters.
+func TestNewBufferedLinkHandler(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2)
 
 	if fc == nil {
-		t.Fatal("NewBufferedFlowControl returned nil")
+		t.Fatal("NewBufferedLinkHandler returned nil")
 	}
 
 	if fc.GetLatency() != 3 {
@@ -32,8 +32,8 @@ func TestNewBufferedFlowControl(t *testing.T) {
 	}
 }
 
-// TestNewBufferedFlowControl_Panics tests panic conditions.
-func TestNewBufferedFlowControl_Panics(t *testing.T) {
+// TestNewBufferedLinkHandler_Panics tests panic conditions.
+func TestNewBufferedLinkHandler_Panics(t *testing.T) {
 	tests := []struct {
 		name      string
 		latency   int
@@ -52,14 +52,14 @@ func TestNewBufferedFlowControl_Panics(t *testing.T) {
 					t.Errorf("Expected panic for %s", tt.name)
 				}
 			}()
-			NewBufferedFlowControl(tt.latency, tt.bandwidth)
+			NewBufferedLinkHandler(tt.latency, tt.bandwidth)
 		})
 	}
 }
 
-// TestBufferedFlowControl_CanAcceptPacket tests the windowing logic.
-func TestBufferedFlowControl_CanAcceptPacket(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2) // latency=3, bandwidth=2
+// TestBufferedLinkHandler_CanAcceptPacket tests the windowing logic.
+func TestBufferedLinkHandler_CanAcceptPacket(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2) // latency=3, bandwidth=2
 
 	tests := []struct {
 		name        string
@@ -109,9 +109,9 @@ func TestBufferedFlowControl_CanAcceptPacket(t *testing.T) {
 	}
 }
 
-// TestBufferedFlowControl_BandwidthLimit tests bandwidth enforcement.
-func TestBufferedFlowControl_BandwidthLimit(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2) // bandwidth=2
+// TestBufferedLinkHandler_BandwidthLimit tests bandwidth enforcement.
+func TestBufferedLinkHandler_BandwidthLimit(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2) // bandwidth=2
 
 	// Manually fill slot 0 to capacity
 	pkt := ahead_port.PacketWithCycle{
@@ -134,9 +134,9 @@ func TestBufferedFlowControl_BandwidthLimit(t *testing.T) {
 	}
 }
 
-// TestBufferedFlowControl_AddToSlot tests adding packets to slots.
-func TestBufferedFlowControl_AddToSlot(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2)
+// TestBufferedLinkHandler_AddToSlot tests adding packets to slots.
+func TestBufferedLinkHandler_AddToSlot(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2)
 
 	pkt1 := ahead_port.PacketWithCycle{
 		Cycle:  0,
@@ -165,9 +165,9 @@ func TestBufferedFlowControl_AddToSlot(t *testing.T) {
 	}
 }
 
-// TestBufferedFlowControl_AddToSlot_Panic tests panic when slot is full.
-func TestBufferedFlowControl_AddToSlot_Panic(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2)
+// TestBufferedLinkHandler_AddToSlot_Panic tests panic when slot is full.
+func TestBufferedLinkHandler_AddToSlot_Panic(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2)
 
 	pkt := ahead_port.PacketWithCycle{
 		Cycle:  0,
@@ -187,9 +187,9 @@ func TestBufferedFlowControl_AddToSlot_Panic(t *testing.T) {
 	fc.AddToSlot(pkt, 0)
 }
 
-// TestBufferedFlowControl_GetSlotAndClear tests slot retrieval and clearing.
-func TestBufferedFlowControl_GetSlotAndClear(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2)
+// TestBufferedLinkHandler_GetSlotAndClear tests slot retrieval and clearing.
+func TestBufferedLinkHandler_GetSlotAndClear(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2)
 
 	pkt := ahead_port.PacketWithCycle{
 		Cycle:  0,
@@ -213,9 +213,9 @@ func TestBufferedFlowControl_GetSlotAndClear(t *testing.T) {
 	}
 }
 
-// TestBufferedFlowControl_Backpressure tests backpressure mechanism.
-func TestBufferedFlowControl_Backpressure(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2)
+// TestBufferedLinkHandler_Backpressure tests backpressure mechanism.
+func TestBufferedLinkHandler_Backpressure(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2)
 
 	// Initial backpressure should be 0
 	if fc.GetTotalBackpressure() != 0 {
@@ -235,9 +235,9 @@ func TestBufferedFlowControl_Backpressure(t *testing.T) {
 	}
 }
 
-// TestBufferedFlowControl_BackpressureAffectsSlotIndex tests that backpressure shifts slot index.
-func TestBufferedFlowControl_BackpressureAffectsSlotIndex(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2)
+// TestBufferedLinkHandler_BackpressureAffectsSlotIndex tests that backpressure shifts slot index.
+func TestBufferedLinkHandler_BackpressureAffectsSlotIndex(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2)
 
 	pkt := ahead_port.PacketWithCycle{
 		Cycle:  0,
@@ -276,9 +276,9 @@ func TestBufferedFlowControl_BackpressureAffectsSlotIndex(t *testing.T) {
 	}
 }
 
-// TestBufferedFlowControl_CanSendPacket tests send logic.
-func TestBufferedFlowControl_CanSendPacket(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2)
+// TestBufferedLinkHandler_CanSendPacket tests send logic.
+func TestBufferedLinkHandler_CanSendPacket(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2)
 
 	// Should send only if downstream is ready
 	if !fc.CanSendPacket(0, true) {
@@ -290,9 +290,9 @@ func TestBufferedFlowControl_CanSendPacket(t *testing.T) {
 	}
 }
 
-// TestBufferedFlowControl_Reset tests reset functionality.
-func TestBufferedFlowControl_Reset(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2)
+// TestBufferedLinkHandler_Reset tests reset functionality.
+func TestBufferedLinkHandler_Reset(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2)
 
 	// Add some state
 	pkt := ahead_port.PacketWithCycle{
@@ -332,9 +332,9 @@ func TestBufferedFlowControl_Reset(t *testing.T) {
 	}
 }
 
-// TestBufferedFlowControl_RingBufferWrapAround tests slot index wrap-around.
-func TestBufferedFlowControl_RingBufferWrapAround(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 1) // 3 slots
+// TestBufferedLinkHandler_RingBufferWrapAround tests slot index wrap-around.
+func TestBufferedLinkHandler_RingBufferWrapAround(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 1) // 3 slots
 
 	pkt := ahead_port.PacketWithCycle{
 		Cycle:  0,

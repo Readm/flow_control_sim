@@ -166,18 +166,9 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 	return linkInstance, nil
 }
 
-// ConnectWithFlowControl wires a source output queue to a target input queue with a Link using a custom flow control strategy.
+// ConnectWithHandler wires a source output queue to a target input queue with a Link using a custom handler.
 // Must be called before Advance. Panics if network is frozen.
-//
-// Parameters:
-//   - sourceID: ID of source node
-//   - sourceOutputIdx: index of output queue in source node
-//   - targetID: ID of target node
-//   - targetInputIdx: index of input queue in target node
-//   - latency: number of cycles for packet delivery (must be > 0)
-//   - bandwidth: maximum packets per cycle (must be > 0)
-//   - flowControl: flow control strategy (e.g., BufferlessFlowControl or BufferedFlowControl)
-func (n *Network) ConnectWithFlowControl(sourceID int, sourceOutputIdx int, targetID int, targetInputIdx int, latency int, bandwidth int, flowControl link.FlowControlStrategy) (*link.Link, error) {
+func (n *Network) ConnectWithHandler(sourceID int, sourceOutputIdx int, targetID int, targetInputIdx int, latency int, bandwidth int, handler link.LinkHandler) (*link.Link, error) {
 	if n.frozen {
 		panic("cannot connect after network is frozen (Advance called)")
 	}
@@ -204,13 +195,13 @@ func (n *Network) ConnectWithFlowControl(sourceID int, sourceOutputIdx int, targ
 		return nil, fmt.Errorf("queues for connection %d->%d must not be nil", sourceID, targetID)
 	}
 
-	// Create Link with custom flow control
-	linkInstance := link.NewLinkWithFlowControl(
+	// Create Link with custom handler
+	linkInstance := link.NewLinkWithHandler(
 		sourceID,
 		targetID,
 		latency,
 		bandwidth,
-		flowControl,
+		handler,
 	)
 
 	// Connect using ahead_port.Connect

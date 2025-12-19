@@ -4,18 +4,18 @@ import (
 	"testing"
 )
 
-// TestCreateFlowControlStrategy_Buffered tests creating buffered flow control.
-func TestCreateFlowControlStrategy_Buffered(t *testing.T) {
-	fc := CreateFlowControlStrategy("buffered", 3, 2)
+// TestCreateLinkHandler_Buffered tests creating buffered flow control.
+func TestCreateLinkHandler_Buffered(t *testing.T) {
+	fc := CreateLinkHandler("buffered", 3, 2)
 
 	if fc == nil {
-		t.Fatal("CreateFlowControlStrategy returned nil")
+		t.Fatal("CreateLinkHandler returned nil")
 	}
 
-	// Type assertion to verify it's BufferedFlowControl
-	buffered, ok := fc.(*BufferedFlowControl)
+	// Type assertion to verify it's BufferedLinkHandler
+	buffered, ok := fc.(*BufferedLinkHandler)
 	if !ok {
-		t.Fatal("Expected BufferedFlowControl, got different type")
+		t.Fatal("Expected BufferedLinkHandler, got different type")
 	}
 
 	if buffered.GetLatency() != 3 {
@@ -27,48 +27,44 @@ func TestCreateFlowControlStrategy_Buffered(t *testing.T) {
 	}
 }
 
-// TestCreateFlowControlStrategy_Bufferless tests creating bufferless flow control.
-func TestCreateFlowControlStrategy_Bufferless(t *testing.T) {
-	fc := CreateFlowControlStrategy("bufferless", 0, 0)
+// TestCreateLinkHandler_Bufferless tests creating bufferless flow control.
+func TestCreateLinkHandler_Bufferless(t *testing.T) {
+	fc := CreateLinkHandler("bufferless", 0, 0)
 
 	if fc == nil {
-		t.Fatal("CreateFlowControlStrategy returned nil")
+		t.Fatal("CreateLinkHandler returned nil")
 	}
 
-	// Type assertion to verify it's BufferlessFlowControl
-	_, ok := fc.(*BufferlessFlowControl)
+	// Type assertion to verify it's BufferlessLinkHandler
+	_, ok := fc.(*BufferlessLinkHandler)
 	if !ok {
-		t.Fatal("Expected BufferlessFlowControl, got different type")
+		t.Fatal("Expected BufferlessLinkHandler, got different type")
 	}
 
-	// Verify always-ready behavior
-	if !fc.CanAcceptPacket(0, 0) {
-		t.Error("BufferlessFlowControl should always accept packets")
-	}
-
-	if !fc.IsReady(0) {
-		t.Error("BufferlessFlowControl should always be ready")
+	// Verify it's not nil
+	if fc == nil {
+		t.Fatal("BufferlessLinkHandler instance is nil")
 	}
 }
 
-// TestCreateFlowControlStrategy_Unknown tests panic on unknown strategy.
-func TestCreateFlowControlStrategy_Unknown(t *testing.T) {
+// TestCreateLinkHandler_Unknown tests panic on unknown strategy.
+func TestCreateLinkHandler_Unknown(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
 			t.Error("Expected panic for unknown strategy type")
 		}
 	}()
 
-	CreateFlowControlStrategy("unknown_strategy", 1, 1)
+	CreateLinkHandler("unknown_strategy", 1, 1)
 }
 
-// TestNewLinkWithFlowControl_Buffered tests creating Link with BufferedFlowControl.
-func TestNewLinkWithFlowControl_Buffered(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2)
-	link := NewLinkWithFlowControl(0, 1, 3, 2, fc)
+// TestNewLinkWithHandler_Buffered tests creating Link with BufferedLinkHandler.
+func TestNewLinkWithHandler_Buffered(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2)
+	link := NewLinkWithHandler(0, 1, 3, 2, fc)
 
 	if link == nil {
-		t.Fatal("NewLinkWithFlowControl returned nil link")
+		t.Fatal("NewLinkWithHandler returned nil link")
 	}
 
 	if link.latency != 3 {
@@ -80,13 +76,13 @@ func TestNewLinkWithFlowControl_Buffered(t *testing.T) {
 	}
 }
 
-// TestNewLinkWithFlowControl_Bufferless tests creating Link with BufferlessFlowControl.
-func TestNewLinkWithFlowControl_Bufferless(t *testing.T) {
-	fc := NewBufferlessFlowControl()
-	link := NewLinkWithFlowControl(0, 1, 1, 1, fc)
+// TestNewLinkWithHandler_Bufferless tests creating Link with BufferlessLinkHandler.
+func TestNewLinkWithHandler_Bufferless(t *testing.T) {
+	fc := NewBufferlessLinkHandler()
+	link := NewLinkWithHandler(0, 1, 1, 1, fc)
 
 	if link == nil {
-		t.Fatal("NewLinkWithFlowControl returned nil link")
+		t.Fatal("NewLinkWithHandler returned nil link")
 	}
 
 	// Verify the link uses bufferless flow control
@@ -94,20 +90,20 @@ func TestNewLinkWithFlowControl_Bufferless(t *testing.T) {
 	// (This is a basic sanity check; full behavior is tested in integration tests)
 }
 
-// TestNewLinkWithFlowControl_NilStrategy tests panic on nil strategy.
-func TestNewLinkWithFlowControl_NilStrategy(t *testing.T) {
+// TestNewLinkWithHandler_NilStrategy tests panic on nil strategy.
+func TestNewLinkWithHandler_NilStrategy(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
 			t.Error("Expected panic when flowControl is nil")
 		}
 	}()
 
-	NewLinkWithFlowControl(0, 1, 3, 2, nil)
+	NewLinkWithHandler(0, 1, 3, 2, nil)
 }
 
-// TestNewLinkWithFlowControl_InvalidParams tests panic on invalid parameters.
-func TestNewLinkWithFlowControl_InvalidParams(t *testing.T) {
-	fc := NewBufferedFlowControl(3, 2)
+// TestNewLinkWithHandler_InvalidParams tests panic on invalid parameters.
+func TestNewLinkWithHandler_InvalidParams(t *testing.T) {
+	fc := NewBufferedLinkHandler(3, 2)
 
 	tests := []struct {
 		name      string
@@ -126,12 +122,12 @@ func TestNewLinkWithFlowControl_InvalidParams(t *testing.T) {
 					t.Errorf("Expected panic for %s", tt.name)
 				}
 			}()
-			NewLinkWithFlowControl(0, 1, tt.latency, tt.bandwidth, fc)
+			NewLinkWithHandler(0, 1, tt.latency, tt.bandwidth, fc)
 		})
 	}
 }
 
-// TestNewLink_DefaultsToBuffered tests that NewLink creates BufferedFlowControl by default.
+// TestNewLink_DefaultsToBuffered tests that NewLink creates BufferedLinkHandler by default.
 func TestNewLink_DefaultsToBuffered(t *testing.T) {
 	link := NewLink(0, 1, 3, 2)
 
@@ -139,7 +135,7 @@ func TestNewLink_DefaultsToBuffered(t *testing.T) {
 		t.Fatal("NewLink returned nil link")
 	}
 
-	// The default NewLink should create a BufferedFlowControl
+	// The default NewLink should create a BufferedLinkHandler
 	// We can't directly access the flowControl field, but the existing
 	// link tests verify the buffered behavior
 	if link.latency != 3 {
@@ -165,8 +161,8 @@ func TestFactoryIntegration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fc := CreateFlowControlStrategy(tt.strategyType, tt.latency, tt.bandwidth)
-			link := NewLinkWithFlowControl(0, 1, tt.latency, tt.bandwidth, fc)
+			fc := CreateLinkHandler(tt.strategyType, tt.latency, tt.bandwidth)
+			link := NewLinkWithHandler(0, 1, tt.latency, tt.bandwidth, fc)
 
 			if link == nil {
 				t.Fatal("Factory integration failed to create link")

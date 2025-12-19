@@ -109,8 +109,8 @@ func NewRingSimulator() *RingSimulator {
 		sourceID := 100 + i
 		targetID := 100 + nextRouter
 
-		fc := link.NewBufferlessFlowControl()
-		ringLink := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
+		fc := link.NewBufferlessLinkHandler()
+		ringLink := link.NewLinkWithHandler(sourceID, targetID, ringLatency, 1, fc)
 		ringLinks[i] = ringLink
 
 		// OutputQueue -> Link
@@ -128,8 +128,8 @@ func NewRingSimulator() *RingSimulator {
 	localLinks := make([]*link.Link, 0)
 	for i := 0; i < numRouters; i++ {
 		// Worker -> Router
-		fc1 := link.NewBufferlessFlowControl()
-		l1 := link.NewLinkWithFlowControl(i, 100+i, localLatency, queueBandwidth, fc1)
+		fc1 := link.NewBufferlessLinkHandler()
+		l1 := link.NewLinkWithHandler(i, 100+i, localLatency, queueBandwidth, fc1)
 
 		p1_out := ahead_port.NewPort()
 		workerOutQueues[i].SetDownstreamPort(p1_out.AsInPort())
@@ -140,8 +140,8 @@ func NewRingSimulator() *RingSimulator {
 		localInQueues[i].SetUpstreamPort(p1_in.AsOutPort())
 
 		// Router -> Worker
-		fc2 := link.NewBufferlessFlowControl()
-		l2 := link.NewLinkWithFlowControl(100+i, i, localLatency, queueBandwidth, fc2)
+		fc2 := link.NewBufferlessLinkHandler()
+		l2 := link.NewLinkWithHandler(100+i, i, localLatency, queueBandwidth, fc2)
 
 		p2_out := ahead_port.NewPort()
 		localOutQueues[i].SetDownstreamPort(p2_out.AsInPort())

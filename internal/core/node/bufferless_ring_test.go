@@ -100,8 +100,8 @@ func TestBufferlessRing_Basic(t *testing.T) {
 		targetID := 100 + nextRouter
 
 		// Create bufferless link
-		fc := link.NewBufferlessFlowControl()
-		ringLink := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
+		fc := link.NewBufferlessLinkHandler()
+		ringLink := link.NewLinkWithHandler(sourceID, targetID, ringLatency, 1, fc)
 		ringLinks[i] = ringLink
 
 		// Connect link to router queues
@@ -230,8 +230,8 @@ func buildBufferlessRingNetwork(t *testing.T) (
 		sourceID := 100 + i
 		targetID := 100 + nextRouter
 
-		fc := link.NewBufferlessFlowControl()
-		ringLink := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
+		fc := link.NewBufferlessLinkHandler()
+		ringLink := link.NewLinkWithHandler(sourceID, targetID, ringLatency, 1, fc)
 		ringLinks[i] = ringLink
 
 		// OutputQueue -> Link
@@ -348,8 +348,8 @@ func TestBufferlessRing_SinglePacket(t *testing.T) {
 		sourceID := 100 + i
 		targetID := 100 + nextRouter
 
-		fc := link.NewBufferlessFlowControl()
-		ringLink := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
+		fc := link.NewBufferlessLinkHandler()
+		ringLink := link.NewLinkWithHandler(sourceID, targetID, ringLatency, 1, fc)
 		ringLinks[i] = ringLink
 
 		// OutputQueue -> Link

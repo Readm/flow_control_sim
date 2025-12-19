@@ -440,8 +440,8 @@ func buildBufferlessRingNetworkBench(b *testing.B, nodeCount, ringLatency, route
 		sourceID := 100 + i
 		targetID := 100 + nextRouter
 
-		fc := link.NewBufferlessFlowControl()
-		ringLink := link.NewLinkWithFlowControl(sourceID, targetID, ringLatency, 1, fc)
+		fc := link.NewBufferlessLinkHandler()
+		ringLink := link.NewLinkWithHandler(sourceID, targetID, ringLatency, 1, fc)
 		ringLinks[i] = ringLink
 
 		// OutputQueue -> Link
@@ -462,8 +462,8 @@ func buildBufferlessRingNetworkBench(b *testing.B, nodeCount, ringLatency, route
 	localLinks := make([]*link.Link, 0)
 	for i := 0; i < nodeCount; i++ {
 		// Worker -> Router
-		fc1 := link.NewBufferlessFlowControl()
-		l1 := link.NewLinkWithFlowControl(i, 100+i, 1, queueBandwidth, fc1)
+		fc1 := link.NewBufferlessLinkHandler()
+		l1 := link.NewLinkWithHandler(i, 100+i, 1, queueBandwidth, fc1)
 
 		p1_out := ahead_port.NewPort()
 		workerOutQueues[i].SetDownstreamPort(p1_out.AsInPort())
@@ -474,8 +474,8 @@ func buildBufferlessRingNetworkBench(b *testing.B, nodeCount, ringLatency, route
 		localInQueues[i].SetUpstreamPort(p1_in.AsOutPort())
 
 		// Router -> Worker
-		fc2 := link.NewBufferlessFlowControl()
-		l2 := link.NewLinkWithFlowControl(100+i, i, 1, queueBandwidth, fc2)
+		fc2 := link.NewBufferlessLinkHandler()
+		l2 := link.NewLinkWithHandler(100+i, i, 1, queueBandwidth, fc2)
 
 		p2_out := ahead_port.NewPort()
 		localOutQueues[i].SetDownstreamPort(p2_out.AsInPort())

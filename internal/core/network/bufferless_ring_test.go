@@ -79,8 +79,8 @@ func TestBufferlessRing_SinglePacket_v2(t *testing.T) {
 	// Use bufferless flow control for ring links
 	for i := 0; i < numRouters; i++ {
 		nextRouter := (i + 1) % numRouters
-		fc := link.NewBufferlessFlowControl()
-		if _, err := net.ConnectWithFlowControl(100+i, 0, 100+nextRouter, 0, ringLatency, queueBandwidth, fc); err != nil {
+		fc := link.NewBufferlessLinkHandler()
+		if _, err := net.ConnectWithHandler(100+i, 0, 100+nextRouter, 0, ringLatency, queueBandwidth, fc); err != nil {
 			t.Fatalf("Failed to connect ring %d->%d: %v", i, nextRouter, err)
 		}
 	}
@@ -89,13 +89,13 @@ func TestBufferlessRing_SinglePacket_v2(t *testing.T) {
 	// Use bufferless flow control for local links as well
 	for i := 0; i < numRouters; i++ {
 		// Worker -> Router (local injection)
-		fc1 := link.NewBufferlessFlowControl()
-		if _, err := net.ConnectWithFlowControl(i, 0, 100+i, 1, localLatency, queueBandwidth, fc1); err != nil {
+		fc1 := link.NewBufferlessLinkHandler()
+		if _, err := net.ConnectWithHandler(i, 0, 100+i, 1, localLatency, queueBandwidth, fc1); err != nil {
 			t.Fatalf("Failed to connect worker %d -> router %d: %v", i, i, err)
 		}
 		// Router -> Worker (local ejection)
-		fc2 := link.NewBufferlessFlowControl()
-		if _, err := net.ConnectWithFlowControl(100+i, 1, i, 0, localLatency, queueBandwidth, fc2); err != nil {
+		fc2 := link.NewBufferlessLinkHandler()
+		if _, err := net.ConnectWithHandler(100+i, 1, i, 0, localLatency, queueBandwidth, fc2); err != nil {
 			t.Fatalf("Failed to connect router %d -> worker %d: %v", i, i, err)
 		}
 	}
@@ -264,20 +264,20 @@ func TestBufferlessRing_TwoHops_v2(t *testing.T) {
 	// Connect ring - use bufferless flow control
 	for i := 0; i < numRouters; i++ {
 		nextRouter := (i + 1) % numRouters
-		fc := link.NewBufferlessFlowControl()
-		if _, err := net.ConnectWithFlowControl(100+i, 0, 100+nextRouter, 0, ringLatency, queueBandwidth, fc); err != nil {
+		fc := link.NewBufferlessLinkHandler()
+		if _, err := net.ConnectWithHandler(100+i, 0, 100+nextRouter, 0, ringLatency, queueBandwidth, fc); err != nil {
 			t.Fatalf("Failed to connect ring: %v", err)
 		}
 	}
 
 	// Connect local - use bufferless flow control
 	for i := 0; i < numRouters; i++ {
-		fc1 := link.NewBufferlessFlowControl()
-		if _, err := net.ConnectWithFlowControl(i, 0, 100+i, 1, localLatency, queueBandwidth, fc1); err != nil {
+		fc1 := link.NewBufferlessLinkHandler()
+		if _, err := net.ConnectWithHandler(i, 0, 100+i, 1, localLatency, queueBandwidth, fc1); err != nil {
 			t.Fatalf("Failed to connect worker->router: %v", err)
 		}
-		fc2 := link.NewBufferlessFlowControl()
-		if _, err := net.ConnectWithFlowControl(100+i, 1, i, 0, localLatency, queueBandwidth, fc2); err != nil {
+		fc2 := link.NewBufferlessLinkHandler()
+		if _, err := net.ConnectWithHandler(100+i, 1, i, 0, localLatency, queueBandwidth, fc2); err != nil {
 			t.Fatalf("Failed to connect router->worker: %v", err)
 		}
 	}
