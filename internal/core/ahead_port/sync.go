@@ -8,11 +8,11 @@ import (
 	"github.com/Readm/flow_sim/internal/core/debug"
 )
 
-// readyItem represents a ready state for a specific cycle
-type readyItem struct {
-	cycle int
-	ready bool
-}
+const (
+	stateUnset    int8 = 0
+	stateReady    int8 = 1
+	stateNotReady int8 = 2
+)
 
 // ComponentSync provides shared synchronization logic for components.
 // It manages both "done" and "ready" states with efficient atomic operations
@@ -25,7 +25,7 @@ type ComponentSync struct {
 	// Ready state
 	readyUntil      int64         // Ready until cycle (atomic, fast path)
 	readyNotify     chan struct{} // 1-waiter optimized notification channel
-	readyQueue      []readyItem   // Sorted queue of future ready states
+	readyStates     []int8        // Dense array: index 0 corresponds to cycle readyUntil
 	lastAccessCycle int           // For debug: tracking monotonic access
 
 	// Synchronization for ready operations
@@ -39,7 +39,7 @@ func NewComponentSync() *ComponentSync {
 		doneNotify:      make(chan struct{}, 1),
 		readyUntil:      0, // Start at 0: no cycles are ready yet
 		readyNotify:     make(chan struct{}, 1),
-		readyQueue:      make([]readyItem, 0),
+		readyStates:     make([]int8, 0),
 		lastAccessCycle: -1,
 	}
 	return cs
@@ -94,15 +94,15 @@ func (cs *ComponentSync) Ready(cycle int) bool {
 		return true
 	}
 
-	// Slow path: check readyQueue or wait
+	// Slow path: check readyStates or wait
 	for {
 		if int64(cycle) < atomic.LoadInt64(&cs.readyUntil) {
 			return true
 		}
 
-		// Check readyQueue under lock
+		// Check readyStates under lock
 		cs.waiterMu.Lock()
-		found, result := cs.checkQueueAndPrune(cycle)
+		found, result := cs.checkStatesAndPrune(cycle)
 		cs.waiterMu.Unlock()
 
 		if found {
@@ -114,45 +114,36 @@ func (cs *ComponentSync) Ready(cycle int) bool {
 	}
 }
 
-func (cs *ComponentSync) checkQueueAndPrune(cycle int) (bool, bool) {
-	found := false
-	var result bool
-	pruneIdx := 0
+func (cs *ComponentSync) checkStatesAndPrune(cycle int) (bool, bool) {
+	currentReadyUntil := atomic.LoadInt64(&cs.readyUntil)
+	offset := int(int64(cycle) - currentReadyUntil)
 
-	for i, item := range cs.readyQueue {
-		if item.cycle < cycle {
-			continue
-		}
-		if item.cycle == cycle {
-			result = item.ready
-			found = true
-			pruneIdx = i
-			break
-		}
-		pruneIdx = i
-		break
+	if offset < 0 {
+		return true, true
 	}
 
-	if !found && len(cs.readyQueue) > 0 {
-		if cs.readyQueue[len(cs.readyQueue)-1].cycle < cycle {
-			pruneIdx = len(cs.readyQueue)
-		}
+	if offset >= len(cs.readyStates) {
+		return false, false
 	}
 
-	if pruneIdx > 0 {
-		if pruneIdx >= len(cs.readyQueue) {
-			cs.readyQueue = nil
-		} else {
-			cs.readyQueue = cs.readyQueue[pruneIdx:]
-		}
+	state := cs.readyStates[offset]
+	if state == stateUnset {
+		return false, false
 	}
 
-	return found, result
+	// Prune: since access is monotonic, any request for 'cycle' effectively
+	// invalidates anything before it in the array (they've been checked or skipped).
+	// However, unlike the queue, we can just slice the array.
+	cs.readyStates = cs.readyStates[offset+1:]
+	atomic.StoreInt64(&cs.readyUntil, int64(cycle+1))
+
+	return true, state == stateReady
 }
 
 // IsReadyNonBlocking checks ready state without blocking.
 func (cs *ComponentSync) IsReadyNonBlocking(cycle int) (bool, bool) {
-	if int64(cycle) < atomic.LoadInt64(&cs.readyUntil) {
+	currentReadyUntil := atomic.LoadInt64(&cs.readyUntil)
+	if int64(cycle) < currentReadyUntil {
 		return true, true
 	}
 
@@ -160,30 +151,40 @@ func (cs *ComponentSync) IsReadyNonBlocking(cycle int) (bool, bool) {
 	defer cs.waiterMu.Unlock()
 
 	// Re-check after lock
-	if int64(cycle) < atomic.LoadInt64(&cs.readyUntil) {
+	currentReadyUntil = atomic.LoadInt64(&cs.readyUntil)
+	if int64(cycle) < currentReadyUntil {
 		return true, true
 	}
 
-	for _, item := range cs.readyQueue {
-		if item.cycle == cycle {
-			return item.ready, true
-		}
-		if item.cycle > cycle {
-			break
-		}
+	offset := int(int64(cycle) - currentReadyUntil)
+	if offset >= len(cs.readyStates) {
+		return false, false
 	}
 
-	return false, false
+	state := cs.readyStates[offset]
+	if state == stateUnset {
+		return false, false
+	}
+
+	return true, state == stateReady
 }
 
 // UpdateReady updates the component's ready state.
 func (cs *ComponentSync) UpdateReady(cycle int, ready bool) {
 	// Optimization: sequential ready updates (Lock-free fast path)
 	if ready && atomic.LoadInt64(&cs.readyUntil) == int64(cycle) {
-		if atomic.CompareAndSwapInt64(&cs.readyUntil, int64(cycle), int64(cycle+1)) {
+		cs.waiterMu.Lock()
+		// Double check under lock if we can advance
+		if atomic.LoadInt64(&cs.readyUntil) == int64(cycle) && (len(cs.readyStates) == 0 || cs.readyStates[0] == stateUnset) {
+			atomic.StoreInt64(&cs.readyUntil, int64(cycle+1))
+			if len(cs.readyStates) > 0 {
+				cs.readyStates = cs.readyStates[1:]
+			}
+			cs.waiterMu.Unlock()
 			cs.notifyReady()
 			return
 		}
+		cs.waiterMu.Unlock()
 	}
 
 	cs.waiterMu.Lock()
@@ -191,47 +192,45 @@ func (cs *ComponentSync) UpdateReady(cycle int, ready bool) {
 
 	currentReadyUntil := atomic.LoadInt64(&cs.readyUntil)
 	if int64(cycle) < currentReadyUntil {
+		if !ready {
+			panic(fmt.Sprintf("ComponentSync: cycle %d is already marked as ready (until %d), cannot change to false", cycle, currentReadyUntil))
+		}
 		return
 	}
 
-	// Insert into sorted queue
-	idx := len(cs.readyQueue)
-	exists := false
-	for i, item := range cs.readyQueue {
-		if item.cycle == cycle {
-			cs.readyQueue[i].ready = ready
-			exists = true
-			break
-		}
-		if item.cycle > cycle {
-			idx = i
-			break
-		}
+	offset := int(int64(cycle) - currentReadyUntil)
+
+	// Ensure capacity
+	if offset >= len(cs.readyStates) {
+		// Grow the slice
+		newStates := make([]int8, offset+1)
+		copy(newStates, cs.readyStates)
+		cs.readyStates = newStates
 	}
 
-	if !exists {
-		if idx == len(cs.readyQueue) {
-			cs.readyQueue = append(cs.readyQueue, readyItem{cycle, ready})
-		} else {
-			cs.readyQueue = append(cs.readyQueue[:idx+1], cs.readyQueue[idx:]...)
-			cs.readyQueue[idx] = readyItem{cycle, ready}
+	// Immutability check
+	if cs.readyStates[offset] != stateUnset {
+		existingReady := cs.readyStates[offset] == stateReady
+		if existingReady != ready {
+			panic(fmt.Sprintf("ComponentSync: cycle %d already has ready=%v, cannot change to %v", cycle, existingReady, ready))
 		}
+		return
+	}
+
+	// Set state
+	if ready {
+		cs.readyStates[offset] = stateReady
+	} else {
+		cs.readyStates[offset] = stateNotReady
 	}
 
 	// Compaction: advance readyUntil if possible
 	advanced := false
-	for len(cs.readyQueue) > 0 {
-		head := cs.readyQueue[0]
-		if int64(head.cycle) == currentReadyUntil {
-			if head.ready {
-				currentReadyUntil++
-				cs.readyQueue = cs.readyQueue[1:]
-				advanced = true
-			} else {
-				break
-			}
-		} else if int64(head.cycle) < currentReadyUntil {
-			cs.readyQueue = cs.readyQueue[1:]
+	for len(cs.readyStates) > 0 {
+		if cs.readyStates[0] == stateReady {
+			currentReadyUntil++
+			cs.readyStates = cs.readyStates[1:]
+			advanced = true
 		} else {
 			break
 		}
@@ -252,16 +251,24 @@ func (cs *ComponentSync) notifyReady() {
 
 // SetReadyUntil sets readyUntil atomically.
 func (cs *ComponentSync) SetReadyUntil(cycle int) {
-	for {
-		current := atomic.LoadInt64(&cs.readyUntil)
-		if int64(cycle) <= current {
-			break
-		}
-		if atomic.CompareAndSwapInt64(&cs.readyUntil, current, int64(cycle)) {
-			cs.notifyReady()
-			break
-		}
+	cs.waiterMu.Lock()
+	defer cs.waiterMu.Unlock()
+
+	current := atomic.LoadInt64(&cs.readyUntil)
+	if int64(cycle) <= current {
+		return
 	}
+
+	// When jumping ahead, we need to clear/skip states in the array
+	diff := int(int64(cycle) - current)
+	if diff < len(cs.readyStates) {
+		cs.readyStates = cs.readyStates[diff:]
+	} else {
+		cs.readyStates = nil
+	}
+
+	atomic.StoreInt64(&cs.readyUntil, int64(cycle))
+	cs.notifyReady()
 }
 
 // InitReady initializes ready state for the first 'limit' cycles.
