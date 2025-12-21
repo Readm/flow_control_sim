@@ -197,7 +197,7 @@ func (m *mockInputQueue) Pick() []packet.Packet {
 	return pkt
 }
 
-func (m *mockInputQueue) PeekTo(out []queue.PacketRef) int {
+func (m *mockInputQueue) PeekPickTo(out []queue.PacketRef) int {
 	if len(m.picks) == 0 {
 		return 0
 	}
@@ -220,7 +220,7 @@ func (m *mockInputQueue) PeekTo(out []queue.PacketRef) int {
 func (m *mockInputQueue) Free(slot int) {
 	// No-op for mock, or we could track calls.
 	// We rely on 'picks' managing available packets in Pick(),
-	// but PeekTo doesn't advance.
+	// but PeekPickTo doesn't advance.
 	// However, TestNode calls Tick once. PickTo returns batch.
 	// If we wanted rigorous correctness we'd need to track usage.
 	// For this test, it's fine.

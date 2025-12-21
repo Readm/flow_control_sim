@@ -56,7 +56,7 @@ func CreatePacket(src, dst int, payload string) packet.Packet {
 // InputQueue describes the behaviors Node needs from an input buffer.
 type InputQueue interface {
 	Pick() []packet.Packet
-	PeekTo(out []queue.PacketRef) int
+	PeekPickTo(out []queue.PacketRef) int
 	Tick(cycle int) error
 	Length() int
 	Capacity() int
@@ -145,7 +145,7 @@ func (n *BaseNode) AddInputQueue(q InputQueue) error {
 
 	// Expand zero-allocation buffers
 	// Create a new slice for this queue with capacity equal to queue capacity
-	// This ensures we have enough space for PeekTo
+	// This ensures we have enough space for PeekPickTo
 	newBuffer := make([]queue.PacketRef, q.Capacity())
 	n.inputValues = append(n.inputValues, newBuffer)
 
@@ -277,7 +277,7 @@ func (n *BaseNode) tickInputQueues(cycle uint64) error {
 		buf := n.inputValues[i] // This has len=cap=Capacity
 
 		// 2. Peek packets directly into this buffer
-		count := input.PeekTo(buf)
+		count := input.PeekPickTo(buf)
 
 		// 3. Update the slice header in inputBuffer to point to valid data
 		// This does NOT allocate new memory, just updates the slice length

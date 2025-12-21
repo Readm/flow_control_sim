@@ -32,7 +32,7 @@ type InputQueue struct {
 	arrayMu sync.Mutex
 
 	// ===== Scratch buffers =====
-	candidatesBuffer []int // Reused buffer for sorting in PeekTo
+	candidatesBuffer []int // Reused buffer for sorting in PeekPickTo
 
 	// ===== Hooks and extra state =====
 	lastCyclePackets []packet.Packet
@@ -257,10 +257,10 @@ func (iq *InputQueue) GetVisualState() string {
 	return ""
 }
 
-// PeekTo populates the provided slice with references to available packets.
+// PeekPickTo populates the provided slice with references to available packets.
 // It does NOT mark them as free. Callers must explicitly call Free() on the ref.
 // Returns the number of packets peeked.
-func (iq *InputQueue) PeekTo(out []PacketRef) int {
+func (iq *InputQueue) PeekPickTo(out []PacketRef) int {
 	// Optimization: This function should be zero-allocation
 
 	// Fast path: if empty, return 0
@@ -322,7 +322,7 @@ func (iq *InputQueue) Free(slot int) {
 }
 
 // Block marks a slot as blocked for a specific reason.
-// The slot will not be returned by PeekTo/Pick until unblocked (or freed).
+// The slot will not be returned by PeekPickTo/Pick until unblocked (or freed).
 func (iq *InputQueue) Block(slot int, reason uint) {
 	iq.arrayMu.Lock()
 	defer iq.arrayMu.Unlock()
