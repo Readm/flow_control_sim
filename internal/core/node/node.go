@@ -36,7 +36,8 @@ type Node interface {
 	GetData(key string) interface{}
 	HasData(key string) bool
 	DeleteData(key string)
-	UpdateData(key string, modifier func(interface{}) interface{})
+	UpdateData(modifier func(map[string]interface{}))
+	UpdateKeyData(key string, modifier func(interface{}) interface{})
 }
 
 // Tickable is an interface for components that can be ticked.
@@ -155,8 +156,15 @@ func (n *BaseNode) AddInputQueue(q InputQueue) error {
 	return nil
 }
 
-// UpdateData atomically updates protocol-specific data.
-func (n *BaseNode) UpdateData(key string, modifier func(interface{}) interface{}) {
+// UpdateData atomically updates the entire protocol-specific data map.
+func (n *BaseNode) UpdateData(modifier func(map[string]interface{})) {
+	n.dataMu.Lock()
+	defer n.dataMu.Unlock()
+	modifier(n.data)
+}
+
+// UpdateKeyData atomically updates a specific key in protocol-specific data.
+func (n *BaseNode) UpdateKeyData(key string, modifier func(interface{}) interface{}) {
 	n.dataMu.Lock()
 	defer n.dataMu.Unlock()
 
