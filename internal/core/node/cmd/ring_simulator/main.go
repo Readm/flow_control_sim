@@ -242,7 +242,7 @@ func (sim *RingSimulator) Step() error {
 			}
 		}
 
-		if err := r.Tick(sim.ctx, uint64(sim.cycle), 0); err != nil {
+		if err := r.Tick(uint64(sim.cycle), 0); err != nil {
 			return fmt.Errorf("router tick failed: %w", err)
 		}
 
@@ -278,7 +278,7 @@ func (sim *RingSimulator) Step() error {
 			}
 		}
 
-		if err := w.Tick(sim.ctx, uint64(sim.cycle), 0); err != nil {
+		if err := w.Tick(uint64(sim.cycle), 0); err != nil {
 			return fmt.Errorf("worker tick failed: %w", err)
 		}
 

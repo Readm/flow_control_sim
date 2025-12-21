@@ -1,7 +1,9 @@
 package network
 
 import (
-	"context"
+	// Unused directly, but might be needed if I missed something. Wait, Node doesn't use it.
+	// But runtime.NumCPU is used.
+	// I'll remove "context" only.
 	"fmt"
 	"runtime"
 	"sync/atomic"
@@ -74,11 +76,14 @@ func BenchmarkNetworkScaling(b *testing.B) {
 			// Setup forwarding
 			for i := 1; i < nodeCount-1; i++ {
 				output := allOutputs[i]
-				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
-					if len(incoming) > 0 {
+				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
+					if len(inputs) > 0 {
 						var flat []packet.Packet
-						for _, pkts := range incoming {
-							flat = append(flat, pkts...)
+						for _, q := range inputs {
+							for _, ref := range q {
+								flat = append(flat, ref.Packet)
+								ref.Queue.Free(ref.Slot)
+							}
 						}
 						if len(flat) > 0 {
 							if err := output.InjectPackets(int(cycle), clonePackets(flat)); err != nil {
@@ -101,7 +106,13 @@ func BenchmarkNetworkScaling(b *testing.B) {
 
 			// Setup packet injection from Node0
 			var injectedCount int64
-			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
+				// Consume inputs if any
+				for _, q := range inputs {
+					for _, ref := range q {
+						ref.Queue.Free(ref.Slot)
+					}
+				}
 				if cycle%injectInterval == 0 && int(cycle) < advanceCycles {
 					pkt := packet.Packet{
 						SourceID: 0,
@@ -117,7 +128,12 @@ func BenchmarkNetworkScaling(b *testing.B) {
 
 			// Last node drops packets
 			lastNodeIndex := nodeCount - 1
-			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
+				for _, q := range inputs {
+					for _, ref := range q {
+						ref.Queue.Free(ref.Slot)
+					}
+				}
 				return nil
 			})
 
@@ -191,11 +207,14 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 
 			for i := 1; i < nodeCount-1; i++ {
 				output := allOutputs[i]
-				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
-					if len(incoming) > 0 {
+				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
+					if len(inputs) > 0 {
 						var flat []packet.Packet
-						for _, pkts := range incoming {
-							flat = append(flat, pkts...)
+						for _, q := range inputs {
+							for _, ref := range q {
+								flat = append(flat, ref.Packet)
+								ref.Queue.Free(ref.Slot)
+							}
 						}
 						if len(flat) > 0 {
 							if err := output.InjectPackets(int(cycle), clonePackets(flat)); err != nil {
@@ -216,7 +235,12 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 			}
 
 			var injectedCount int64
-			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
+				for _, q := range inputs {
+					for _, ref := range q {
+						ref.Queue.Free(ref.Slot)
+					}
+				}
 				if cycle%injectInterval == 0 && int(cycle) < advanceCycles {
 					pkt := packet.Packet{
 						SourceID: 0,
@@ -231,7 +255,12 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 			})
 
 			lastNodeIndex := nodeCount - 1
-			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
+				for _, q := range inputs {
+					for _, ref := range q {
+						ref.Queue.Free(ref.Slot)
+					}
+				}
 				return nil
 			})
 
@@ -332,13 +361,16 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 			// Delay: 5-20us per node, simulating GEM5 O3CPU execution time
 			for i := 1; i < nodeCount-1; i++ {
 				output := allOutputs[i]
-				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, inputs [][]packet.Packet) error {
+				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 					// Each node execution simulates GEM5 O3 CPU core processing
 					node.SpinWait(5, 20)
 
 					var buffer []packet.Packet
-					for _, b := range inputs {
-						buffer = append(buffer, b...)
+					for _, q := range inputs {
+						for _, ref := range q {
+							buffer = append(buffer, ref.Packet)
+							ref.Queue.Free(ref.Slot)
+						}
 					}
 
 					// Forward packets
@@ -362,11 +394,16 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 
 			// Setup packet injection from Node0 every 3 cycles
 			var injectedCount int64
-			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, inputs [][]packet.Packet) error {
+			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 				// Each node execution simulates GEM5 O3 CPU core processing
 				node.SpinWait(5, 20)
 
 				// Drop any incoming packets (break the ring at Node0)
+				for _, q := range inputs {
+					for _, ref := range q {
+						ref.Queue.Free(ref.Slot)
+					}
+				}
 
 				// Inject new packet every 3 cycles
 				// continuously throughout the benchmark to maintain load
@@ -391,10 +428,15 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 			})
 
 			// Last node should NOT forward (drop packets)
-			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, inputs [][]packet.Packet) error {
+			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 				// Each node execution simulates GEM5 O3 CPU core processing
 				node.SpinWait(5, 20)
-				// Drop all packets by not forwarding them
+				// Drop all packets by not forwarding them, but free them from queue
+				for _, q := range inputs {
+					for _, ref := range q {
+						ref.Queue.Free(ref.Slot)
+					}
+				}
 				return nil
 			})
 

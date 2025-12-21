@@ -1,7 +1,6 @@
 package node
 
 import (
-	"context"
 	"time"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
@@ -13,7 +12,7 @@ type linkTickable struct {
 	l *link.Link
 }
 
-func (lt *linkTickable) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
+func (lt *linkTickable) Tick(cycle uint64, _ time.Duration) error {
 	return lt.l.Tick(int(cycle), int(cycle))
 }
 

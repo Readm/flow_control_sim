@@ -1,11 +1,11 @@
 package node
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
 	"github.com/Readm/flow_sim/internal/core/debug"
+	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
@@ -57,7 +57,7 @@ func NewBufferlessRingRouter(routerID, workerID, bufferCapacity int) *Bufferless
 
 // Process implements the NodeHandler interface.
 // It replaces the old Tick logic for custom packet collection and routing.
-func (r *BufferlessRingRouterNode) Process(ctx context.Context, cycle uint64, inputs [][]packet.Packet) error {
+func (r *BufferlessRingRouterNode) Process(cycle uint64, inputs [][]queue.PacketRef) error {
 	if len(inputs) < 2 {
 		return fmt.Errorf("router node %d: expected 2 input queues, got %d", r.id, len(inputs))
 	}
@@ -69,8 +69,8 @@ func (r *BufferlessRingRouterNode) Process(ctx context.Context, cycle uint64, in
 
 	// Map inputs/outputs
 	// inputs[0] is ringIn, inputs[1] is localIn
-	ringInPackets := inputs[0]
-	localInPackets := inputs[1]
+	ringInRefs := inputs[0]
+	localInRefs := inputs[1]
 
 	ringOutQueue := outputs[0]
 	localOutQueue := outputs[1]
@@ -79,10 +79,11 @@ func (r *BufferlessRingRouterNode) Process(ctx context.Context, cycle uint64, in
 	defer r.bufferMu.Unlock()
 
 	debug.Logf("Router[%d]: cycle=%d, ringIn=%d, localIn=%d, buffer=%d",
-		r.id, cycle, len(ringInPackets), len(localInPackets), len(r.injectionBuffer))
+		r.id, cycle, len(ringInRefs), len(localInRefs), len(r.injectionBuffer))
 
 	// === Priority 1: Process ring packets (ALWAYS forwarded, never buffered) ===
-	for _, pkt := range ringInPackets {
+	for _, ref := range ringInRefs {
+		pkt := ref.Packet
 		// Check if this packet should be ejected to local worker
 		if pkt.TargetID == r.workerID && !localOutQueue.IsFull() {
 			// Eject to local worker
@@ -91,6 +92,7 @@ func (r *BufferlessRingRouterNode) Process(ctx context.Context, cycle uint64, in
 			if err := localOutQueue.InjectPackets(int(cycle), []packet.Packet{pkt}); err != nil {
 				return fmt.Errorf("router %d: failed to eject packet to worker: %w", r.id, err)
 			}
+			ref.Queue.Free(ref.Slot)
 		} else {
 			// Forward to next router on ring (either wrong destination OR local busy)
 			debug.Logf("Router[%d]: Forwarding packet Src=%d Dst=%d on ring (target=%d, localFull=%v)",
@@ -98,11 +100,12 @@ func (r *BufferlessRingRouterNode) Process(ctx context.Context, cycle uint64, in
 			if err := ringOutQueue.InjectPackets(int(cycle), []packet.Packet{pkt}); err != nil {
 				return fmt.Errorf("router %d: failed to forward packet on ring: %w", r.id, err)
 			}
+			ref.Queue.Free(ref.Slot)
 		}
 	}
 
 	// === Priority 2: Process buffered injection packets ===
-	newInjectionBuffer := make([]packet.Packet, 0)
+	newInjectionBuffer := make([]packet.Packet, 0, len(r.injectionBuffer)) // Reuse capacity hint or implementation optimization
 	for _, pkt := range r.injectionBuffer {
 		if !ringOutQueue.IsFull() {
 			debug.Logf("Router[%d]: Injecting buffered packet Src=%d Dst=%d onto ring",
@@ -115,10 +118,12 @@ func (r *BufferlessRingRouterNode) Process(ctx context.Context, cycle uint64, in
 			newInjectionBuffer = append(newInjectionBuffer, pkt)
 		}
 	}
-	r.injectionBuffer = newInjectionBuffer
+	r.injectionBuffer = newInjectionBuffer // Optimization: This does alloc. Better to use a ring buffer or similar internally if this is hot.
+	// But optimizing router internal buffer is out of scope for "BaseNode optimization", sticking to requirements.
 
 	// === Priority 3: Process new local packets ===
-	for _, pkt := range localInPackets {
+	for _, ref := range localInRefs {
+		pkt := ref.Packet
 		if !ringOutQueue.IsFull() {
 			// Inject directly onto ring
 			debug.Logf("Router[%d]: Injecting local packet Src=%d Dst=%d onto ring",
@@ -126,15 +131,18 @@ func (r *BufferlessRingRouterNode) Process(ctx context.Context, cycle uint64, in
 			if err := ringOutQueue.InjectPackets(int(cycle), []packet.Packet{pkt}); err != nil {
 				return fmt.Errorf("router %d: failed to inject local packet: %w", r.id, err)
 			}
+			ref.Queue.Free(ref.Slot)
 		} else {
-			// Ring is full, buffer the packet
+			// Ring is full, try to buffer the packet
 			if len(r.injectionBuffer) < r.bufferCapacity {
 				debug.Logf("Router[%d]: Buffering local packet Src=%d Dst=%d (ring full)",
 					r.id, pkt.SourceID, pkt.TargetID)
 				r.injectionBuffer = append(r.injectionBuffer, pkt)
+				ref.Queue.Free(ref.Slot)
 			} else {
 				// Injection buffer full - this is a backpressure condition
-				return fmt.Errorf("router %d: injection buffer full, cannot accept more local packets", r.id)
+				// DO NOT Free -> Packet stays in InputQueue -> Upstream sees backpressure
+				debug.Logf("Router[%d]: Backpressure to local: injection buffer full", r.id)
 			}
 		}
 	}

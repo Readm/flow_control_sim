@@ -1,7 +1,6 @@
 package network
 
 import (
-	"context"
 	"reflect"
 	"strconv"
 	"strings"
@@ -161,21 +160,21 @@ func TestNetworkAdvanceInterleavesComponentCycles(t *testing.T) {
 	events := make(chan componentCycle, advanceCycles*componentsPerCycle)
 
 	// Test timing: record events to verify interleaving
-	node0.Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+	node0.Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 		recordEvent(events, componentCycle{Component: "node0", Cycle: int(cycle)})
-		return forwardAllPacketsHook(outputs0[0])(context.Background(), cycle, incoming)
+		return forwardAllPacketsHook(outputs0[0])(cycle, inputs)
 	})
-	node1.Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+	node1.Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 		// Slow node1 down to force interleaving with other components.
 		if cycle%2 == 0 {
 			time.Sleep(1 * time.Millisecond)
 		}
 		recordEvent(events, componentCycle{Component: "node1", Cycle: int(cycle)})
-		return forwardAllPacketsHook(outputs1[0])(context.Background(), cycle, incoming)
+		return forwardAllPacketsHook(outputs1[0])(cycle, inputs)
 	})
-	node2.Node.(*node.WorkerNode).SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
+	node2.Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 		recordEvent(events, componentCycle{Component: "node2", Cycle: int(cycle)})
-		return forwardAllPacketsHook(outputs2[0])(context.Background(), cycle, incoming)
+		return forwardAllPacketsHook(outputs2[0])(cycle, inputs)
 	})
 
 	link01.SetTickHook(func(cycle int) {
@@ -275,11 +274,14 @@ func newTestNodeHandle(t *testing.T, id int, inputCount, outputCount int) (*Node
 	}, inputs, outputs
 }
 
-func forwardAllPacketsHook(output *queue.OutputQueue) func(ctx context.Context, cycle uint64, buffer [][]packet.Packet) error {
-	return func(_ context.Context, cycle uint64, buffer [][]packet.Packet) error {
+func forwardAllPacketsHook(output *queue.OutputQueue) func(cycle uint64, inputs [][]queue.PacketRef) error {
+	return func(cycle uint64, inputs [][]queue.PacketRef) error {
 		var flat []packet.Packet
-		for _, b := range buffer {
-			flat = append(flat, b...)
+		for _, q := range inputs {
+			for _, ref := range q {
+				flat = append(flat, ref.Packet)
+				ref.Queue.Free(ref.Slot)
+			}
 		}
 		if len(flat) == 0 {
 			return nil

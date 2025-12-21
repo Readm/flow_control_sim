@@ -85,3 +85,4 @@ benchmark_*.txt
 # Local test data
 testdata/output/
 testdata/tmp/
+ring_simulator

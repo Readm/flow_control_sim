@@ -1,7 +1,6 @@
 package network
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -89,8 +88,15 @@ func TestDeadlockDiagnosis(t *testing.T) {
 
 	// Setup Node0 to inject a packet
 	var injected bool
-	node0.SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
-		fmt.Printf("[Node0 ProcessHook] cycle=%d, incoming=%v, injected=%v\n", cycle, incoming, injected)
+	node0.SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
+		// Node0 might receive packets if loopback, consume them
+		for _, q := range inputs {
+			for _, ref := range q {
+				ref.Queue.Free(ref.Slot)
+			}
+		}
+
+		fmt.Printf("[Node0 ProcessHook] cycle=%d, inputs_len=%d, injected=%v\n", cycle, len(inputs), injected)
 		if cycle == 0 && !injected {
 			pkt := packet.Packet{
 				SourceID: 0,
@@ -111,13 +117,19 @@ func TestDeadlockDiagnosis(t *testing.T) {
 	// Setup Node1 to receive packets
 	var receivedPackets []packet.Packet
 	var mu sync.Mutex
-	node1.SetProcessHook(func(_ context.Context, cycle uint64, incoming [][]packet.Packet) error {
-		fmt.Printf("[Node1 Hook] cycle=%d, received %d packet batches\n", cycle, len(incoming))
+	node1.SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
+		var incoming []packet.Packet
+		for _, q := range inputs {
+			for _, ref := range q {
+				incoming = append(incoming, ref.Packet)
+				ref.Queue.Free(ref.Slot)
+			}
+		}
+
+		fmt.Printf("[Node1 Hook] cycle=%d, received %d packets\n", cycle, len(incoming))
 		if len(incoming) > 0 {
 			mu.Lock()
-			for _, batch := range incoming {
-				receivedPackets = append(receivedPackets, batch...)
-			}
+			receivedPackets = append(receivedPackets, incoming...)
 			mu.Unlock()
 		}
 		return nil

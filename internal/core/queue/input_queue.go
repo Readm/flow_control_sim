@@ -31,9 +31,31 @@ type InputQueue struct {
 	// ===== Synchronization for array operations =====
 	arrayMu sync.Mutex
 
+	// ===== Scratch buffers =====
+	candidatesBuffer []int // Reused buffer for sorting in PeekTo
+
 	// ===== Hooks and extra state =====
 	lastCyclePackets []packet.Packet
 	onPacketReceived func(packet.Packet)
+}
+
+// Freeable allows freeing a slot.
+type Freeable interface {
+	Free(slot int)
+}
+
+// PacketRef serves as a handle to a packet waiting in the queue.
+// It allows non-destructive peeking and explicit freeing.
+type PacketRef struct {
+	Packet packet.Packet
+	Slot   int
+	Queue  Freeable
+}
+
+// ByteSize returns the estimated size of the PacketRef in bytes.
+// This is useful for memory accounting.
+func (pr PacketRef) ByteSize() int {
+	return 0 // Struct overhead is small, packet payload handled elsewhere
 }
 
 // NewInputQueue creates a new InputQueue with the specified capacity and bandwidth parameters.
@@ -55,6 +77,7 @@ func NewInputQueue(capacity int, inBandwidth int) *InputQueue {
 		freeBitmap:       make([]bool, capacity),
 		blockReasons:     make([]uint, capacity),
 		lastCyclePackets: make([]packet.Packet, 0),
+		candidatesBuffer: make([]int, 0, capacity),
 	}
 
 	// Initialize all slots as free
@@ -232,4 +255,79 @@ func (iq *InputQueue) GetVisualState() string {
 		return fmt.Sprintf("[%d/%d]", iq.Length(), iq.Capacity())
 	}
 	return ""
+}
+
+// PeekTo populates the provided slice with references to available packets.
+// It does NOT mark them as free. Callers must explicitly call Free() on the ref.
+// Returns the number of packets peeked.
+func (iq *InputQueue) PeekTo(out []PacketRef) int {
+	// Optimization: This function should be zero-allocation
+
+	// Fast path: if empty, return 0
+	if iq.Length() == 0 {
+		return 0
+	}
+
+	count := 0
+	maxOut := len(out)
+
+	// Use scratch buffer
+	iq.candidatesBuffer = iq.candidatesBuffer[:0]
+
+	// Collect all occupied slots that are not blocked
+	iq.arrayMu.Lock()
+	for i := 0; i < iq.capacity; i++ {
+		if !iq.freeBitmap[i] && iq.blockReasons[i] == 0 {
+			iq.candidatesBuffer = append(iq.candidatesBuffer, i)
+		}
+	}
+
+	// Sort by cycle (FIFO)
+	// Using sort.Slice on slice member
+	sort.Slice(iq.candidatesBuffer, func(i, j int) bool {
+		idxI := iq.candidatesBuffer[i]
+		idxJ := iq.candidatesBuffer[j]
+		return iq.slots[idxI].Cycle < iq.slots[idxJ].Cycle
+	})
+
+	// Populate out buffer
+	for _, index := range iq.candidatesBuffer {
+		if count >= maxOut {
+			break
+		}
+		out[count] = PacketRef{
+			Packet: iq.slots[index].Packet,
+			Slot:   index,
+			Queue:  iq,
+		}
+		count++
+	}
+	iq.arrayMu.Unlock()
+
+	return count
+}
+
+// Free releases a slot, making it available for new packets.
+func (iq *InputQueue) Free(slot int) {
+	iq.arrayMu.Lock()
+	defer iq.arrayMu.Unlock()
+
+	if slot >= 0 && slot < iq.capacity {
+		if !iq.freeBitmap[slot] {
+			iq.freeBitmap[slot] = true
+			iq.blockReasons[slot] = 0
+			// We don't clear the slot data itself, it will be overwritten
+		}
+	}
+}
+
+// Block marks a slot as blocked for a specific reason.
+// The slot will not be returned by PeekTo/Pick until unblocked (or freed).
+func (iq *InputQueue) Block(slot int, reason uint) {
+	iq.arrayMu.Lock()
+	defer iq.arrayMu.Unlock()
+
+	if slot >= 0 && slot < iq.capacity {
+		iq.blockReasons[slot] |= reason
+	}
 }

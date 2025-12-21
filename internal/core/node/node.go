@@ -1,7 +1,6 @@
 package node
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -10,13 +9,15 @@ import (
 	"github.com/Readm/flow_sim/internal/core/capability/cache"
 	"github.com/Readm/flow_sim/internal/core/capability/directory"
 	"github.com/Readm/flow_sim/internal/core/debug"
+	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
 // Node defines the public interface for all simulation nodes.
+// Node defines the public interface for all simulation nodes.
 type Node interface {
 	ID() int
-	Tick(ctx context.Context, cycle uint64, duration time.Duration) error
+	Tick(cycle uint64, duration time.Duration) error
 	AddInputQueue(q InputQueue) error
 	AddOutputQueue(q OutputQueue) error
 	InputQueues() []InputQueue
@@ -35,11 +36,12 @@ type Node interface {
 	GetData(key string) interface{}
 	HasData(key string) bool
 	DeleteData(key string)
+	UpdateData(key string, modifier func(interface{}) interface{})
 }
 
 // Tickable is an interface for components that can be ticked.
 type Tickable interface {
-	Tick(ctx context.Context, cycle uint64, duration time.Duration) error
+	Tick(cycle uint64, duration time.Duration) error
 }
 
 // CreatePacket is a helper to create a packet (compatibility alias).
@@ -54,6 +56,7 @@ func CreatePacket(src, dst int, payload string) packet.Packet {
 // InputQueue describes the behaviors Node needs from an input buffer.
 type InputQueue interface {
 	Pick() []packet.Packet
+	PeekTo(out []queue.PacketRef) int
 	Tick(cycle int) error
 	Length() int
 	Capacity() int
@@ -77,10 +80,9 @@ type NodeHandler interface {
 	// Implementations should use BaseNode.GetOutputQueue(i).InjectPackets() to send data.
 	//
 	// Parameters:
-	//   ctx: context for cancellation
 	//   cycle: current simulation cycle
 	//   inputs: packets received in this cycle from each input queue (inputs[i] comes from InputQueue i)
-	Process(ctx context.Context, cycle uint64, inputs [][]packet.Packet) error
+	Process(cycle uint64, inputs [][]queue.PacketRef) error
 }
 
 // BaseNode implements the common logic for all nodes.
@@ -90,6 +92,12 @@ type BaseNode struct {
 
 	inputs  []InputQueue
 	outputs []OutputQueue
+
+	// Zero-allocation input buffers
+	// inputBuffer is the slice of slices passed to Process
+	inputBuffer [][]queue.PacketRef
+	// inputValues is the backing array for all packet refs
+	inputValues [][]queue.PacketRef
 
 	caches      []cache.Cache
 	directories []directory.Directory
@@ -110,6 +118,8 @@ func NewBaseNode(id int, handler NodeHandler) *BaseNode {
 		id:           id,
 		inputs:       make([]InputQueue, 0),
 		outputs:      make([]OutputQueue, 0),
+		inputBuffer:  make([][]queue.PacketRef, 0),
+		inputValues:  make([][]queue.PacketRef, 0),
 		caches:       make([]cache.Cache, 0),
 		directories:  make([]directory.Directory, 0),
 		data:         make(map[string]interface{}),
@@ -132,7 +142,31 @@ func (n *BaseNode) AddInputQueue(q InputQueue) error {
 		return errors.New("input queue cannot be nil")
 	}
 	n.inputs = append(n.inputs, q)
+
+	// Expand zero-allocation buffers
+	// Create a new slice for this queue with capacity equal to queue capacity
+	// This ensures we have enough space for PeekTo
+	newBuffer := make([]queue.PacketRef, q.Capacity())
+	n.inputValues = append(n.inputValues, newBuffer)
+
+	// Expand the container slice (it will be populated in Tick)
+	n.inputBuffer = append(n.inputBuffer, nil)
+
 	return nil
+}
+
+// UpdateData atomically updates protocol-specific data.
+func (n *BaseNode) UpdateData(key string, modifier func(interface{}) interface{}) {
+	n.dataMu.Lock()
+	defer n.dataMu.Unlock()
+
+	val := n.data[key]
+	newVal := modifier(val)
+	if newVal == nil {
+		delete(n.data, key)
+	} else {
+		n.data[key] = newVal
+	}
 }
 
 // AddOutputQueue registers an OutputQueue.
@@ -205,18 +239,19 @@ func (n *BaseNode) InjectPacket(pkt packet.Packet) error {
 
 // Tick executes one cycle of the node's logic.
 // Order: Receive (Input) -> Process (Handler) -> Send (Output)
-func (n *BaseNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
+func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
 
 	// 1. Phase 1: Receive (Input)
 	// Input queues wait for upstream and receive data for CURRENT cycle.
-	receivedPackets, err := n.tickInputQueues(cycle)
-	if err != nil {
+	// Returns the number of packets processed, or error
+	if err := n.tickInputQueues(cycle); err != nil {
 		return fmt.Errorf("node %d input tick failed: %w", n.id, err)
 	}
 
 	// 2. Phase 2: Process (Handler)
 	// Handler logic processes the data we just received.
-	if err := n.handler.Process(ctx, cycle, receivedPackets); err != nil {
+	// Packets are available in n.inputBuffer (which points to n.inputValues)
+	if err := n.handler.Process(cycle, n.inputBuffer); err != nil {
 		return fmt.Errorf("node %d process failed: %w", n.id, err)
 	}
 
@@ -230,19 +265,26 @@ func (n *BaseNode) Tick(ctx context.Context, cycle uint64, _ time.Duration) erro
 }
 
 // tickInputQueues ticks all input queues and collects received packets.
-func (n *BaseNode) tickInputQueues(cycle uint64) ([][]packet.Packet, error) {
-	allReceived := make([][]packet.Packet, len(n.inputs))
-
+// It populates n.inputBuffer with slices pointing to n.inputValues.
+func (n *BaseNode) tickInputQueues(cycle uint64) error {
 	for i, input := range n.inputs {
 		if err := input.Tick(int(cycle)); err != nil {
-			return nil, err
+			return err
 		}
-		// Collection strategy corresponding to "Tick then Pick"
-		pkts := input.Pick()
-		allReceived[i] = pkts
+
+		// Zero-Alloc Receive Strategy:
+		// 1. Get the pre-allocated backing array for this input
+		buf := n.inputValues[i] // This has len=cap=Capacity
+
+		// 2. Peek packets directly into this buffer
+		count := input.PeekTo(buf)
+
+		// 3. Update the slice header in inputBuffer to point to valid data
+		// This does NOT allocate new memory, just updates the slice length
+		n.inputBuffer[i] = buf[:count]
 	}
 
-	return allReceived, nil
+	return nil
 }
 
 // tickOutputQueues ticks all output queues.
@@ -263,7 +305,7 @@ func (n *BaseNode) AdvanceTo(targetCycle int) error {
 
 	debug.Logf("Node.AdvanceTo: node=%d, target=%d, starting from cycle=%d", n.id, targetCycle, n.currentCycle)
 
-	ctx := context.Background()
+	debug.Logf("Node.AdvanceTo: node=%d, target=%d, starting from cycle=%d", n.id, targetCycle, n.currentCycle)
 
 	// Execute logic for each cycle from current up to target (inclusive? check plan)
 	// Plan said: "Link.AdvanceTo: loop from current to target (inclusive)"
@@ -272,7 +314,7 @@ func (n *BaseNode) AdvanceTo(targetCycle int) error {
 
 	for cycle := n.currentCycle; int(cycle) <= targetCycle; cycle++ {
 		debug.Logf("Node.AdvanceTo: node=%d, executing cycle=%d", n.id, cycle)
-		if err := n.Tick(ctx, cycle, 0); err != nil {
+		if err := n.Tick(cycle, 0); err != nil {
 			debug.Logf("Node.AdvanceTo: node=%d, cycle=%d failed: %v", n.id, cycle, err)
 			return err
 		}
