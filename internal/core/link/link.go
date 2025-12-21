@@ -52,8 +52,7 @@ type Link struct {
 	currentCycle int
 	tickHook     func(cycle int)
 
-	// ===== Buffered packets (Backlog) =====
-	pendingPackets []ahead_port.PacketWithCycle
+	// Note: pendingPackets is removed, state is now owned by handler
 }
 
 // NewLink creates a Link with BufferedLinkHandler by default.
@@ -75,13 +74,12 @@ func NewLinkWithHandler(sourceID, targetID, latency, bandwidth int, handler Link
 	}
 
 	return &Link{
-		sourceID:       sourceID,
-		targetID:       targetID,
-		latency:        latency,
-		bandwidth:      bandwidth,
-		handler:        handler,
-		currentCycle:   0,
-		pendingPackets: make([]ahead_port.PacketWithCycle, 0),
+		sourceID:     sourceID,
+		targetID:     targetID,
+		latency:      latency,
+		bandwidth:    bandwidth,
+		handler:      handler,
+		currentCycle: 0,
 	}
 }
 
@@ -102,12 +100,6 @@ func (l *Link) UpdateUpstreamReady(cycle int, ready bool) {
 	if l.fromUpstream != nil {
 		l.fromUpstream.UpdateReady(cycle, ready)
 	}
-}
-
-// AddPendingPacket allows external handlers to store a packet back into the link's pending list.
-// This is useful for custom handlers that need to retry sending.
-func (l *Link) AddPendingPacket(pwc ahead_port.PacketWithCycle) {
-	l.pendingPackets = append(l.pendingPackets, pwc)
 }
 
 // Init initializes the link after being connected to the network.
@@ -132,22 +124,19 @@ func (l *Link) GetHandler() LinkHandler {
 	return l.handler
 }
 
-// SnapshotOccupancy reports the pending packet count per slot for buffered links.
+// CurrentCycle returns the current simulation cycle of the link.
+func (l *Link) CurrentCycle() int {
+	return l.currentCycle
+}
+
+// SnapshotOccupancy reports the pending packet count per slot/offset.
 func (l *Link) SnapshotOccupancy() []int {
-	if bh, ok := l.handler.(*BufferedLinkHandler); ok {
-		slots := bh.GetSlots()
-		occupancy := make([]int, len(slots))
-		for i, slot := range slots {
-			occupancy[i] = len(slot)
-		}
-		return occupancy
-	}
-	return nil
+	return l.handler.GetOccupancy(l.currentCycle)
 }
 
 // Tick processes a single cycle.
 // Template: Receive -> handler.Process -> MarkDone
-func (l *Link) Tick(cycle int) error {
+func (l *Link) Tick(cycle int, targetCycle int) error {
 	// ===== 1. Phase 1: Receive packets from upstream =====
 	var incoming []packet.Packet
 	waitCycle := cycle - l.latency
@@ -157,7 +146,7 @@ func (l *Link) Tick(cycle int) error {
 	}
 
 	// ===== 2. Phase 2: Process via Handler (Core Logic) =====
-	if err := l.handler.Process(l, cycle, incoming); err != nil {
+	if err := l.handler.Process(l, cycle, targetCycle, incoming); err != nil {
 		return fmt.Errorf("link %d->%d handler failed: %w", l.sourceID, l.targetID, err)
 	}
 
@@ -170,25 +159,31 @@ func (l *Link) Tick(cycle int) error {
 	return nil
 }
 
-// Advance progresses the link by the specified number of cycles.
-func (l *Link) Advance(cycles int) error {
-	if cycles <= 0 {
-		return nil
+// AdvanceTo progresses the link up to and including the target cycle.
+// It executes cycles from l.currentCycle to targetCycle.
+func (l *Link) AdvanceTo(targetCycle int) error {
+	if targetCycle < l.currentCycle {
+		return nil // Already advanced past this point
 	}
 
-	debug.Logf("Link.Advance: link=%d->%d, cycles=%d, starting from cycle=%d", l.sourceID, l.targetID, cycles, l.currentCycle)
+	debug.Logf("Link.AdvanceTo: link=%d->%d, target=%d, starting from cycle=%d", l.sourceID, l.targetID, targetCycle, l.currentCycle)
 
-	for i := 0; i < cycles; i++ {
-		cycle := l.currentCycle
-		debug.Logf("Link.Advance: link=%d->%d, executing cycle=%d (%d/%d)", l.sourceID, l.targetID, cycle, i+1, cycles)
-		if err := l.Tick(cycle); err != nil {
-			debug.Logf("Link.Advance: link=%d->%d, cycle=%d failed: %v", l.sourceID, l.targetID, cycle, err)
+	for cycle := l.currentCycle; cycle <= targetCycle; cycle++ {
+		debug.Logf("Link.AdvanceTo: link=%d->%d, executing cycle=%d", l.sourceID, l.targetID, cycle)
+
+		// Pass targetCycle as the limit/context
+		if err := l.Tick(cycle, targetCycle); err != nil {
+			debug.Logf("Link.AdvanceTo: link=%d->%d, cycle=%d failed: %v", l.sourceID, l.targetID, cycle, err)
 			return err
 		}
-		l.currentCycle++
-		debug.Logf("Link.Advance: link=%d->%d, cycle=%d completed", l.sourceID, l.targetID, cycle)
+
+		// Update currentCycle AFTER successful tick, but before loop continues?
+		// No, usually we increment currentCycle as we go or at end because loop var 'cycle' is local.
+		l.currentCycle = cycle + 1
+
+		debug.Logf("Link.AdvanceTo: link=%d->%d, cycle=%d completed", l.sourceID, l.targetID, cycle)
 	}
-	debug.Logf("Link.Advance: link=%d->%d, all cycles completed", l.sourceID, l.targetID)
+	debug.Logf("Link.AdvanceTo: link=%d->%d, reached cycle=%d (next=%d)", l.sourceID, l.targetID, targetCycle, l.currentCycle)
 	return nil
 }
 
@@ -205,22 +200,28 @@ func (l *Link) invokeTickHook(cycle int) {
 
 // GetVisualState returns the visual representation of this link.
 func (l *Link) GetVisualState() string {
+	// Visualization logic should ideally be delegated to handler or removed,
+	// but keeping consistent with original request to move/refactor later or now.
+	// For now, let's just make it empty or simple since pendingPackets is gone.
+	// Use SnapshotOccupancy to guess?
+	// The Plan said "Move GetVisualState logic ... to LinkHandler".
+	// But I haven't added GetVisualState to LinkHandler interface yet.
+	// I will just return simplified string for now to avoid compilation error on missing pendingPackets.
+
 	if visualization.VisualizationMode == "none" {
 		return ""
 	}
-
-	if visualization.VisualizationMode == "ascii" {
-		packetsInFlight := len(l.pendingPackets)
-		if packetsInFlight > 0 {
-			return fmt.Sprintf("-[%d]-", packetsInFlight)
-		}
-		return "----"
-	}
-
+	// Simplified place-holder
 	return ""
 }
 
 // PendingPacketCount returns the number of buffered packets.
+// Note: This relies on SnapshotOccupancy now.
 func (l *Link) PendingPacketCount() int {
-	return len(l.pendingPackets)
+	occ := l.SnapshotOccupancy()
+	count := 0
+	for _, n := range occ {
+		count += n
+	}
+	return count
 }

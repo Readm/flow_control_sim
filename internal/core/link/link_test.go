@@ -41,7 +41,8 @@ func TestLinkBasicFunctionality(t *testing.T) {
 	upstream.MarkDone(0)
 
 	// Tick Link at cycle 2 (packet sent at cycle 0 arrives at cycle 2)
-	if err := link.Tick(2); err != nil {
+	// targetCycle=2 because we are single stepping
+	if err := link.Tick(2, 2); err != nil {
 		t.Fatalf("link.Tick failed: %v", err)
 	}
 
@@ -90,7 +91,7 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	upstream.MarkDone(0)
 
 	// Tick Link at cycle 3
-	if err := link.Tick(3); err != nil {
+	if err := link.Tick(3, 3); err != nil {
 		t.Fatalf("link.Tick failed: %v", err)
 	}
 
@@ -142,7 +143,7 @@ func TestLinkBandwidthLimit(t *testing.T) {
 	upstream.MarkDone(0)
 
 	// Tick Link at cycle 2
-	if err := link.Tick(2); err != nil {
+	if err := link.Tick(2, 2); err != nil {
 		t.Fatalf("link.Tick(2) failed: %v", err)
 	}
 
@@ -158,7 +159,7 @@ func TestLinkBandwidthLimit(t *testing.T) {
 	upstream.MarkDone(1)
 
 	// Tick Link at cycle 3 to send remaining packets
-	if err := link.Tick(3); err != nil {
+	if err := link.Tick(3, 3); err != nil {
 		t.Fatalf("link.Tick(3) failed: %v", err)
 	}
 

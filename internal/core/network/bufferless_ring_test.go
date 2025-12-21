@@ -13,12 +13,18 @@ import (
 
 // toggleBusyHandler allows dynamic control over Link readiness for testing backpressure.
 type toggleBusyHandler struct {
-	busy      bool
-	inner     link.LinkHandler
-	initReady int
+	busy bool
+	// busyPending stores packets when busy
+	busyPending []ahead_port.PacketWithCycle
+	inner       link.LinkHandler
+	initReady   int
 }
 
-func (h *toggleBusyHandler) Process(l *link.Link, cycle int, incoming []packet.Packet) error {
+func (h *toggleBusyHandler) GetOccupancy(currentCycle int) []int {
+	return h.inner.GetOccupancy(currentCycle)
+}
+
+func (h *toggleBusyHandler) Process(l *link.Link, cycle int, targetCycle int, incoming []packet.Packet) error {
 	if cycle == 0 {
 		l.UpdateUpstreamReady(0, !h.busy)
 	}
@@ -29,14 +35,23 @@ func (h *toggleBusyHandler) Process(l *link.Link, cycle int, incoming []packet.P
 		// If busy, we must buffer the incoming packets to avoid losing them
 		// and update their cycle to current so they're not "too late"
 		for _, pkt := range incoming {
-			l.AddPendingPacket(ahead_port.PacketWithCycle{
+			h.busyPending = append(h.busyPending, ahead_port.PacketWithCycle{
 				Cycle:  cycle,
 				Packet: pkt,
 			})
 		}
 		return nil
 	}
-	return h.inner.Process(l, cycle, incoming)
+
+	// If not busy, process any pending packets first
+	toProcess := make([]packet.Packet, 0, len(h.busyPending)+len(incoming))
+	for _, pwc := range h.busyPending {
+		toProcess = append(toProcess, pwc.Packet)
+	}
+	toProcess = append(toProcess, incoming...)
+	h.busyPending = nil // Clear pending
+
+	return h.inner.Process(l, cycle, targetCycle, toProcess)
 }
 
 func (h *toggleBusyHandler) Reset() {
@@ -168,7 +183,7 @@ func TestBufferlessRing_SinglePacket_v2(t *testing.T) {
 	// Run simulation - packet needs to travel through local link (1) + ring link (5) + local link (1) + processing
 	// Total cycles needed: ~10-15 cycles
 	t.Logf("Starting simulation for 50 cycles...")
-	if err := net.Advance(50); err != nil {
+	if err := net.AdvanceTo(net.CurrentCycle() + 50 - 1); err != nil {
 		t.Fatalf("Failed to advance network: %v", err)
 	}
 
@@ -342,7 +357,7 @@ func TestBufferlessRing_Backpressure_v2(t *testing.T) {
 	// 4. Run simulation in stages
 	// Stage A: Advance 20 cycles with backpressure. Packet should circulate.
 	t.Log("Advancing 20 cycles with backpressure...")
-	if err := net.Advance(20); err != nil {
+	if err := net.AdvanceTo(net.CurrentCycle() + 20 - 1); err != nil {
 		t.Fatalf("Advance failed: %v", err)
 	}
 
@@ -357,7 +372,7 @@ func TestBufferlessRing_Backpressure_v2(t *testing.T) {
 	t.Log("Clearing backpressure and advancing 50 more cycles...")
 	ejectionHandler.busy = false
 
-	if err := net.Advance(50); err != nil {
+	if err := net.AdvanceTo(net.CurrentCycle() + 50 - 1); err != nil {
 		t.Fatalf("Advance failed: %v", err)
 	}
 
@@ -453,7 +468,7 @@ func TestBufferlessRing_Concurrent_v2(t *testing.T) {
 		workerOutputs[p.src].InjectPackets(0, []packet.Packet{{SourceID: p.src, TargetID: p.dst, Payload: p.msg}})
 	}
 
-	if err := net.Advance(50); err != nil {
+	if err := net.AdvanceTo(net.CurrentCycle() + 50 - 1); err != nil {
 		t.Fatalf("Advance failed: %v", err)
 	}
 
@@ -613,7 +628,7 @@ func TestBufferlessRing_TwoHops_v2(t *testing.T) {
 
 	// 2 hops: local(1) + ring(5) + ring(5) + local(1) + processing ≈ 15-20 cycles
 	t.Logf("Starting simulation for 50 cycles...")
-	if err := net.Advance(50); err != nil {
+	if err := net.AdvanceTo(net.CurrentCycle() + 50 - 1); err != nil {
 		t.Fatalf("Failed to advance: %v", err)
 	}
 

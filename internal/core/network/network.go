@@ -87,18 +87,25 @@ type Network struct {
 	links []*link.Link
 
 	// Cached slices for Advance (built once during first Advance or explicit finalization)
-	nodeList []*NodeHandle
-	frozen   bool // True after first Advance or explicit Finalize
+	nodeList     []*NodeHandle
+	frozen       bool // True after first Advance or explicit Finalize
+	currentCycle int  // Track max cycle reached for convenience
 }
 
 // New creates an empty network.
 func New() *Network {
 	return &Network{
-		nodes:    make(map[int]*NodeHandle),
-		links:    make([]*link.Link, 0),
-		nodeList: nil,
-		frozen:   false,
+		nodes:        make(map[int]*NodeHandle),
+		links:        make([]*link.Link, 0),
+		nodeList:     nil,
+		frozen:       false,
+		currentCycle: 0,
 	}
+}
+
+// CurrentCycle returns the maximum cycle reached by the network (based on targetCycle of last AdvanceTo).
+func (n *Network) CurrentCycle() int {
+	return n.currentCycle
 }
 
 // AddNode registers a node handle in the network.
@@ -336,11 +343,11 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 	return nil
 }
 
-// Advance runs all registered nodes and links in parallel for the given number of cycles.
+// AdvanceTo runs all registered nodes and links in parallel up to the target cycle.
 // On first call, freezes the network topology (no more AddNode/Connect allowed).
-// Can be called multiple times sequentially.
-func (n *Network) Advance(cycles int) error {
-	if cycles <= 0 {
+// Can be called multiple times sequentially with increasing target cycles.
+func (n *Network) AdvanceTo(targetCycle int) error {
+	if targetCycle < 0 {
 		return nil
 	}
 
@@ -351,7 +358,7 @@ func (n *Network) Advance(cycles int) error {
 			n.nodeList = append(n.nodeList, handle)
 		}
 		n.frozen = true
-		debug.Logf("Network.Advance: network frozen, nodes=%d, links=%d", len(n.nodeList), len(n.links))
+		debug.Logf("Network.AdvanceTo: network frozen, nodes=%d, links=%d", len(n.nodeList), len(n.links))
 
 		// Initialize all links
 		for _, l := range n.links {
@@ -359,7 +366,7 @@ func (n *Network) Advance(cycles int) error {
 		}
 	}
 
-	debug.Logf("Network.Advance: starting cycles=%d", cycles)
+	debug.Logf("Network.AdvanceTo: starting to targetCycle=%d", targetCycle)
 
 	// Run all nodes and links in parallel
 	var wg sync.WaitGroup
@@ -370,11 +377,11 @@ func (n *Network) Advance(cycles int) error {
 		nodeID := handle.Node.ID()
 		go func(h *NodeHandle) {
 			defer wg.Done()
-			debug.Logf("Network.Advance: node %d starting Advance(%d)", nodeID, cycles)
-			if err := h.Node.Advance(cycles); err != nil {
+			debug.Logf("Network.AdvanceTo: node %d starting AdvanceTo(%d)", nodeID, targetCycle)
+			if err := h.Node.AdvanceTo(targetCycle); err != nil {
 				errCh <- fmt.Errorf("node %d advance failed: %w", nodeID, err)
 			}
-			debug.Logf("Network.Advance: node %d completed Advance(%d)", nodeID, cycles)
+			debug.Logf("Network.AdvanceTo: node %d completed AdvanceTo(%d)", nodeID, targetCycle)
 		}(handle)
 	}
 
@@ -384,24 +391,24 @@ func (n *Network) Advance(cycles int) error {
 		tgtID := lk.TargetID()
 		go func(l *link.Link) {
 			defer wg.Done()
-			debug.Logf("Network.Advance: link %d->%d starting Advance(%d)", srcID, tgtID, cycles)
-			if err := l.Advance(cycles); err != nil {
+			debug.Logf("Network.AdvanceTo: link %d->%d starting AdvanceTo(%d)", srcID, tgtID, targetCycle)
+			if err := l.AdvanceTo(targetCycle); err != nil {
 				errCh <- fmt.Errorf("link %d->%d advance failed: %w", srcID, tgtID, err)
 			}
-			debug.Logf("Network.Advance: link %d->%d completed Advance(%d)", srcID, tgtID, cycles)
+			debug.Logf("Network.AdvanceTo: link %d->%d completed AdvanceTo(%d)", srcID, tgtID, targetCycle)
 		}(lk)
 	}
 
-	debug.Logf("Network.Advance: waiting for all components to complete")
+	debug.Logf("Network.AdvanceTo: waiting for all components to complete")
 	wg.Wait()
 	close(errCh)
 
 	for err := range errCh {
 		if err != nil {
-			debug.Logf("Network.Advance: error occurred: %v", err)
+			debug.Logf("Network.AdvanceTo: error occurred: %v", err)
 			return err
 		}
 	}
-	debug.Logf("Network.Advance: completed successfully")
+	debug.Logf("Network.AdvanceTo: completed successfully")
 	return nil
 }

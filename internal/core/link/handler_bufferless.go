@@ -8,44 +8,62 @@ import (
 
 // BufferlessLinkHandler implements an always-ready flow control strategy without physical buffering.
 // It attempts to send packets immediately. If downstream is busy, packets are kept in l.pendingPackets.
-type BufferlessLinkHandler struct{}
+// BufferlessLinkHandler implements an always-ready flow control strategy without physical buffering.
+// It attempts to send packets immediately. If downstream is busy, packets are kept in pending map.
+type BufferlessLinkHandler struct {
+	// pending stores packets that failed to send, indexed by their target retry cycle.
+	// Key: Target Cycle, Value: List of packets
+	pending map[int][]ahead_port.PacketWithCycle
+}
 
 // NewBufferlessLinkHandler creates a BufferlessLinkHandler.
+// NewBufferlessLinkHandler creates a BufferlessLinkHandler.
 func NewBufferlessLinkHandler() *BufferlessLinkHandler {
-	return &BufferlessLinkHandler{}
+	return &BufferlessLinkHandler{
+		pending: make(map[int][]ahead_port.PacketWithCycle),
+	}
 }
 
 // Process implements the LinkHandler interface for BufferlessLinkHandler.
-func (h *BufferlessLinkHandler) Process(l *Link, cycle int, incoming []packet.Packet) error {
-	// 1. Process pending packets from previous cycles (delayed due to downstream busy)
-	currentPending := l.pendingPackets
-	l.pendingPackets = make([]ahead_port.PacketWithCycle, 0)
+func (h *BufferlessLinkHandler) Process(l *Link, cycle int, targetCycle int, incoming []packet.Packet) error {
+	// 1. Process pending packets scheduled for this cycle
+	if pendingPkts, ok := h.pending[cycle]; ok && len(pendingPkts) > 0 {
+		// Clear pending for this cycle, we will retry them
+		delete(h.pending, cycle)
 
-	for _, pkt := range currentPending {
-		if pkt.Cycle <= cycle {
-			// When retrying in a bufferless link, use the CURRENT cycle.
-			// The original packet cycle is no longer relevant for the downstream port.
+		for _, pkt := range pendingPkts {
+			// Try to send
 			if !h.sendPacket(l, cycle, pkt.Packet) {
-				l.pendingPackets = append(l.pendingPackets, pkt)
+				// Failed to send, schedule for next cycle
+				nextCycle := cycle + 1
+
+				// CRITICAL: Check against targetCycle limit
+				if nextCycle > targetCycle {
+					// Stop trying, keep in pending for next AdvanceTo run
+					h.addToPending(nextCycle, pkt.Packet)
+				} else {
+					// We can retry in this run (in next Tick)
+					// But BufferlessHandler doesn't automatically carry over to next Tick unless
+					// we put it in a place where Next Tick picks it up.
+					// Since Process is called per cycle, putting it in pending[nextCycle]
+					// ensures it will be picked up when Tick(nextCycle) is called.
+					h.addToPending(nextCycle, pkt.Packet)
+				}
 			}
-		} else {
-			l.pendingPackets = append(l.pendingPackets, pkt)
 		}
 	}
 
-	// 2. Process new packets
+	// 2. Process new incoming packets
 	for _, pkt := range incoming {
 		if !h.sendPacket(l, cycle, pkt) {
-			l.pendingPackets = append(l.pendingPackets, ahead_port.PacketWithCycle{
-				Cycle:  cycle,
-				Packet: pkt,
-			})
+			// Failed to send, schedule for next cycle
+			nextCycle := cycle + 1
+			h.addToPending(nextCycle, pkt)
 		}
 	}
 
 	// 3. Update ready state for upstream (next cycle)
 	if l.fromUpstream != nil {
-		// Bufferless links are always ready to accept packets
 		l.fromUpstream.UpdateReady(cycle+1, true)
 		debug.Logf("Link %d->%d: Set ready[%d]=true (bufferless)", l.sourceID, l.targetID, cycle+1)
 	}
@@ -53,8 +71,55 @@ func (h *BufferlessLinkHandler) Process(l *Link, cycle int, incoming []packet.Pa
 	return nil
 }
 
+func (h *BufferlessLinkHandler) addToPending(cycle int, pkt packet.Packet) {
+	if h.pending == nil {
+		h.pending = make(map[int][]ahead_port.PacketWithCycle)
+	}
+	h.pending[cycle] = append(h.pending[cycle], ahead_port.PacketWithCycle{
+		Cycle:  cycle,
+		Packet: pkt,
+	})
+}
+
+// GetOccupancy returns the pending packets distribution relative to current cycle (handled by Link).
+func (h *BufferlessLinkHandler) GetOccupancy(currentCycle int) []int {
+	if len(h.pending) == 0 {
+		return nil
+	}
+
+	// Find the max relative offset needed
+	maxOffset := 0
+	found := false
+	for targetCycle := range h.pending {
+		offset := targetCycle - currentCycle
+		if offset >= 0 {
+			if offset > maxOffset {
+				maxOffset = offset
+			}
+			found = true
+		}
+	}
+
+	if !found {
+		return nil
+	}
+
+	// Create slice with size maxOffset + 1
+	occupancy := make([]int, maxOffset+1)
+	for targetCycle, pkts := range h.pending {
+		offset := targetCycle - currentCycle
+		if offset >= 0 {
+			occupancy[offset] = len(pkts)
+		}
+	}
+
+	return occupancy
+}
+
 // Reset resets the handler state.
-func (h *BufferlessLinkHandler) Reset() {}
+func (h *BufferlessLinkHandler) Reset() {
+	h.pending = make(map[int][]ahead_port.PacketWithCycle)
+}
 
 // ReadyDepth returns the number of cycles to pre-mark as ready for bootstrapping.
 // Bufferless links are always ready, but need at least cycle 0 to start.

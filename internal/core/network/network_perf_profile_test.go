@@ -126,7 +126,7 @@ func BenchmarkNetworkScaling(b *testing.B) {
 
 			// Run benchmark
 			for i := 0; i < b.N; i++ {
-				if err := net.Advance(advanceCycles); err != nil {
+				if err := net.AdvanceTo(net.CurrentCycle() + advanceCycles - 1); err != nil {
 					b.Fatalf("Advance failed: %v", err)
 				}
 			}
@@ -238,7 +238,7 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				if err := net.Advance(advanceCycles); err != nil {
+				if err := net.AdvanceTo(net.CurrentCycle() + advanceCycles - 1); err != nil {
 					b.Fatalf("Advance failed: %v", err)
 				}
 			}
@@ -403,7 +403,7 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 
 			// Run benchmark
 			for i := 0; i < b.N; i++ {
-				if err := net.Advance(advanceCycles); err != nil {
+				if err := net.AdvanceTo(net.CurrentCycle() + advanceCycles - 1); err != nil {
 					b.Fatalf("Advance failed: %v", err)
 				}
 			}

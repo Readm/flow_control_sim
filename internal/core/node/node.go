@@ -28,7 +28,8 @@ type Node interface {
 	Directories() []directory.Directory
 
 	InjectPacket(pkt packet.Packet) error
-	Advance(cycles int) error
+	AdvanceTo(targetCycle int) error
+	CurrentCycle() int
 
 	SetData(key string, value interface{})
 	GetData(key string) interface{}
@@ -115,6 +116,11 @@ func NewBaseNode(id int, handler NodeHandler) *BaseNode {
 		handler:      handler,
 		currentCycle: 0,
 	}
+}
+
+// CurrentCycle returns the current cycle of the node.
+func (n *BaseNode) CurrentCycle() int {
+	return int(n.currentCycle)
 }
 
 // ID returns the node identifier.
@@ -249,26 +255,34 @@ func (n *BaseNode) tickOutputQueues(cycle uint64) error {
 	return nil
 }
 
-// Advance executes the configured number of cycles sequentially using Background context.
-func (n *BaseNode) Advance(cycles int) error {
-	if cycles <= 0 {
+// AdvanceTo executes the configured cycles sequentially using Background context until the node reaches the target cycle.
+func (n *BaseNode) AdvanceTo(targetCycle int) error {
+	if targetCycle < int(n.currentCycle) {
 		return nil
 	}
 
-	debug.Logf("Node.Advance: node=%d, cycles=%d, starting from cycle=%d", n.id, cycles, n.currentCycle)
+	debug.Logf("Node.AdvanceTo: node=%d, target=%d, starting from cycle=%d", n.id, targetCycle, n.currentCycle)
 
 	ctx := context.Background()
-	for i := 0; i < cycles; i++ {
-		cycle := n.currentCycle
-		debug.Logf("Node.Advance: node=%d, executing cycle=%d (%d/%d)", n.id, cycle, i+1, cycles)
+
+	// Execute logic for each cycle from current up to target (inclusive? check plan)
+	// Plan said: "Link.AdvanceTo: loop from current to target (inclusive)"
+	// Implementation in Link was: for cycle := l.currentCycle; cycle <= targetCycle; cycle++
+	// So Node should do the same.
+
+	for cycle := n.currentCycle; int(cycle) <= targetCycle; cycle++ {
+		debug.Logf("Node.AdvanceTo: node=%d, executing cycle=%d", n.id, cycle)
 		if err := n.Tick(ctx, cycle, 0); err != nil {
-			debug.Logf("Node.Advance: node=%d, cycle=%d failed: %v", n.id, cycle, err)
+			debug.Logf("Node.AdvanceTo: node=%d, cycle=%d failed: %v", n.id, cycle, err)
 			return err
 		}
-		n.currentCycle++
-		debug.Logf("Node.Advance: node=%d, cycle=%d completed", n.id, cycle)
+		// Update currentCycle locally or via loop?
+		// Node structure has currentCycle.
+		n.currentCycle = cycle + 1
+
+		debug.Logf("Node.AdvanceTo: node=%d, cycle=%d completed", n.id, cycle)
 	}
-	debug.Logf("Node.Advance: node=%d, all cycles completed", n.id)
+	debug.Logf("Node.AdvanceTo: node=%d, reached cycle=%d (next=%d)", n.id, targetCycle, n.currentCycle)
 	return nil
 }
 

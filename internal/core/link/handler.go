@@ -17,8 +17,9 @@ type LinkHandler interface {
 	// Parameters:
 	//   l: reference to the parent Link
 	//   cycle: current simulation cycle
+	//   targetCycle: the upper bound cycle for this run (inclusive).
 	//   incoming: packets received from upstream in this cycle
-	Process(l *Link, cycle int, incoming []packet.Packet) error
+	Process(l *Link, cycle int, targetCycle int, incoming []packet.Packet) error
 
 	// Reset resets the handler state.
 	Reset()
@@ -27,4 +28,8 @@ type LinkHandler interface {
 	// It handles bootstrapping tasks like initial ready signaling.
 	// If initialReady is specified on the link, it should be honored.
 	Init(l *Link)
+
+	// GetOccupancy returns the number of pending packets per future cycle offset.
+	// Index i corresponds to packets scheduled for (CurrentCycle + i).
+	GetOccupancy(currentCycle int) []int
 }

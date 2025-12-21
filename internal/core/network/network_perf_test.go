@@ -148,7 +148,7 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 				advanceCycles, nodeCount, linkLatency)
 
 			startTime := time.Now()
-			if err := net.Advance(advanceCycles); err != nil {
+			if err := net.AdvanceTo(net.CurrentCycle() + advanceCycles - 1); err != nil {
 				t.Fatalf("Advance failed: %v", err)
 			}
 			duration := time.Since(startTime)

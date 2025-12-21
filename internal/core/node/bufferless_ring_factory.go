@@ -14,7 +14,7 @@ type linkTickable struct {
 }
 
 func (lt *linkTickable) Tick(ctx context.Context, cycle uint64, _ time.Duration) error {
-	return lt.l.Tick(int(cycle))
+	return lt.l.Tick(int(cycle), int(cycle))
 }
 
 // NewBufferlessRing creates a complete bufferless ring network.

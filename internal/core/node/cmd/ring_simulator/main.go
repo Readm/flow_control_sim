@@ -221,12 +221,12 @@ func (sim *RingSimulator) Step() error {
 	// Node(T) depends on Link(T).
 	// So Link must run first to provide data for Node(T).
 	for _, l := range sim.ringLinks {
-		if err := l.Tick(sim.cycle); err != nil {
+		if err := l.Tick(sim.cycle, sim.cycle); err != nil {
 			return fmt.Errorf("ring link tick failed: %w", err)
 		}
 	}
 	for _, l := range sim.localLinks {
-		if err := l.Tick(sim.cycle); err != nil {
+		if err := l.Tick(sim.cycle, sim.cycle); err != nil {
 			return fmt.Errorf("local link tick failed: %w", err)
 		}
 	}

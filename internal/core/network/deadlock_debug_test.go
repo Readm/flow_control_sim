@@ -127,7 +127,7 @@ func TestDeadlockDiagnosis(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		fmt.Println("Starting network.Advance(10)")
-		err := net.Advance(10)
+		err := net.AdvanceTo(net.CurrentCycle() + 10 - 1)
 		fmt.Printf("network.Advance completed with err=%v\n", err)
 		done <- err
 	}()

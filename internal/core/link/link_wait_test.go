@@ -39,7 +39,7 @@ func TestLinkWaitLogic(t *testing.T) {
 
 	// Tick at cycle 2 should not block (waitCycle = 2-3 = -1, no wait needed)
 	start := time.Now()
-	if err := link.Tick(2); err != nil {
+	if err := link.Tick(2, 2); err != nil {
 		t.Fatalf("link.Tick failed: %v", err)
 	}
 	if time.Since(start) > 100*time.Millisecond {
@@ -55,7 +55,7 @@ func TestLinkWaitLogic(t *testing.T) {
 	// Tick at cycle 5 should wait for upstream Done(2) since waitCycle = 5-3 = 2
 	done := make(chan error, 1)
 	go func() {
-		done <- link.Tick(5)
+		done <- link.Tick(5, 5)
 	}()
 
 	// Should block initially
@@ -106,7 +106,7 @@ func TestLinkWaitLogicBoundary(t *testing.T) {
 	// Tick at cycle 2 should not block (waitCycle = 2-5 = -3, negative)
 	done := make(chan error, 1)
 	go func() {
-		done <- link.Tick(2)
+		done <- link.Tick(2, 2)
 	}()
 
 	select {
@@ -145,9 +145,9 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	}
 	upstream.MarkDone(0)
 
-	// Tick at cycle 4 (waitCycle = 4-4 = 0, waits for upstream Done(0) which is satisfied)
-	if err := link.Tick(4); err != nil {
-		t.Fatalf("link.Tick failed: %v", err)
+	// Tick at cycle 4 (waitCycle = 4-4 = 0, waits for upstream Done(0))
+	if err := link.Tick(4, 4); err != nil {
+		t.Fatalf("Tick failed: %v", err)
 	}
 
 	// Wait for downstream and receive

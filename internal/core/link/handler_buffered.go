@@ -24,6 +24,10 @@ type BufferedLinkHandler struct {
 	// Configuration
 	latency   int // Number of slots in ring buffer
 	bandwidth int // Maximum packets per slot
+
+	// pendingPackets stores packets that couldn't fit in the window or were delayed.
+	// Previously in Link, now owned by Handler.
+	pendingPackets []ahead_port.PacketWithCycle
 }
 
 // NewBufferedLinkHandler creates a BufferedLinkHandler.
@@ -41,15 +45,16 @@ func NewBufferedLinkHandler(latency, bandwidth int) *BufferedLinkHandler {
 		latency:           latency,
 		bandwidth:         bandwidth,
 		totalBackpressure: 0,
+		pendingPackets:    make([]ahead_port.PacketWithCycle, 0),
 	}
 }
 
 // Process implements the LinkHandler interface for BufferedLinkHandler.
-func (h *BufferedLinkHandler) Process(l *Link, cycle int, incoming []packet.Packet) error {
+func (h *BufferedLinkHandler) Process(l *Link, cycle int, targetCycle int, incoming []packet.Packet) error {
 	// 1. Process pending packets (those that couldn't fit in the window or were delayed)
-	// These are stored in l.pendingPackets
-	currentPending := l.pendingPackets
-	l.pendingPackets = make([]ahead_port.PacketWithCycle, 0)
+	// These are stored in h.pendingPackets
+	currentPending := h.pendingPackets
+	h.pendingPackets = make([]ahead_port.PacketWithCycle, 0)
 
 	for _, pkt := range currentPending {
 		targetCycle := pkt.Cycle
@@ -61,7 +66,7 @@ func (h *BufferedLinkHandler) Process(l *Link, cycle int, incoming []packet.Pack
 		if h.CanAcceptPacket(cycle, targetCycle) {
 			h.AddToSlot(pkt, targetCycle)
 		} else {
-			l.pendingPackets = append(l.pendingPackets, pkt)
+			h.pendingPackets = append(h.pendingPackets, pkt)
 		}
 	}
 
@@ -75,7 +80,7 @@ func (h *BufferedLinkHandler) Process(l *Link, cycle int, incoming []packet.Pack
 			}
 			h.AddToSlot(pwc, targetCycle)
 		} else {
-			l.pendingPackets = append(l.pendingPackets, ahead_port.PacketWithCycle{
+			h.pendingPackets = append(h.pendingPackets, ahead_port.PacketWithCycle{
 				Cycle:  targetCycle,
 				Packet: pkt,
 			})
@@ -83,33 +88,38 @@ func (h *BufferedLinkHandler) Process(l *Link, cycle int, incoming []packet.Pack
 	}
 
 	// 3. Try to send packets from current slot to downstream
-	downstreamReady := true
-	if l.toDownstream != nil {
-		downstreamReady = l.toDownstream.IsReady(cycle)
-	}
+	// Only check readiness and attempt send if we actually have packets in the slot.
+	// This avoids blocking on IsReady for empty cycles (deadlock prevention)
+	// and is semantically correct (no data to send = no need for backpressure).
+	slot := h.GetSlot(cycle)
+	if len(slot) > 0 {
+		downstreamReady := true
+		if l.toDownstream != nil {
+			downstreamReady = l.toDownstream.IsReady(cycle)
+		}
 
-	if downstreamReady {
-		slot := h.GetSlot(cycle)
-		var pendingInSlot []ahead_port.PacketWithCycle
-		allSent := true
+		if downstreamReady {
+			var pendingInSlot []ahead_port.PacketWithCycle
+			allSent := true
 
-		for _, pwc := range slot {
-			if l.toDownstream != nil {
-				if !l.toDownstream.TrySend(cycle, pwc) {
-					pendingInSlot = append(pendingInSlot, pwc)
-					allSent = false
+			for _, pwc := range slot {
+				if l.toDownstream != nil {
+					if !l.toDownstream.TrySend(cycle, pwc) {
+						pendingInSlot = append(pendingInSlot, pwc)
+						allSent = false
+					}
 				}
 			}
-		}
 
-		if allSent {
-			h.ClearSlot(cycle)
+			if allSent {
+				h.ClearSlot(cycle)
+			} else {
+				h.UpdateSlot(cycle, pendingInSlot)
+				h.totalBackpressure++
+			}
 		} else {
-			h.UpdateSlot(cycle, pendingInSlot)
 			h.totalBackpressure++
 		}
-	} else {
-		h.totalBackpressure++
 	}
 
 	// 4. Update ready state for upstream (next cycle)
@@ -201,4 +211,14 @@ func (h *BufferedLinkHandler) IncrementBackpressure() {
 
 func (h *BufferedLinkHandler) CanSendPacket(cycle int, downstreamReady bool) bool {
 	return downstreamReady
+}
+
+// GetOccupancy returns the pending packet count per slot for buffered links.
+func (h *BufferedLinkHandler) GetOccupancy(currentCycle int) []int {
+	slots := h.GetSlots()
+	occupancy := make([]int, len(slots))
+	for i, slot := range slots {
+		occupancy[i] = len(slot)
+	}
+	return occupancy
 }
