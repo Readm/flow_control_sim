@@ -117,8 +117,15 @@ func (iq *InputQueue) Tick(cycle int) error {
 	// ===== 4. Update ready state for upstream =====
 	// Only signal Ready if we have enough space for a full bandwidth burst in the next cycle.
 	// This prevents overflow if the upstream component obeys the Ready signal.
-	hasCapacity := iq.Length()+iq.inBandwidth <= iq.capacity
-	iq.fromUpstream.UpdateReady(cycle+1, hasCapacity)
+	remainReadyCycle := (iq.capacity - iq.Length()) / iq.inBandwidth
+	switch remainReadyCycle {
+	case 0:
+		iq.fromUpstream.UpdateReady(cycle+1, false)
+	default:
+		for i := cycle + 1; i <= cycle+remainReadyCycle; i++ {
+			iq.fromUpstream.UpdateReady(i, true)
+		}
+	}
 
 	return nil
 }
