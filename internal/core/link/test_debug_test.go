@@ -37,7 +37,7 @@ func TestLinkBasicDebug(t *testing.T) {
 
 	fmt.Printf("After Send, Before Tick\n")
 
-	if err := link.Tick(100, 100); err != nil {
+	if err := link.Tick(2, 2); err != nil {
 		t.Fatalf("Tick failed: %v", err)
 	}
 

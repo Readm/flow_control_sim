@@ -88,38 +88,34 @@ func (h *BufferedLinkHandler) Process(l *Link, cycle int, targetCycle int, incom
 	}
 
 	// 3. Try to send packets from current slot to downstream
-	// Only check readiness and attempt send if we actually have packets in the slot.
-	// This avoids blocking on IsReady for empty cycles (deadlock prevention)
-	// and is semantically correct (no data to send = no need for backpressure).
-	slot := h.GetSlot(cycle)
-	if len(slot) > 0 {
-		downstreamReady := true
-		if l.toDownstream != nil {
-			downstreamReady = l.toDownstream.IsReady(cycle)
-		}
+	// Check downstream readiness first (this provides synchronization)
+	downstreamReady := true
+	if l.toDownstream != nil {
+		downstreamReady = l.toDownstream.IsReady(cycle)
+	}
 
-		if downstreamReady {
-			var pendingInSlot []ahead_port.PacketWithCycle
-			allSent := true
+	if downstreamReady {
+		slot := h.GetSlot(cycle)
+		var pendingInSlot []ahead_port.PacketWithCycle
+		allSent := true
 
-			for _, pwc := range slot {
-				if l.toDownstream != nil {
-					if !l.toDownstream.TrySend(cycle, pwc) {
-						pendingInSlot = append(pendingInSlot, pwc)
-						allSent = false
-					}
+		for _, pwc := range slot {
+			if l.toDownstream != nil {
+				if !l.toDownstream.TrySend(cycle, pwc) {
+					pendingInSlot = append(pendingInSlot, pwc)
+					allSent = false
 				}
 			}
+		}
 
-			if allSent {
-				h.ClearSlot(cycle)
-			} else {
-				h.UpdateSlot(cycle, pendingInSlot)
-				h.totalBackpressure++
-			}
+		if allSent {
+			h.ClearSlot(cycle)
 		} else {
+			h.UpdateSlot(cycle, pendingInSlot)
 			h.totalBackpressure++
 		}
+	} else {
+		h.totalBackpressure++
 	}
 
 	// 4. Update ready state for upstream (next cycle)

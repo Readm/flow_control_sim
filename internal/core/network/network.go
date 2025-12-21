@@ -409,6 +409,10 @@ func (n *Network) AdvanceTo(targetCycle int) error {
 			return err
 		}
 	}
+
+	// Update network's current cycle to reflect execution up to targetCycle
+	n.currentCycle = targetCycle + 1
+
 	debug.Logf("Network.AdvanceTo: completed successfully")
 	return nil
 }
