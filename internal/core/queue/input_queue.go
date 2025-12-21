@@ -23,9 +23,10 @@ type InputQueue struct {
 	blockReasons []uint                   // Block reason bitmap for each slot
 
 	// ===== Configuration parameters =====
-	capacity    int // Maximum number of packets that can be stored
-	inBandwidth int // Maximum packets per cycle that can be received
-	bitmapWidth int
+	capacity        int // Maximum number of packets that can be stored
+	inBandwidth     int // Maximum packets per cycle that can be received
+	bitmapWidth     int
+	nextUpdateCycle int
 
 	// ===== Synchronization for array operations =====
 	arrayMu sync.Mutex
@@ -49,6 +50,7 @@ func NewInputQueue(capacity int, inBandwidth int) *InputQueue {
 		capacity:         capacity,
 		inBandwidth:      inBandwidth,
 		bitmapWidth:      1,
+		nextUpdateCycle:  0,
 		slots:            make([]packet.PacketWithCycle, capacity),
 		freeBitmap:       make([]bool, capacity),
 		blockReasons:     make([]uint, capacity),
@@ -121,9 +123,11 @@ func (iq *InputQueue) Tick(cycle int) error {
 	switch remainReadyCycle {
 	case 0:
 		iq.fromUpstream.UpdateReady(cycle+1, false)
+		iq.nextUpdateCycle = cycle + 2
 	default:
-		for i := cycle + 1; i <= cycle+remainReadyCycle; i++ {
+		for i := iq.nextUpdateCycle; i <= cycle+remainReadyCycle; i++ {
 			iq.fromUpstream.UpdateReady(i, true)
+			iq.nextUpdateCycle = i + 1
 		}
 	}
 
