@@ -273,7 +273,7 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 			if outBandwidth <= 0 {
 				return fmt.Errorf("node %d output port %d: outBandwidth must be positive, got %d", nodeSchema.NodeID, i, outBandwidth)
 			}
-			oq := queue.NewOutputQueue(bufferSize, inBandwidth, outBandwidth)
+			oq := queue.NewOutputQueue(bufferSize, outBandwidth)
 			outputs = append(outputs, oq)
 			if err := newNode.AddOutputQueue(oq); err != nil {
 				return fmt.Errorf("failed to add output queue to node %d port %d: %w", nodeSchema.NodeID, i, err)

@@ -49,7 +49,7 @@ func BenchmarkNetworkScaling(b *testing.B) {
 			for i := 0; i < nodeCount; i++ {
 				n := node.NewWorkerNode(i)
 				input := queue.NewInputQueue(64, 1)
-				output := queue.NewOutputQueue(64, 1, 1)
+				output := queue.NewOutputQueue(64, 1)
 
 				if err := n.AddInputQueue(input); err != nil {
 					b.Fatalf("Node%d AddInputQueue: %v", i, err)
@@ -167,7 +167,7 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 			for i := 0; i < nodeCount; i++ {
 				n := node.NewWorkerNode(i)
 				input := queue.NewInputQueue(64, 1)
-				output := queue.NewOutputQueue(64, 1, 1)
+				output := queue.NewOutputQueue(64, 1)
 
 				if err := n.AddInputQueue(input); err != nil {
 					b.Fatalf("Node%d AddInputQueue: %v", i, err)
@@ -305,7 +305,7 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 			for i := 0; i < nodeCount; i++ {
 				n := node.NewWorkerNode(i)
 				input := queue.NewInputQueue(64, 1)
-				output := queue.NewOutputQueue(64, 1, 1)
+				output := queue.NewOutputQueue(64, 1)
 
 				if err := n.AddInputQueue(input); err != nil {
 					b.Fatalf("Node%d AddInputQueue: %v", i, err)

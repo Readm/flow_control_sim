@@ -62,7 +62,7 @@ func TestNetworkLargeRing50Nodes(t *testing.T) {
 				// IMPORTANT: OutputQueue bandwidth must match or be less than Link bandwidth
 				// to avoid overwhelming links. With Link bandwidth=1, use OutputQueue bandwidth=1
 				input := queue.NewInputQueue(64, 1)
-				output := queue.NewOutputQueue(64, 1, 1)
+				output := queue.NewOutputQueue(64, 1)
 
 				if err := n.AddInputQueue(input); err != nil {
 					t.Fatalf("Node%d AddInputQueue: %v", i, err)

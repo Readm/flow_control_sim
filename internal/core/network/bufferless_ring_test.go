@@ -36,8 +36,8 @@ func TestBufferlessRing_SinglePacket_v2(t *testing.T) {
 		router := node.NewBufferlessRingRouter(routerID, workerID, routerBuffer)
 		ringInQueue := queue.NewInputQueue(queueSize, queueBandwidth)
 		localInQueue := queue.NewInputQueue(queueSize, queueBandwidth)
-		ringOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		localOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
+		ringOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth)
+		localOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth)
 
 		router.AddInputQueue(ringInQueue)
 		router.AddInputQueue(localInQueue)
@@ -53,7 +53,7 @@ func TestBufferlessRing_SinglePacket_v2(t *testing.T) {
 		// Create worker with 1 input and 1 output
 		worker := node.NewWorkerNode(workerID)
 		workerInQueue := queue.NewInputQueue(queueSize, queueBandwidth)
-		workerOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
+		workerOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth)
 
 		worker.AddInputQueue(workerInQueue)
 		worker.AddOutputQueue(workerOutQueue)
@@ -179,8 +179,8 @@ func TestBufferlessRing_Concurrent_v2(t *testing.T) {
 		router := node.NewBufferlessRingRouter(routerID, workerID, routerBuffer)
 		riq := queue.NewInputQueue(queueSize, queueBandwidth)
 		liq := queue.NewInputQueue(queueSize, queueBandwidth)
-		roq := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		loq := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
+		roq := queue.NewOutputQueue(queueSize, queueBandwidth)
+		loq := queue.NewOutputQueue(queueSize, queueBandwidth)
 		router.AddInputQueue(riq)
 		router.AddInputQueue(liq)
 		router.AddOutputQueue(roq)
@@ -189,7 +189,7 @@ func TestBufferlessRing_Concurrent_v2(t *testing.T) {
 
 		worker := node.NewWorkerNode(workerID)
 		wiq := queue.NewInputQueue(queueSize, queueBandwidth)
-		woq := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
+		woq := queue.NewOutputQueue(queueSize, queueBandwidth)
 		worker.AddInputQueue(wiq)
 		worker.AddOutputQueue(woq)
 		workers[i] = &NodeHandle{Node: worker, Inputs: []*queue.InputQueue{wiq}, Outputs: []*queue.OutputQueue{woq}}
@@ -260,8 +260,8 @@ func TestBufferlessRing_Basic_v2(t *testing.T) {
 		router := node.NewBufferlessRingRouter(routerID, workerID, routerBuffer)
 		ringInQueue := queue.NewInputQueue(queueSize, queueBandwidth)
 		localInQueue := queue.NewInputQueue(queueSize, queueBandwidth)
-		ringOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		localOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
+		ringOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth)
+		localOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth)
 
 		router.AddInputQueue(ringInQueue)
 		router.AddInputQueue(localInQueue)
@@ -309,8 +309,8 @@ func TestBufferlessRing_TwoHops_v2(t *testing.T) {
 		router := node.NewBufferlessRingRouter(routerID, workerID, routerBuffer)
 		ringInQueue := queue.NewInputQueue(queueSize, queueBandwidth)
 		localInQueue := queue.NewInputQueue(queueSize, queueBandwidth)
-		ringOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
-		localOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
+		ringOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth)
+		localOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth)
 
 		router.AddInputQueue(ringInQueue)
 		router.AddInputQueue(localInQueue)
@@ -325,7 +325,7 @@ func TestBufferlessRing_TwoHops_v2(t *testing.T) {
 
 		worker := node.NewWorkerNode(workerID)
 		workerInQueue := queue.NewInputQueue(queueSize, queueBandwidth)
-		workerOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
+		workerOutQueue := queue.NewOutputQueue(queueSize, queueBandwidth)
 
 		worker.AddInputQueue(workerInQueue)
 		worker.AddOutputQueue(workerOutQueue)

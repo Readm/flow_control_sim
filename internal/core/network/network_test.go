@@ -261,7 +261,7 @@ func newTestNodeHandle(t *testing.T, id int, inputCount, outputCount int) (*Node
 	}
 
 	for i := 0; i < outputCount; i++ {
-		oq := queue.NewOutputQueue(8, 1, 1)
+		oq := queue.NewOutputQueue(8, 1)
 		outputs[i] = oq
 		if err := n.AddOutputQueue(oq); err != nil {
 			t.Fatalf("AddOutputQueue: %v", err)

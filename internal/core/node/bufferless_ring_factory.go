@@ -42,11 +42,11 @@ func NewBufferlessRing(nodeCount int, queueSize int, ringLatency int, queueBandw
 
 	for i := 0; i < nodeCount; i++ {
 		ringInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
-		ringOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
+		ringOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth)
 		localInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
-		localOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
+		localOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth)
 		workerInQueues[i] = queue.NewInputQueue(queueSize, queueBandwidth)
-		workerOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth, queueBandwidth)
+		workerOutQueues[i] = queue.NewOutputQueue(queueSize, queueBandwidth)
 	}
 
 	// Connect routers

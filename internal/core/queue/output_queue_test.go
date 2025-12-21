@@ -11,7 +11,7 @@ import (
 func TestNewOutputQueue(t *testing.T) {
 	t.Parallel()
 
-	oq := NewOutputQueue(10, 2, 3)
+	oq := NewOutputQueue(10, 3)
 	if oq == nil {
 		t.Fatal("NewOutputQueue returned nil")
 	}
@@ -33,7 +33,7 @@ func TestNewOutputQueue(t *testing.T) {
 func TestNewOutputQueueDefaults(t *testing.T) {
 	t.Parallel()
 
-	oq := NewOutputQueue(0, 1, 1)
+	oq := NewOutputQueue(0, 1)
 	if oq.Capacity() != 8 {
 		t.Fatalf("expected default capacity 8, got %d", oq.Capacity())
 	}
@@ -43,22 +43,13 @@ func TestNewOutputQueueDefaults(t *testing.T) {
 func TestNewOutputQueuePanics(t *testing.T) {
 	t.Parallel()
 
-	t.Run("zero_inBandwidth", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Fatal("expected panic with zero inBandwidth")
-			}
-		}()
-		NewOutputQueue(8, 0, 1)
-	})
-
 	t.Run("zero_outBandwidth", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r == nil {
 				t.Fatal("expected panic with zero outBandwidth")
 			}
 		}()
-		NewOutputQueue(8, 1, 0)
+		NewOutputQueue(8, 0)
 	})
 }
 
@@ -66,7 +57,7 @@ func TestNewOutputQueuePanics(t *testing.T) {
 func TestInjectPackets(t *testing.T) {
 	t.Parallel()
 
-	oq := NewOutputQueue(10, 2, 2)
+	oq := NewOutputQueue(10, 2)
 
 	packets := []packet.Packet{
 		{SourceID: 1, TargetID: 2, Payload: "packet1"},
@@ -88,7 +79,7 @@ func TestInjectPackets(t *testing.T) {
 func TestInjectPacketsOverflow(t *testing.T) {
 	t.Parallel()
 
-	oq := NewOutputQueue(3, 1, 1)
+	oq := NewOutputQueue(3, 1)
 
 	packets := make([]packet.Packet, 5)
 	for i := range packets {
@@ -100,9 +91,9 @@ func TestInjectPacketsOverflow(t *testing.T) {
 		t.Fatal("expected error when injecting more packets than capacity, got nil")
 	}
 
-	// Should only store up to capacity (3)
-	if oq.Length() != 3 {
-		t.Fatalf("expected length 3 (full capacity), got %d", oq.Length())
+	// Atomic injection: if it doesn't fit, NOTHING should be injected.
+	if oq.Length() != 0 {
+		t.Fatalf("expected length 0 (atomic failure), got %d", oq.Length())
 	}
 
 }
@@ -111,7 +102,7 @@ func TestInjectPacketsOverflow(t *testing.T) {
 func TestTickWithoutOutPort(t *testing.T) {
 	t.Parallel()
 
-	oq := NewOutputQueue(10, 1, 1)
+	oq := NewOutputQueue(10, 1)
 
 	packets := []packet.Packet{{SourceID: 1, TargetID: 2, Payload: "test"}}
 	oq.InjectPackets(0, packets)
@@ -132,7 +123,7 @@ func TestTickWithoutOutPort(t *testing.T) {
 func TestTickSendPackets(t *testing.T) {
 	t.Parallel()
 
-	oq := NewOutputQueue(10, 2, 2)
+	oq := NewOutputQueue(10, 2)
 
 	// Create downstream mock and connect
 	downstream := newMockDownstream()
@@ -177,7 +168,7 @@ func TestTickSendPackets(t *testing.T) {
 func TestTickRespectsBandwidth(t *testing.T) {
 	t.Parallel()
 
-	oq := NewOutputQueue(10, 2, 2) // outBandwidth = 2
+	oq := NewOutputQueue(10, 2) // outBandwidth = 2
 
 	// Create downstream mock and connect
 	downstream := newMockDownstream()
@@ -237,7 +228,7 @@ func TestTickRespectsBandwidth(t *testing.T) {
 func TestPacketSentHook(t *testing.T) {
 	t.Parallel()
 
-	oq := NewOutputQueue(10, 2, 2)
+	oq := NewOutputQueue(10, 2)
 
 	// Create downstream mock and connect
 	downstream := newMockDownstream()
@@ -279,7 +270,7 @@ func TestPacketSentHook(t *testing.T) {
 func TestOutputQueueIsFullCapacity(t *testing.T) {
 	t.Parallel()
 
-	oq := NewOutputQueue(3, 1, 1)
+	oq := NewOutputQueue(3, 1)
 
 	if oq.Capacity() != 3 {
 		t.Fatalf("expected capacity 3, got %d", oq.Capacity())

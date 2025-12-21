@@ -15,14 +15,17 @@ import (
 //
 // Design:
 // - Packets are injected via InjectPackets() by the Node
-// - Packets are stored in a simple array with capacity limit
-// - Tick() sends packets to downstream respecting bandwidth limits
+// - Packets are stored in a fixed-size ring buffer for zero-alloc operation
+// - Tick() sends packets to downstream respecting bandwidth limits using strict FIFO
 type OutputQueue struct {
 	// ===== Port reference (not owned) =====
 	toDownstream ahead_port.InPort // Send to downstream
 
-	// ===== Storage =====
-	slots    []packet.PacketWithCycle // Array storage for packets
+	// ===== Ring Buffer Storage =====
+	buffer   []packet.PacketWithCycle // Fixed size buffer
+	head     int                      // Read index
+	tail     int                      // Write index
+	count    int                      // Current item count
 	capacity int                      // Maximum capacity
 
 	// ===== Configuration parameters =====
@@ -34,21 +37,22 @@ type OutputQueue struct {
 
 // NewOutputQueue creates a new OutputQueue with the specified capacity and bandwidth.
 // Port must be set separately using SetDownstreamPort, or via Connect().
-func NewOutputQueue(capacity int, inBandwidth int, outBandwidth int) *OutputQueue {
+// Note: inBandwidth parameter has been removed as it was unused.
+func NewOutputQueue(capacity int, outBandwidth int) *OutputQueue {
 	if capacity <= 0 {
 		capacity = 8
-	}
-	if inBandwidth <= 0 {
-		panic("inBandwidth must be positive")
 	}
 	if outBandwidth <= 0 {
 		panic("outBandwidth must be positive")
 	}
 
 	return &OutputQueue{
-		slots:        make([]packet.PacketWithCycle, 0, capacity),
+		buffer:       make([]packet.PacketWithCycle, capacity),
 		capacity:     capacity,
 		outBandwidth: outBandwidth,
+		head:         0,
+		tail:         0,
+		count:        0,
 	}
 }
 
@@ -59,7 +63,7 @@ func (oq *OutputQueue) SetDownstreamPort(port ahead_port.InPort) {
 }
 
 // Tick sends up to outBandwidth packets to downstream.
-// This is dramatically simpler than the old implementation because Port handles all synchronization.
+// Implements strict FIFO sending with Head-of-Line blocking.
 func (oq *OutputQueue) Tick(cycle int) error {
 	// If no downstream connected, nothing to do
 	if oq.toDownstream == nil {
@@ -68,34 +72,36 @@ func (oq *OutputQueue) Tick(cycle int) error {
 
 	// ===== 1. Send up to outBandwidth packets =====
 	sent := 0
-	newSlots := make([]packet.PacketWithCycle, 0, len(oq.slots))
 
-	for _, pkt := range oq.slots {
-		if sent >= oq.outBandwidth {
-			// Reached bandwidth limit, keep remaining packets
-			newSlots = append(newSlots, pkt)
-			continue
-		}
+	// Loop as long as we have packets and haven't reached bandwidth limit
+	for sent < oq.outBandwidth && oq.count > 0 {
+		// Peek at the packet at head
+		pkt := oq.buffer[oq.head]
 
-		// Try to send packet
 		pwc := ahead_port.PacketWithCycle{
 			Cycle:  cycle,
 			Packet: pkt.Packet,
 		}
+
+		// Try to send packet
 		if oq.toDownstream.TrySend(cycle, pwc) {
+			// Success: Advance head, decrement count
+			oq.head = (oq.head + 1) % oq.capacity
+			oq.count--
 			sent++
+
 			if oq.onPacketSent != nil {
 				oq.onPacketSent(pkt.Packet)
 			}
 			debug.Logf("OutputQueue: Sent packet: Src=%d Dst=%d at cycle %d", pkt.Packet.SourceID, pkt.Packet.TargetID, cycle)
 		} else {
-			// Not ready, keep packet for next cycle
-			newSlots = append(newSlots, pkt)
+			// Failed: Downstream not ready.
+			// strict FIFO means we MUST STOP here. We cannot skip this packet to send others.
+			// Head remains at current position.
 			debug.Logf("OutputQueue: Downstream not ready, buffered packet: Src=%d Dst=%d at cycle %d", pkt.Packet.SourceID, pkt.Packet.TargetID, cycle)
+			break
 		}
 	}
-
-	oq.slots = newSlots
 
 	// ===== 2. Mark this cycle as done for downstream =====
 	oq.toDownstream.MarkDone(cycle)
@@ -104,27 +110,37 @@ func (oq *OutputQueue) Tick(cycle int) error {
 }
 
 // InjectPackets injects packets into the output queue for transmission.
+// Atomic operation: either all packets are injected, or none if capacity is insufficient.
 func (oq *OutputQueue) InjectPackets(cycle int, packets []packet.Packet) error {
+	if len(packets) == 0 {
+		return nil
+	}
+
+	// 1. Check capacity for ALL packets first
+	if oq.count+len(packets) > oq.capacity {
+		return fmt.Errorf("OutputQueue: capacity exceeded (%d + %d > %d), cannot inject %d packets",
+			oq.count, len(packets), oq.capacity, len(packets))
+	}
+
+	// 2. Inject all packets
 	for _, pkt := range packets {
-		if len(oq.slots) >= oq.capacity {
-			return fmt.Errorf("OutputQueue: capacity exceeded (%d/%d), cannot inject packet Src=%d Dst=%d",
-				len(oq.slots), oq.capacity, pkt.SourceID, pkt.TargetID)
-		}
-
 		debug.Logf("OutputQueue: Injected packet: Src=%d Dst=%d at cycle %d (queue: %d/%d)",
-			pkt.SourceID, pkt.TargetID, cycle, len(oq.slots)+1, oq.capacity)
+			pkt.SourceID, pkt.TargetID, cycle, oq.count+1, oq.capacity)
 
-		oq.slots = append(oq.slots, packet.PacketWithCycle{
+		oq.buffer[oq.tail] = packet.PacketWithCycle{
 			Cycle:  cycle,
 			Packet: pkt,
-		})
+		}
+		oq.tail = (oq.tail + 1) % oq.capacity
+		oq.count++
 	}
+
 	return nil
 }
 
 // Length returns the current number of packets in the queue.
 func (oq *OutputQueue) Length() int {
-	return len(oq.slots)
+	return oq.count
 }
 
 // Capacity returns the maximum capacity.
@@ -134,7 +150,7 @@ func (oq *OutputQueue) Capacity() int {
 
 // IsFull checks if the queue is at capacity.
 func (oq *OutputQueue) IsFull() bool {
-	return len(oq.slots) >= oq.capacity
+	return oq.count >= oq.capacity
 }
 
 // SetPacketSentHook configures a hook invoked when packets are sent.

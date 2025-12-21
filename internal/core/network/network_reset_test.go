@@ -617,25 +617,13 @@ func TestNewInputQueuePanicOnZeroBandwidth(t *testing.T) {
 func TestNewOutputQueuePanicOnZeroBandwidth(t *testing.T) {
 	t.Parallel()
 
-	// Test panic on zero inBandwidth
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatalf("Expected panic for zero inBandwidth, got none")
-		}
-	}()
-	queue.NewOutputQueue(8, 0, 4)
-}
-
-func TestNewOutputQueuePanicOnZeroOutBandwidth(t *testing.T) {
-	t.Parallel()
-
 	// Test panic on zero outBandwidth
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatalf("Expected panic for zero outBandwidth, got none")
 		}
 	}()
-	queue.NewOutputQueue(8, 4, 0)
+	queue.NewOutputQueue(8, 0)
 }
 
 func TestNetworkResetWithCacheAndDirectory(t *testing.T) {
