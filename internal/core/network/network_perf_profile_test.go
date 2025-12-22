@@ -4,6 +4,7 @@ import (
 	// Unused directly, but might be needed if I missed something. Wait, Node doesn't use it.
 	// But runtime.NumCPU is used.
 	// I'll remove "context" only.
+	"flag"
 	"fmt"
 	"runtime"
 	"sync/atomic"
@@ -13,6 +14,8 @@ import (
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
+
+var benchNodeCount = flag.Int("bench_nodes", 50, "Number of nodes for benchmark")
 
 // BenchmarkNetworkScaling tests network performance with different node counts.
 // This benchmark is designed for profiling with:
@@ -282,38 +285,23 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 //	go test -bench=BenchmarkRing50CoreScaling -benchmem ./internal/core/network
 func BenchmarkRing50CoreScaling(b *testing.B) {
 	const (
-		nodeCount      = 50
+		// nodeCount is now configurable via -bench_nodes
 		linkLatency    = 10
 		advanceCycles  = 1000
 		injectInterval = 3
-		maxSamples     = 8
 	)
+
+	nodeCount := *benchNodeCount
 
 	numCPU := runtime.NumCPU()
 
-	// Generate sample points from 1 to NumCPU (at most 8 points)
+	// Generate sample points: 1, 2, 4, 8... up to NumCPU
 	var coreCountSamples []int
-	if numCPU <= maxSamples {
-		// If we have 8 or fewer CPUs, test all of them
-		for i := 1; i <= numCPU; i++ {
-			coreCountSamples = append(coreCountSamples, i)
-		}
-	} else {
-		// Sample at most 8 points evenly distributed from 1 to NumCPU
-		// Always include 1 and NumCPU
-		step := float64(numCPU-1) / float64(maxSamples-1)
-		for i := 0; i < maxSamples; i++ {
-			coreCount := int(1 + float64(i)*step + 0.5) // Round to nearest
-			// Avoid duplicates
-			if len(coreCountSamples) == 0 || coreCountSamples[len(coreCountSamples)-1] != coreCount {
-				coreCountSamples = append(coreCountSamples, coreCount)
-			}
-		}
-		// Ensure we include NumCPU
-		if coreCountSamples[len(coreCountSamples)-1] != numCPU {
-			coreCountSamples[len(coreCountSamples)-1] = numCPU
-		}
+	for i := 1; i < numCPU; i *= 2 {
+		coreCountSamples = append(coreCountSamples, i)
 	}
+	// Ensure we include NumCPU (if not already included by power of 2)
+	coreCountSamples = append(coreCountSamples, numCPU)
 
 	b.Logf("Testing with core counts: %v (NumCPU=%d)", coreCountSamples, numCPU)
 
@@ -460,7 +448,8 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 			// Calculate expected metrics
 			// Since we inject continuously, the network has packets "in flight" that haven't arrived yet.
 			// The number of in-flight packets is roughly: ringLatency / injectInterval
-			ringLatency := nodeCount * linkLatency
+			// Path is 0->1->...->N-1, so latency is (nodeCount-1) hops
+			ringLatency := (nodeCount - 1) * linkLatency
 			inFlightPackets := int64(ringLatency / injectInterval)
 
 			// Expected received is total injected minus those still in flight

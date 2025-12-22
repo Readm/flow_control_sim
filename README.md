@@ -53,6 +53,12 @@ go test ./...
 
 # 运行性能测试
 go test -bench=. ./internal/core/network/...
+
+# 运行核心扩展性基准测试（自定义节点数）
+# -bench: 指定测试函数
+# -run=^$: 跳过普通单元测试
+# -args -bench_nodes=N: 指定网络节点数量（默认50）
+go test -bench=BenchmarkRing50CoreScaling -run=^$ ./internal/core/network -args -bench_nodes=100
 ```
 
 ## 项目结构
