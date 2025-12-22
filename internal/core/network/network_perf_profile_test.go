@@ -285,13 +285,21 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 //	go test -bench=BenchmarkRing50CoreScaling -benchmem ./internal/core/network
 func BenchmarkRing50CoreScaling(b *testing.B) {
 	const (
-		// nodeCount is now configurable via -bench_nodes
 		linkLatency    = 10
-		advanceCycles  = 1000
 		injectInterval = 3
 	)
 
 	nodeCount := *benchNodeCount
+
+	// Calculate ring latency: path from Node 0 to Node N-1 is (N-1) hops
+	ringLatency := (nodeCount - 1) * linkLatency
+
+	// Ensure advanceCycles is large enough to allow at least some packets to arrive
+	// We want to capture steady state, so let's make it at least 2x latency or 1000, whichever is larger
+	advanceCycles := 1000
+	if ringLatency*2 > advanceCycles {
+		advanceCycles = ringLatency * 2
+	}
 
 	numCPU := runtime.NumCPU()
 
@@ -429,6 +437,12 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 			})
 
 			// Reset timer before actual benchmark
+			// Warmup phase: run for ringLatency to fill the pipeline
+			if err := net.AdvanceTo(net.CurrentCycle() + ringLatency + 100); err != nil {
+				b.Fatalf("Warmup Advance failed: %v", err)
+			}
+
+			// Reset timer before actual benchmark
 			b.ResetTimer()
 
 			// Run benchmark
@@ -448,8 +462,7 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 			// Calculate expected metrics
 			// Since we inject continuously, the network has packets "in flight" that haven't arrived yet.
 			// The number of in-flight packets is roughly: ringLatency / injectInterval
-			// Path is 0->1->...->N-1, so latency is (nodeCount-1) hops
-			ringLatency := (nodeCount - 1) * linkLatency
+			// ringLatency is calculated at the beginning of the function
 			inFlightPackets := int64(ringLatency / injectInterval)
 
 			// Expected received is total injected minus those still in flight
