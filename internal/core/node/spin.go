@@ -13,6 +13,7 @@ func SpinWaitCycles(cycles uint64) {
 		if GetCPUCycles()-start >= cycles {
 			break
 		}
+		Pause()
 	}
 }
 

@@ -25,3 +25,8 @@ TEXT ·GetCPUCycles(SB), NOSPLIT, $0-8
     ORQ     DX, AX
     MOVQ    AX, ret+0(FP)
     RET
+
+// func Pause()
+TEXT ·Pause(SB), NOSPLIT, $0
+    PAUSE
+    RET
