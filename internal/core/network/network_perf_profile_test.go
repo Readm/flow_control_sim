@@ -278,12 +278,12 @@ func BenchmarkNetworkScalingMultiCore(b *testing.B) {
 	}
 }
 
-// BenchmarkRing50CoreScaling benchmarks a 50-node ring network with varying CPU core counts.
-// This scans from 1 to NumCPU cores, sampling at most 8 points.
+// BenchmarkRingCoreScaling benchmarks a ring network with varying CPU core counts.
+// It uses a configurable number of nodes (default 50) and scales cores from 1 to NumCPU.
 // Usage:
 //
-//	go test -bench=BenchmarkRing50CoreScaling -benchmem ./internal/core/network
-func BenchmarkRing50CoreScaling(b *testing.B) {
+//	go test -bench=BenchmarkRingCoreScaling -benchmem ./internal/core/network
+func BenchmarkRingCoreScaling(b *testing.B) {
 	const (
 		linkLatency    = 10
 		injectInterval = 3
@@ -310,6 +310,10 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 	}
 	// Ensure we include NumCPU (if not already included by power of 2)
 	coreCountSamples = append(coreCountSamples, numCPU)
+	// Remove duplicates if any (e.g. if numCPU is power of 2)
+	if len(coreCountSamples) > 1 && coreCountSamples[len(coreCountSamples)-1] == coreCountSamples[len(coreCountSamples)-2] {
+		coreCountSamples = coreCountSamples[:len(coreCountSamples)-1]
+	}
 
 	b.Logf("Testing with core counts: %v (NumCPU=%d)", coreCountSamples, numCPU)
 
@@ -452,7 +456,7 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 				}
 			}
 
-			// Stop timer for validation
+			// Stop timer for validation and metrics
 			b.StopTimer()
 
 			// Functional correctness validation
@@ -496,10 +500,33 @@ func BenchmarkRing50CoreScaling(b *testing.B) {
 				b.Logf("Warning: Received count %.1f%% higher than expected (maybe timing jitter?)", ratio*100)
 			}
 
+			// Calculate efficiency metrics
+			// 1. Total simulated work (SpinWait time) per op (ns)
+			//    Each Op is 'advanceCycles' cycles.
+			//    Every cycle, 'nodeCount' nodes call SpinWait(5, 20).
+			//    Average SpinWait is 12us = 12000ns.
+			const avgSpinNs = 12000
+			simWorkPerOpNs := float64(nodeCount) * float64(advanceCycles) * float64(avgSpinNs)
+
+			// 2. Ideal wall time per op if perfectly parallelized on 'coreCount' cores (ns)
+			simWorkPerCoreNs := simWorkPerOpNs / float64(coreCount)
+
+			// 3. Actual wall time per op (ns)
+			actualNsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+
+			// 4. Efficiency: Efficiency % = (Ideal Time / Actual Time) * 100
+			efficiencyPct := 0.0
+			if actualNsPerOp > 0 {
+				efficiencyPct = (simWorkPerCoreNs / actualNsPerOp) * 100
+			}
+
 			// Report additional stats after validation
 			b.ReportMetric(float64(injected), "packets_injected")
-			b.ReportMetric(float64(received), "packets_received")
+			// b.ReportMetric(float64(received), "packets_received") // Removed as requested
 			b.ReportMetric(ratio*100, "reception_rate_pct")
+			b.ReportMetric(simWorkPerOpNs, "sim_work_ns/op")
+			b.ReportMetric(simWorkPerCoreNs, "sim_work_per_core_ns/op")
+			b.ReportMetric(efficiencyPct, "efficiency_pct")
 		})
 	}
 }
