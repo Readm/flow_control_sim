@@ -6,9 +6,11 @@ import (
 	// I'll remove "context" only.
 	"flag"
 	"fmt"
+	"math/rand"
 	"runtime"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -315,6 +317,18 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 		coreCountSamples = coreCountSamples[:len(coreCountSamples)-1]
 	}
 
+	// Calibrate CPU cycles per microsecond to map 5-20us to cycles
+	// Sample for 100ms
+	cyclesPerUS := node.CalibrateCyclesPerUS(100 * time.Millisecond)
+	b.Logf("Calibrated CPU Frequency: %.2f cycles/us (%.2f GHz)", cyclesPerUS, cyclesPerUS/1000.0)
+
+	// Calculate min/max cycles for 5-20us spin
+	minSpinCycles := int(5.0 * cyclesPerUS)
+	maxSpinCycles := int(20.0 * cyclesPerUS)
+	// Average of 5 and 20 (uniform distribution [5, 20)) is 12.5
+	avgSpinCycles := uint64(12.5 * cyclesPerUS)
+
+	b.Logf("SpinWait parameters: [%d, %d) cycles, avg %d cycles", minSpinCycles, maxSpinCycles, avgSpinCycles)
 	b.Logf("Testing with core counts: %v (NumCPU=%d)", coreCountSamples, numCPU)
 
 	for _, coreCount := range coreCountSamples {
@@ -363,7 +377,11 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 				output := allOutputs[i]
 				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 					// Each node execution simulates GEM5 O3 CPU core processing
-					node.SpinWait(5, 20)
+					cycles := minSpinCycles
+					if maxSpinCycles > minSpinCycles {
+						cycles += rand.Intn(maxSpinCycles - minSpinCycles)
+					}
+					node.SpinWaitCycles(uint64(cycles))
 
 					var buffer []packet.Packet
 					for _, q := range inputs {
@@ -396,7 +414,11 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 			var injectedCount int64
 			nodeHandles[0].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 				// Each node execution simulates GEM5 O3 CPU core processing
-				node.SpinWait(5, 20)
+				cycles := minSpinCycles
+				if maxSpinCycles > minSpinCycles {
+					cycles += rand.Intn(maxSpinCycles - minSpinCycles)
+				}
+				node.SpinWaitCycles(uint64(cycles))
 
 				// Drop any incoming packets (break the ring at Node0)
 				for _, q := range inputs {
@@ -430,7 +452,11 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 			// Last node should NOT forward (drop packets)
 			nodeHandles[lastNodeIndex].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 				// Each node execution simulates GEM5 O3 CPU core processing
-				node.SpinWait(5, 20)
+				cycles := minSpinCycles
+				if maxSpinCycles > minSpinCycles {
+					cycles += rand.Intn(maxSpinCycles - minSpinCycles)
+				}
+				node.SpinWaitCycles(uint64(cycles))
 				// Drop all packets by not forwarding them, but free them from queue
 				for _, q := range inputs {
 					for _, ref := range q {
@@ -449,12 +475,16 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 			// Reset timer before actual benchmark
 			b.ResetTimer()
 
+			startTotalCycles := node.GetCPUCycles()
+
 			// Run benchmark
 			for i := 0; i < b.N; i++ {
 				if err := net.AdvanceTo(net.CurrentCycle() + advanceCycles - 1); err != nil {
 					b.Fatalf("Advance failed: %v", err)
 				}
 			}
+
+			endTotalCycles := node.GetCPUCycles()
 
 			// Stop timer for validation and metrics
 			b.StopTimer()
@@ -500,32 +530,32 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 				b.Logf("Warning: Received count %.1f%% higher than expected (maybe timing jitter?)", ratio*100)
 			}
 
-			// Calculate efficiency metrics
-			// 1. Total simulated work (SpinWait time) per op (ns)
+			// Calculate efficiency metrics using CYCLES
+			// 1. Total simulated work (SpinWait cycles) per op
 			//    Each Op is 'advanceCycles' cycles.
-			//    Every cycle, 'nodeCount' nodes call SpinWait(5, 20).
-			//    Average SpinWait is 12us = 12000ns.
-			const avgSpinNs = 12000
-			simWorkPerOpNs := float64(nodeCount) * float64(advanceCycles) * float64(avgSpinNs)
+			//    Every cycle, 'nodeCount' nodes call SpinWaitCycles with ~avgSpinCycles.
+			simWorkPerOpCycles := float64(nodeCount) * float64(advanceCycles) * float64(avgSpinCycles)
 
-			// 2. Ideal wall time per op if perfectly parallelized on 'coreCount' cores (ns)
-			simWorkPerCoreNs := simWorkPerOpNs / float64(coreCount)
+			// 2. Ideal cycles per op if perfectly parallelized on 'coreCount' cores
+			simWorkPerCoreCycles := simWorkPerOpCycles / float64(coreCount)
 
-			// 3. Actual wall time per op (ns)
-			actualNsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+			// 3. Actual cycles per op
+			//    We use the RDTSC difference measured around the loop.
+			totalActualCycles := float64(endTotalCycles - startTotalCycles)
+			actualCyclesPerOp := totalActualCycles / float64(b.N)
 
-			// 4. Efficiency: Efficiency % = (Ideal Time / Actual Time) * 100
+			// 4. Efficiency: Efficiency % = (Ideal Cycles / Actual Cycles) * 100
 			efficiencyPct := 0.0
-			if actualNsPerOp > 0 {
-				efficiencyPct = (simWorkPerCoreNs / actualNsPerOp) * 100
+			if actualCyclesPerOp > 0 {
+				efficiencyPct = (simWorkPerCoreCycles / actualCyclesPerOp) * 100
 			}
 
 			// Report additional stats after validation
 			b.ReportMetric(float64(injected), "packets_injected")
 			// b.ReportMetric(float64(received), "packets_received") // Removed as requested
 			b.ReportMetric(ratio*100, "reception_rate_pct")
-			b.ReportMetric(simWorkPerOpNs, "sim_work_ns/op")
-			b.ReportMetric(simWorkPerCoreNs, "sim_work_per_core_ns/op")
+			b.ReportMetric(simWorkPerOpCycles, "sim_work_cycles/op")
+			b.ReportMetric(simWorkPerCoreCycles, "sim_cycles_per_core_op")
 			b.ReportMetric(efficiencyPct, "efficiency_pct")
 		})
 	}
