@@ -554,8 +554,9 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 			b.ReportMetric(float64(injected), "packets_injected")
 			// b.ReportMetric(float64(received), "packets_received") // Removed as requested
 			b.ReportMetric(ratio*100, "reception_rate_pct")
-			b.ReportMetric(simWorkPerOpCycles, "sim_work_cycles/op")
-			b.ReportMetric(simWorkPerCoreCycles, "sim_cycles_per_core_op")
+			b.ReportMetric(simWorkPerOpCycles, "ideal_sim_work_cycles/op")
+			b.ReportMetric(simWorkPerCoreCycles, "ideal_cycles_per_core_op")
+			b.ReportMetric(actualCyclesPerOp, "actual_cycles/op")
 			b.ReportMetric(efficiencyPct, "efficiency_pct")
 		})
 	}
