@@ -4,11 +4,11 @@
 
 ## 特性
 
-- **周期精确模拟**: 精确模拟每个时钟周期的网络行为
-- **灵活拓扑**: 支持Ring、Mesh等多种网络拓扑
-- **缓存一致性**: 支持MESI等缓存一致性协议模拟
-- **高性能**: 优化的同步并行执行模型
-- **可视化**: Web界面实时查看网络状态
+- **周期精确模拟**: 精确模拟每个时钟周期的网络行为。
+- **灵活拓扑**: 支持 Ring、Mesh 等多种网络拓扑。
+- **同步模型**: 采用 `AheadPort` 进行高效的异步同步调度，保证确定的执行顺序。
+- **高性能**: 优化的 Go 语言并发模型，支持并行执行节点更新。
+- **可视化**: 提供 Web 界面实时查看网络状态和数据流变化。
 
 ## 快速开始
 
@@ -20,110 +20,66 @@ go get github.com/Readm/flow_sim
 
 ### 基本使用
 
+目前的 API 采用 `Network` 管理所有节点和链路。以下是一个简单的示例：
+
 ```go
-import "github.com/Readm/flow_sim/internal/core/network"
+import (
+    "github.com/Readm/flow_sim/internal/core/network"
+    "github.com/Readm/flow_sim/internal/core/node"
+)
 
 // 创建网络
-net := network.NewNetwork()
+net := network.New()
 
-// 添加节点和链路
-node0 := net.AddNode(queue.NewInputQueue(...), queue.NewOutputQueue(...))
-node1 := net.AddNode(queue.NewInputQueue(...), queue.NewOutputQueue(...))
-link := net.AddLink(10, 1) // latency=10, bandwidth=1
+// 添加节点 (使用 NodeHandle 注册)
+handle0 := &network.NodeHandle{
+    Node: node.NewWorkerNode(0, ...),
+}
+net.AddNode(handle0)
 
-// 连接节点
-net.Connect(node0.Output(0), link.Input())
-net.Connect(link.Output(), node1.Input(0))
+// 连接节点 (自动创建 AheadPort 链路)
+// 连接 node0 的 out_port 0 到 node1 的 in_port 0
+net.Connect(0, 0, 1, 0) // srcNode, srcPort, dstNode, dstPort
 
 // 运行模拟
-net.Advance(1000) // 运行1000个周期
+net.AdvanceTo(1000) // 运行至 1000 个周期
 ```
 
 ### 运行测试
 
 ```bash
 # 运行所有测试
-go test -timeout=3s ./...
-
-# 运行性能测试
-cd internal/core/network/perf_analysis
-./run_analysis.sh
-```
-
-## 编译选项
-
-### Queue处理模式
-
-项目支持两种Queue处理模式，通过build tag控制：
-
-```bash
-# 默认: 同步串行处理（推荐，性能最优）
-go build ./...
 go test ./...
 
-# 异步并发处理（仅用于对比测试）
-go build -tags async ./...
-go test -tags async ./...
-```
-
-**性能对比**: 默认同步模式比异步模式快50-100%。
-
-### Debug模式
-
-```bash
-# 启用调试日志
-go build -tags debug ./...
+# 运行性能测试
+go test -bench=. ./internal/core/network/...
 ```
 
 ## 项目结构
 
 ```
 flow_sim/
-├── internal/core/
-│   ├── network/        # 网络模拟核心
-│   ├── node/           # 节点实现
-│   ├── link/           # 链路实现
-│   ├── queue/          # 队列实现
-│   ├── packet/         # 数据包定义
-│   └── cache/          # 缓存一致性
-├── configs/            # 配置文件
-├── web/                # Web可视化
-└── tools/              # 工具脚本
+├── internal/
+│   ├── core/
+│   │   ├── network/        # 网络拓扑管理与调度中心
+│   │   ├── node/           # 节点（Router, Processor）实现
+│   │   ├── link/           # 链路逻辑处理
+│   │   ├── ahead_port/     # 核心异步同步端口实现 (InPort, OutPort)
+│   │   ├── queue/          # 输入/输出队列实现
+│   │   └── capability/     # Cache 一致性、目录等扩展功能
+│   └── dataflow/           # 数据包 (Packet)、事务 (Transaction) 定义
+├── configs/                # JSON 拓扑配置文件
+├── web/                    # 基于 React 的 Web 可视化前端
+├── scripts/                # 自动化测试与分析脚本
+└── docs/                   # 结构化文档目录
 ```
 
-## 性能分析
+## 文档指引
 
-项目内置自动化性能分析工具：
-
-```bash
-cd internal/core/network/perf_analysis
-./run_analysis.sh
-```
-
-生成报告包括：
-- 基准测试结果
-- CPU profiling
-- Mutex contention分析
-- 性能可视化图表
-
-详见 [性能分析文档](internal/core/network/perf_analysis/README.md)
-
-## 配置
-
-测试配置遵循以下约定：
-- 所有 `go test` 使用 `-timeout=3s` 避免挂起
-- 节点延迟参考GEM5 O3CPU速度（2-20μs）
-- Link bandwidth默认为1（用于压力测试）
-
-## 开发
-
-### 添加新的网络拓扑
-
-参考 `internal/core/network/network_test.go` 中的示例。
-
-### 添加新的缓存一致性协议
-
-实现 `internal/core/cache/coherence.go` 中定义的接口。
+- [架构概览](docs/architecture/arch.md)
+- [AheadPort 设计详解](docs/design/ahead_port.md)
+- [Port API 重构说明](docs/design/port_api_redesign.md)
+- [性能分析报告](docs/dev/performance_analysis.md)
 
 ## License
 
