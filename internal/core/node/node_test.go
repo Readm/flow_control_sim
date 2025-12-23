@@ -2,9 +2,11 @@ package node
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/capability/cache"
 	"github.com/Readm/flow_sim/internal/core/capability/directory"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -251,9 +253,10 @@ func (m *mockOutputQueue) Tick(int) error {
 	return m.tickErr
 }
 
-func (m *mockOutputQueue) Length() int   { return 0 }
-func (m *mockOutputQueue) Capacity() int { return 0 }
-func (m *mockOutputQueue) IsFull() bool  { return false }
+func (m *mockOutputQueue) Length() int       { return 0 }
+func (m *mockOutputQueue) Capacity() int     { return 0 }
+func (m *mockOutputQueue) IsFull() bool      { return false }
+func (m *mockOutputQueue) OutBandwidth() int { return 1 }
 
 type fakeCache struct{ cache.Cache }
 
@@ -313,4 +316,148 @@ func TestNodeDataMap(t *testing.T) {
 	if !n.HasData("key1") || !n.HasData("key2") || !n.HasData("key3") {
 		t.Error("expected all keys to be present")
 	}
+}
+
+// Mock port for testing OutQueue behavior
+type smartMockPort struct {
+	mu      sync.Mutex
+	history []struct {
+		Cycle int
+		Pkt   packet.Packet
+	}
+	readyMap map[int]bool
+}
+
+func newSmartMockPort() *smartMockPort {
+	return &smartMockPort{
+		readyMap: make(map[int]bool),
+		history: make([]struct {
+			Cycle int
+			Pkt   packet.Packet
+		}, 0),
+	}
+}
+
+func (m *smartMockPort) TrySend(cycle int, pwc ahead_port.PacketWithCycle) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if ready, ok := m.readyMap[cycle]; ok && !ready {
+		return false
+	}
+
+	m.history = append(m.history, struct {
+		Cycle int
+		Pkt   packet.Packet
+	}{cycle, pwc.Packet})
+	return true
+}
+
+func (m *smartMockPort) MarkDone(cycle int)               {}
+func (m *smartMockPort) PeekReady(cycle int) (bool, bool) { return true, true }
+func (m *smartMockPort) IsReady(cycle int) bool           { return true }
+
+func TestNode_OutQueueOptimization(t *testing.T) {
+	t.Parallel()
+
+	// Scenario 1: Optimization Triggered (Length >= Bandwidth)
+	t.Run("OptimizationTriggered", func(t *testing.T) {
+		// Node setup
+		n := NewTestNode(100)
+
+		// Create REAL OutputQueue properly configured
+		// Capacity 20, Bandwidth 2
+		oq := queue.NewOutputQueue(20, 2)
+		mockPort := newSmartMockPort()
+		oq.SetDownstreamPort(mockPort)
+
+		n.AddOutputQueue(oq)
+
+		// Inject 10 packets (Should take 5 ticks: 0, 1, 2, 3, 4)
+		pkts := make([]packet.Packet, 10)
+		for i := 0; i < 10; i++ {
+			pkts[i] = CreatePacket(1, 2, fmt.Sprintf("p%d", i))
+		}
+
+		// Manually inject (bypassing Process for simplicity, simulating Process done)
+		// Inject into OutQueue at cycle 0
+		if err := oq.InjectPackets(0, pkts); err != nil {
+			t.Fatalf("InjectPackets failed: %v", err)
+		}
+
+		// AdvanceTo target 10.
+		// Current cycle is 0.
+		// It should process cycle 0 (sends 2), then optimized ahead loop should run for 1, 2, 3, 4.
+		// Since 10 packets / 2 BW = 5 cycles.
+		// Cycle 0: 2 packets. Rem 8.
+		// Cycle 1: 2 packets. Rem 6.
+		// ...
+		// Cycle 4: 2 packets. Rem 0.
+		if err := n.AdvanceTo(10); err != nil {
+			t.Fatalf("AdvanceTo failed: %v", err)
+		}
+
+		mockPort.mu.Lock()
+		defer mockPort.mu.Unlock()
+
+		if len(mockPort.history) != 10 {
+			t.Errorf("Expected 10 packets, got %d", len(mockPort.history))
+		}
+
+		// Check cycles
+		// Cycle 0: p0, p1
+		// Cycle 1: p2, p3
+		// ...
+		cycleCounts := make(map[int]int)
+		for _, item := range mockPort.history {
+			cycleCounts[item.Cycle]++
+		}
+
+		for c := 0; c < 5; c++ {
+			if count := cycleCounts[c]; count != 2 {
+				t.Errorf("Cycle %d expected 2 packets, got %d", c, count)
+			}
+		}
+	})
+
+	// Scenario 2: Optimization Skipped (Length < Bandwidth)
+	t.Run("OptimizationSkipped", func(t *testing.T) {
+		n := NewTestNode(200)
+		// High bandwidth: 10
+		oq := queue.NewOutputQueue(20, 10)
+		mockPort := newSmartMockPort()
+		oq.SetDownstreamPort(mockPort)
+		n.AddOutputQueue(oq)
+
+		// Inject 5 packets (Less than BW)
+		pkts := make([]packet.Packet, 5)
+		for i := 0; i < 5; i++ {
+			pkts[i] = CreatePacket(1, 2, fmt.Sprintf("p%d", i))
+		}
+		oq.InjectPackets(0, pkts)
+
+		// Cycle 0: Sends 5. Rem 0.
+		// AdvanceTo 5.
+		// It should send all 5 in Cycle 0.
+		// Cycle 1: Length 0 < BW 10. Stop optimization?
+		// Actually if Length 0, Tick does nothing anyway.
+
+		if err := n.AdvanceTo(5); err != nil {
+			t.Fatalf("AdvanceTo failed: %v", err)
+		}
+
+		mockPort.mu.Lock()
+		defer mockPort.mu.Unlock()
+
+		if len(mockPort.history) != 5 {
+			t.Errorf("Expected 5 packets, got %d", len(mockPort.history))
+		}
+
+		// All in cycle 0
+		for _, item := range mockPort.history {
+			if item.Cycle != 0 {
+				t.Errorf("Packet sent at cycle %d, expected 0", item.Cycle)
+			}
+		}
+	})
 }

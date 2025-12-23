@@ -71,6 +71,7 @@ type OutputQueue interface {
 	Capacity() int
 	IsFull() bool
 	InjectPackets(cycle int, packets []packet.Packet) error
+	OutBandwidth() int
 }
 
 // NodeHandler defines the interface that specific node implementations must satisfy.
@@ -110,22 +111,25 @@ type BaseNode struct {
 	// Handler reference (for polymorphic behavior)
 	handler NodeHandler
 
-	currentCycle uint64
+	currentCycle     uint64
+	advanceTarget    uint64   // Target cycle for current AdvanceTo
+	outputQueueAhead []uint64 // Next cycle to tick for each output queue
 }
 
 // NewBaseNode creates a new BaseNode.
 func NewBaseNode(id int, handler NodeHandler) *BaseNode {
 	return &BaseNode{
-		id:           id,
-		inputs:       make([]InputQueue, 0),
-		outputs:      make([]OutputQueue, 0),
-		inputBuffer:  make([][]queue.PacketRef, 0),
-		inputValues:  make([][]queue.PacketRef, 0),
-		caches:       make([]cache.Cache, 0),
-		directories:  make([]directory.Directory, 0),
-		data:         make(map[string]interface{}),
-		handler:      handler,
-		currentCycle: 0,
+		id:               id,
+		inputs:           make([]InputQueue, 0),
+		outputs:          make([]OutputQueue, 0),
+		inputBuffer:      make([][]queue.PacketRef, 0),
+		inputValues:      make([][]queue.PacketRef, 0),
+		caches:           make([]cache.Cache, 0),
+		directories:      make([]directory.Directory, 0),
+		data:             make(map[string]interface{}),
+		handler:          handler,
+		currentCycle:     0,
+		outputQueueAhead: make([]uint64, 0),
 	}
 }
 
@@ -183,6 +187,7 @@ func (n *BaseNode) AddOutputQueue(q OutputQueue) error {
 		return errors.New("output queue cannot be nil")
 	}
 	n.outputs = append(n.outputs, q)
+	n.outputQueueAhead = append(n.outputQueueAhead, 0) // Initialize with 0 (will be corrected to currentCycle on use)
 	return nil
 }
 
@@ -297,9 +302,47 @@ func (n *BaseNode) tickInputQueues(cycle uint64) error {
 
 // tickOutputQueues ticks all output queues.
 func (n *BaseNode) tickOutputQueues(cycle uint64) error {
-	for _, output := range n.outputs {
-		if err := output.Tick(int(cycle)); err != nil {
-			return err
+	for i, output := range n.outputs {
+		// Optimization: Tick ahead if possible
+		// We can tick ahead if:
+		// 1. We are within the AdvanceTo window (cycle <= advanceTarget)
+		// 2. We have packets to send AND sufficient volume to justify it (Length >= Bandwidth)
+		// OR
+		// 3. It is the CURRENT cycle (we must always tick the current cycle to ensure progress)
+
+		// Determine the start cycle for this queue.
+		// It should be at least the current global cycle, but might be further ahead if we already ticked it.
+		startCycle := cycle
+		if i < len(n.outputQueueAhead) && n.outputQueueAhead[i] > startCycle {
+			startCycle = n.outputQueueAhead[i]
+		}
+
+		// Iterate from startCycle up to advanceTarget
+		// We use a loop to potentially tick multiple cycles in one go.
+		curr := startCycle
+		for curr <= n.advanceTarget {
+			isFuture := curr > cycle
+			// Policy:
+			// - If curr == cycle (Current Real Cycle): MUST Tick.
+			// - If curr > cycle (Future):
+			//   - ONLY Tick if Queue.Length >= OutBandwidth.
+			//   - Rationale: If Length < BW, we might produce fragments. Better to wait for new packets
+			//     that might arrive in future Process() calls to fill the bandwidth.
+			if isFuture {
+				if output.Length() < output.OutBandwidth() {
+					break // Stop optimization
+				}
+			}
+
+			if err := output.Tick(int(curr)); err != nil {
+				return err
+			}
+
+			curr++
+			// Update the ahead tracker
+			if i < len(n.outputQueueAhead) {
+				n.outputQueueAhead[i] = curr
+			}
 		}
 	}
 	return nil
@@ -319,6 +362,8 @@ func (n *BaseNode) AdvanceTo(targetCycle int) error {
 	// Plan said: "Link.AdvanceTo: loop from current to target (inclusive)"
 	// Implementation in Link was: for cycle := l.currentCycle; cycle <= targetCycle; cycle++
 	// So Node should do the same.
+
+	n.advanceTarget = uint64(targetCycle)
 
 	for cycle := n.currentCycle; int(cycle) <= targetCycle; cycle++ {
 		debug.Logf("Node.AdvanceTo: node=%d, executing cycle=%d", n.id, cycle)

@@ -170,3 +170,8 @@ func (oq *OutputQueue) GetVisualState() string {
 
 	return ""
 }
+
+// OutBandwidth returns the configured output bandwidth (packets per cycle).
+func (oq *OutputQueue) OutBandwidth() int {
+	return oq.outBandwidth
+}
