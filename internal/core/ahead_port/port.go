@@ -137,35 +137,61 @@ func (p *Port) MarkDone(cycle int) {
 
 // Receive retrieves all packets for the specified cycle from the upstream component.
 // This is now a blocking call that ensures all packets for the cycle are collected.
+// Receive retrieves all packets for the specified cycle from the upstream component.
+// This is now a blocking call that ensures all packets for the cycle are collected.
 func (p *Port) Receive(cycle int) []packet.Packet {
-	// 1. Drain channel into cache
+	// 1. Drain channel into cache (Optimized: only locks if data exists)
 	p.drainChannel()
 
 	// 2. Wait for upstream to be done with this cycle
 	p.WaitDone(cycle)
 
-	// 3. Final drain to catch anything sent just before MarkDone
-	p.drainChannel()
-
-	// 4. Return cached packets
+	// 3. Final drain to catch anything sent just before MarkDone AND return cached packets
+	// Optimization: Combine final drain and data retrieval under a single lock
 	p.pendingMu.Lock()
 	defer p.pendingMu.Unlock()
+
+	// Drain any remaining packets in channel
+	for {
+		select {
+		case pwc := <-p.channel:
+			p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
+		default:
+			goto Drained
+		}
+	}
+
+Drained:
 	pkts := p.pendingPackets[cycle]
 	delete(p.pendingPackets, cycle)
 	return pkts
 }
 
 // drainChannel reads all currently available packets from the channel into the cache.
+// Optimization: Acquires lock once for the entire batch instead of per-packet.
 func (p *Port) drainChannel() {
-	for {
-		select {
-		case pwc := <-p.channel:
-			p.pendingMu.Lock()
-			p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
-			p.pendingMu.Unlock()
-		default:
-			return
+	// Fast path: check if channel has data without locking first
+	select {
+	case pwc := <-p.channel:
+		// Has data, acquire lock and drain everything available
+		p.pendingMu.Lock()
+		defer p.pendingMu.Unlock()
+
+		// Store the first packet we already retrieved
+		p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
+
+		// Drain the rest
+		for {
+			select {
+			case pwc := <-p.channel:
+				p.pendingPackets[pwc.Cycle] = append(p.pendingPackets[pwc.Cycle], pwc.Packet)
+			default:
+				return
+			}
 		}
+	default:
+		// Channel is empty, nothing to do
+		return
 	}
 }
 
