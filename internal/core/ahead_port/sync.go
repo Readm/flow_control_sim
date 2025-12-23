@@ -2,6 +2,7 @@ package ahead_port
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -22,6 +23,9 @@ type ComponentSync struct {
 	done        int64         // Component's done cycle (atomic)
 	doneNotify  chan struct{} // 1-waiter optimized notification channel
 	doneWaiting int32         // Atomic flag: 1 if WaitDone is waiting, 0 otherwise
+
+	// Formatting padding to prevent false sharing between producer (done) and consumer (ready)
+	_ [64]byte
 
 	// Ready state
 	readyUntil      int64         // Ready until cycle (atomic, fast path)
@@ -67,11 +71,22 @@ func (cs *ComponentSync) GetDone() int {
 	return int(atomic.LoadInt64(&cs.done))
 }
 
+const spinLimit = 30
+
 // WaitDone waits for the component to complete targetCycle.
 func (cs *ComponentSync) WaitDone(targetCycle int) {
 	// Fast path
 	if int(atomic.LoadInt64(&cs.done)) >= targetCycle {
 		return
+	}
+
+	// Spin phase: short active wait to avoid scheduler overhead
+	for i := 0; i < spinLimit; i++ {
+		if int(atomic.LoadInt64(&cs.done)) >= targetCycle {
+			return
+		}
+		// Compiler hint to not optimize away the loop, and be nice to HT
+		runtime.Gosched()
 	}
 
 	// Signify that we are waiting
@@ -105,6 +120,14 @@ func (cs *ComponentSync) Ready(cycle int) bool {
 	// Fast path: if cycle < readyUntil, return true immediately (Lock-free)
 	if int64(cycle) < atomic.LoadInt64(&cs.readyUntil) {
 		return true
+	}
+
+	// Spin phase
+	for i := 0; i < spinLimit; i++ {
+		if int64(cycle) < atomic.LoadInt64(&cs.readyUntil) {
+			return true
+		}
+		runtime.Gosched()
 	}
 
 	// Slow path: check readyStates or wait
