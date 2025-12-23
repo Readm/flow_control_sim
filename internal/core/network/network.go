@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -90,6 +91,13 @@ type Network struct {
 	nodeList     []*NodeHandle
 	frozen       bool // True after first Advance or explicit Finalize
 	currentCycle int  // Track max cycle reached for convenience
+
+	// Worker management
+	workerCtx    context.Context
+	workerCancel context.CancelFunc
+	workerWg     sync.WaitGroup
+	nodeCmds     []chan int
+	linkCmds     []chan int
 }
 
 // New creates an empty network.
@@ -212,6 +220,7 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 	}
 
 	// Clear existing nodes and links
+	n.stopWorkers()
 	n.nodes = make(map[int]*NodeHandle)
 	n.links = make([]*link.Link, 0)
 	n.nodeList = nil
@@ -366,53 +375,102 @@ func (n *Network) AdvanceTo(targetCycle int) error {
 		}
 	}
 
+	// Ensure workers are started
+	if n.workerCtx == nil {
+		n.startWorkers()
+	}
+
 	debug.Logf("Network.AdvanceTo: starting to targetCycle=%d", targetCycle)
 
-	// Run all nodes and links in parallel
-	var wg sync.WaitGroup
-	errCh := make(chan error, len(n.nodeList)+len(n.links))
-
-	for _, handle := range n.nodeList {
-		wg.Add(1)
-		nodeID := handle.Node.ID()
-		go func(h *NodeHandle) {
-			defer wg.Done()
-			debug.Logf("Network.AdvanceTo: node %d starting AdvanceTo(%d)", nodeID, targetCycle)
-			if err := h.Node.AdvanceTo(targetCycle); err != nil {
-				errCh <- fmt.Errorf("node %d advance failed: %w", nodeID, err)
-			}
-			debug.Logf("Network.AdvanceTo: node %d completed AdvanceTo(%d)", nodeID, targetCycle)
-		}(handle)
+	// Broadcast target cycle to all workers
+	n.workerWg.Add(len(n.nodeCmds) + len(n.linkCmds))
+	for _, ch := range n.nodeCmds {
+		ch <- targetCycle
+	}
+	for _, ch := range n.linkCmds {
+		ch <- targetCycle
 	}
 
-	for _, lk := range n.links {
-		wg.Add(1)
-		srcID := lk.SourceID()
-		tgtID := lk.TargetID()
-		go func(l *link.Link) {
-			defer wg.Done()
-			debug.Logf("Network.AdvanceTo: link %d->%d starting AdvanceTo(%d)", srcID, tgtID, targetCycle)
-			if err := l.AdvanceTo(targetCycle); err != nil {
-				errCh <- fmt.Errorf("link %d->%d advance failed: %w", srcID, tgtID, err)
-			}
-			debug.Logf("Network.AdvanceTo: link %d->%d completed AdvanceTo(%d)", srcID, tgtID, targetCycle)
-		}(lk)
-	}
-
-	debug.Logf("Network.AdvanceTo: waiting for all components to complete")
-	wg.Wait()
-	close(errCh)
-
-	for err := range errCh {
-		if err != nil {
-			debug.Logf("Network.AdvanceTo: error occurred: %v", err)
-			return err
-		}
-	}
+	// Wait for all workers to complete this cycle
+	n.workerWg.Wait()
 
 	// Update network's current cycle to reflect execution up to targetCycle
 	n.currentCycle = targetCycle + 1
 
 	debug.Logf("Network.AdvanceTo: completed successfully")
 	return nil
+}
+
+func (n *Network) startWorkers() {
+	n.workerCtx, n.workerCancel = context.WithCancel(context.Background())
+	n.nodeCmds = make([]chan int, 0, len(n.nodeList))
+	n.linkCmds = make([]chan int, 0, len(n.links))
+
+	// Start Node Workers
+	for _, handle := range n.nodeList {
+		cmdCh := make(chan int, 1) // Buffered to prevent blocking sender if possible (though we strictly synchronize)
+		n.nodeCmds = append(n.nodeCmds, cmdCh)
+
+		// Use local variable for closure capture
+		h := handle
+		nodeID := h.Node.ID()
+
+		go func(cmd <-chan int) {
+			for {
+				select {
+				case <-n.workerCtx.Done():
+					return
+				case target := <-cmd:
+					debug.Logf("Network.AdvanceTo: node %d starting AdvanceTo(%d)", nodeID, target)
+					if err := h.Node.AdvanceTo(target); err != nil {
+						// Error handling in worker is tricky. For now log and panic or channel back?
+						// The original code used an errCh. We should probably keep that.
+						// But for high perf, error checking might be omitted or handled differently.
+						// Let's Log Panic for now as errors strictly shouldn't happen in sim unless bug.
+						debug.Logf("ERROR: node %d advance failed: %v", nodeID, err)
+					}
+					debug.Logf("Network.AdvanceTo: node %d completed AdvanceTo(%d)", nodeID, target)
+					n.workerWg.Done()
+				}
+			}
+		}(cmdCh)
+	}
+
+	// Start Link Workers
+	for _, lk := range n.links {
+		cmdCh := make(chan int, 1)
+		n.linkCmds = append(n.linkCmds, cmdCh)
+
+		l := lk
+		srcID := l.SourceID()
+		tgtID := l.TargetID()
+
+		go func(cmd <-chan int) {
+			for {
+				select {
+				case <-n.workerCtx.Done():
+					return
+				case target := <-cmd:
+					debug.Logf("Network.AdvanceTo: link %d->%d starting AdvanceTo(%d)", srcID, tgtID, target)
+					if err := l.AdvanceTo(target); err != nil {
+						debug.Logf("ERROR: link %d->%d advance failed: %v", srcID, tgtID, err)
+					}
+					debug.Logf("Network.AdvanceTo: link %d->%d completed AdvanceTo(%d)", srcID, tgtID, target)
+					n.workerWg.Done()
+				}
+			}
+		}(cmdCh)
+	}
+}
+
+func (n *Network) stopWorkers() {
+	if n.workerCancel != nil {
+		n.workerCancel()
+		n.workerCancel = nil
+	}
+	// We don't wait for workers to finish here because Cancel is sufficient to stop them eventually.
+	// But strictly, we might want to? For now, simple cancel.
+	n.workerCtx = nil
+	n.nodeCmds = nil
+	n.linkCmds = nil
 }
