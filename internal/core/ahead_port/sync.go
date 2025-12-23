@@ -19,8 +19,9 @@ const (
 // and channel-based notifications optimized for a single waiter.
 type ComponentSync struct {
 	// Done state
-	done       int64         // Component's done cycle (atomic)
-	doneNotify chan struct{} // 1-waiter optimized notification channel
+	done        int64         // Component's done cycle (atomic)
+	doneNotify  chan struct{} // 1-waiter optimized notification channel
+	doneWaiting int32         // Atomic flag: 1 if WaitDone is waiting, 0 otherwise
 
 	// Ready state
 	readyUntil      int64         // Ready until cycle (atomic, fast path)
@@ -51,10 +52,13 @@ func NewComponentSync() *ComponentSync {
 func (cs *ComponentSync) SetDone(cycle int) {
 	atomic.StoreInt64(&cs.done, int64(cycle))
 
-	// Non-blocking notification
-	select {
-	case cs.doneNotify <- struct{}{}:
-	default:
+	// Optimization: Only notify if someone is waiting
+	if atomic.LoadInt32(&cs.doneWaiting) == 1 {
+		// Non-blocking notification
+		select {
+		case cs.doneNotify <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -66,6 +70,15 @@ func (cs *ComponentSync) GetDone() int {
 // WaitDone waits for the component to complete targetCycle.
 func (cs *ComponentSync) WaitDone(targetCycle int) {
 	// Fast path
+	if int(atomic.LoadInt64(&cs.done)) >= targetCycle {
+		return
+	}
+
+	// Signify that we are waiting
+	atomic.StoreInt32(&cs.doneWaiting, 1)
+	defer atomic.StoreInt32(&cs.doneWaiting, 0)
+
+	// Double check after setting flag to avoid race
 	if int(atomic.LoadInt64(&cs.done)) >= targetCycle {
 		return
 	}
