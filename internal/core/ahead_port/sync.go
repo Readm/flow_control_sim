@@ -32,6 +32,8 @@ type ComponentSync struct {
 	// Ready state
 	readyUntil      int64         // Ready until cycle (atomic, fast path)
 	readyNotify     chan struct{} // 1-waiter optimized notification channel
+	waitingForReady int64         // Cycle the consumer is waiting for in Ready (Targeted Wakeup)
+	readyWaiting    int32         // Atomic flag: 1 if Ready is waiting, 0 otherwise
 	readyStates     []int8        // Dense array: index 0 corresponds to cycle readyUntil
 	lastAccessCycle int           // For debug: tracking monotonic access
 
@@ -121,6 +123,13 @@ func (cs *ComponentSync) Ready(cycle int) bool {
 		return true
 	}
 
+	// Publish what we are waiting for (Targeted Wakeup)
+	atomic.StoreInt64(&cs.waitingForReady, int64(cycle))
+
+	// Signify that we are waiting
+	atomic.StoreInt32(&cs.readyWaiting, 1)
+	defer atomic.StoreInt32(&cs.readyWaiting, 0)
+
 	// Slow path: check readyStates or wait
 	for {
 		if int64(cycle) < atomic.LoadInt64(&cs.readyUntil) {
@@ -158,11 +167,11 @@ func (cs *ComponentSync) checkStatesAndPrune(cycle int) (bool, bool) {
 		return false, false
 	}
 
-	// Prune: since access is monotonic, any request for 'cycle' effectively
-	// invalidates anything before it in the array (they've been checked or skipped).
-	// However, unlike the queue, we can just slice the array.
+	// Prune: advance readyUntil and slice readyStates.
+	// We advance until cycle+1.
+	newReadyUntil := int64(cycle + 1)
 	cs.readyStates = cs.readyStates[offset+1:]
-	atomic.StoreInt64(&cs.readyUntil, int64(cycle+1))
+	atomic.StoreInt64(&cs.readyUntil, newReadyUntil)
 
 	return true, state == stateReady
 }
@@ -198,17 +207,17 @@ func (cs *ComponentSync) IsReadyNonBlocking(cycle int) (bool, bool) {
 
 // UpdateReady updates the component's ready state.
 func (cs *ComponentSync) UpdateReady(cycle int, ready bool) {
-	// Optimization: sequential ready updates (Lock-free fast path)
+	// Optimization 1: sequential ready updates (Lock-free CAS fast path)
+	// If it's a simple 'ready' for the current expected cycle and no future states are queued
 	if ready && atomic.LoadInt64(&cs.readyUntil) == int64(cycle) {
+		// Try to advance without lock if states are likely empty
+		// We use atomic load for readyUntil, but readyStates needs lock for safety.
+		// However, we can check if it's likely empty.
 		cs.waiterMu.Lock()
-		// Double check under lock if we can advance
-		if atomic.LoadInt64(&cs.readyUntil) == int64(cycle) && (len(cs.readyStates) == 0 || cs.readyStates[0] == stateUnset) {
+		if atomic.LoadInt64(&cs.readyUntil) == int64(cycle) && len(cs.readyStates) == 0 {
 			atomic.StoreInt64(&cs.readyUntil, int64(cycle+1))
-			if len(cs.readyStates) > 0 {
-				cs.readyStates = cs.readyStates[1:]
-			}
 			cs.waiterMu.Unlock()
-			cs.notifyReady()
+			cs.notifyReady(cycle)
 			return
 		}
 		cs.waiterMu.Unlock()
@@ -227,10 +236,16 @@ func (cs *ComponentSync) UpdateReady(cycle int, ready bool) {
 
 	offset := int(int64(cycle) - currentReadyUntil)
 
-	// Ensure capacity
+	// Ensure capacity with exponential growth to reduce allocations
 	if offset >= len(cs.readyStates) {
-		// Grow the slice
-		newStates := make([]int8, offset+1)
+		newCap := len(cs.readyStates) * 2
+		if newCap <= offset {
+			newCap = offset + 1
+		}
+		if newCap < 8 {
+			newCap = 8
+		}
+		newStates := make([]int8, offset+1, newCap)
 		copy(newStates, cs.readyStates)
 		cs.readyStates = newStates
 	}
@@ -266,13 +281,19 @@ func (cs *ComponentSync) UpdateReady(cycle int, ready bool) {
 	if advanced {
 		atomic.StoreInt64(&cs.readyUntil, currentReadyUntil)
 	}
-	cs.notifyReady()
+	cs.notifyReady(cycle)
 }
 
-func (cs *ComponentSync) notifyReady() {
-	select {
-	case cs.readyNotify <- struct{}{}:
-	default:
+func (cs *ComponentSync) notifyReady(cycle int) {
+	// Targeted Wakeup optimization: only notify if the waiter is interested in THIS cycle or earlier
+	if atomic.LoadInt32(&cs.readyWaiting) == 1 {
+		target := atomic.LoadInt64(&cs.waitingForReady)
+		if int64(cycle) >= target {
+			select {
+			case cs.readyNotify <- struct{}{}:
+			default:
+			}
+		}
 	}
 }
 
@@ -295,7 +316,7 @@ func (cs *ComponentSync) SetReadyUntil(cycle int) {
 	}
 
 	atomic.StoreInt64(&cs.readyUntil, int64(cycle))
-	cs.notifyReady()
+	cs.notifyReady(cycle)
 }
 
 // InitReady initializes ready state for the first 'limit' cycles.
