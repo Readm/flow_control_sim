@@ -26,6 +26,9 @@ type ComponentSync struct {
 	// Formatting padding to prevent false sharing between producer (done) and consumer (ready)
 	_ [64]byte
 
+	// Consumer state
+	waitingFor int64 // Cycle the consumer is waiting for (Targeted Wakeup)
+
 	// Ready state
 	readyUntil      int64         // Ready until cycle (atomic, fast path)
 	readyNotify     chan struct{} // 1-waiter optimized notification channel
@@ -57,10 +60,15 @@ func (cs *ComponentSync) SetDone(cycle int) {
 
 	// Optimization: Only notify if someone is waiting
 	if atomic.LoadInt32(&cs.doneWaiting) == 1 {
-		// Non-blocking notification
-		select {
-		case cs.doneNotify <- struct{}{}:
-		default:
+		// Targeted Wakeup: only notify if we reached the target cycle
+		// This prevents waking up the consumer for every intermediate cycle
+		target := atomic.LoadInt64(&cs.waitingFor)
+		if int64(cycle) >= target {
+			// Non-blocking notification
+			select {
+			case cs.doneNotify <- struct{}{}:
+			default:
+			}
 		}
 	}
 }
@@ -76,6 +84,9 @@ func (cs *ComponentSync) WaitDone(targetCycle int) {
 	if int(atomic.LoadInt64(&cs.done)) >= targetCycle {
 		return
 	}
+
+	// Publish what we are waiting for (Targeted Wakeup)
+	atomic.StoreInt64(&cs.waitingFor, int64(targetCycle))
 
 	// Signify that we are waiting
 	atomic.StoreInt32(&cs.doneWaiting, 1)
