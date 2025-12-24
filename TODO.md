@@ -1,43 +1,65 @@
-# Network Core TODO List
-排查,InQueue目前没有提前Ready
-Link还是不对：Process封装干掉，依旧使用wg update ready，很慢
-全局的配置方案
-TrySend未阻塞
-高性能错误
-## P0 - 立即需要
+# GEM5 & Hierarchical Ring NoC Roadmap (16 Cores)
 
-- [ ] **统计和监控API**
-  - Network/Node/Link级别的统计数据（packet发送/接收/丢弃、延迟、利用率）
-  - GetStats() / ResetStats() 接口
+目标：构建基于GEM5和FlowSim的混合仿真系统。拓扑为两级互连：顶层为双向Ring (连接L3和DDR)，底层为通过L3扇出的L2集群。共16个CPU Cores。L2/L3/DDR模型也计划使用GEM5提供的仿真模型。
 
-- [ ] **拓扑查询API**
-  - GetNode(id), GetAllNodes(), GetAllLinks()
-  - GetNeighbors(nodeID), GetTopology()
+## P0: GEM5 Integration (Phased)
 
-## P1 - 近期需要
+### Phase 1: Connectivity (Ping Test)
+- [ ] **Go Infrastructure** (`internal/bridge/gem5`)
+  - Define `Gem5Request` struct
+  - Export `FlowSim_Init`, `FlowSim_Tick`, `FlowSim_RecvRequest`
+  - Build `libflowsim.so`
+- [ ] **C++ Shim** (`docs/guides/gem5`)
+  - `flow_sim_port.cc`: Basic `recvTimingReq`
+  - `gem5_api.cc`: `Gem5_Init`, `Gem5_Simulate`
+- [ ] **Validation**
+  - Simple TrafficGen -> FlowSim -> Print connection test
 
-- [ ] **Packet注入和提取**
-  - InjectPacket(nodeID, pkt)
-  - ExtractPackets(nodeID)
-  - PendingPackets() - 网络中传输的packet数量
+### Phase 2: Minimum Viable Bridge (MVB)
+- [ ] **Synchronization**
+  - C++ `TickEvent` drives Go `FlowSim_Tick`
+- [ ] **Request/Response Loop**
+  - Support `ReadReq`, `WriteReq` -> `ReadResp`, `WriteResp`
+  - Go -> C++ `Gem5_SendResponse` callback
+- [ ] **Validation**
+  - Loopback test: Request -> FlowSim -> Response
 
-- [ ] **拓扑生成器**
-  - NewRingTopology(), NewMeshTopology(), NewTreeTopology()
-  - 减少测试代码重复
+### Phase 3: Full Event Support
+- [ ] **Flow Control**
+  - Implement `RetryEvent` for backpressure
+- [ ] **Advanced Protocol**
+  - Support `ReadEx`, `Upgrade`, `WritebackDirty`
+- [ ] **Validation**
+  - Full CPU/Cache/DDR5 system simulation
 
-- [ ] **拓扑验证**
-  - Validate() - 验证拓扑合法性
-  - ValidateConnectivity() - 检查孤立节点
-  - CheckBandwidthMatch() - 验证带宽匹配
+## P1: Hierarchical Topology Implementation (16 Cores)
+构建 16-Core 分层拓扑。
 
-## P2 - 可以延后
+- [ ] **Top-Level: Bidirectional Ring**
+  - **Ring Stations**: 5 个节点 (4x L3 Nodes + 1x DDR Node)
+  - 协议: 双向环，最短路径路由
 
-- [ ] **配置文件支持** - LoadFromFile/SaveToFile (JSON/YAML)
-- [ ] **Checkpoint和恢复** - 保存/恢复网络状态
-- [ ] **事件回调系统** - PacketSent/Received/Dropped事件
+- [ ] **Sub-Level: L3 Clusters**
+  - **Structure**: 每个 L3 Node 作为 Cluster Root，下挂 4 个 L2 Nodes
+  - **Interconnect**: Crossbar 或 Bus (L3 <-> 4x L2)
+  - **Total Cores**: 4 Clusters * 4 L2/CPU = 16 Cores
 
-## 备注
+- [ ] **Leaf-Level: CPU Injection**
+  - 每个 L2 Node 连接一个 `GEM5CpuAgent`
 
-- 统计监控是性能分析的基础，当前只能靠profiling
-- 拓扑查询API对调试和可视化很重要
-- 其他功能可根据实际需求优先级调整
+## P2: Flow & Coherence Handling
+处理跨多级互连的流量和部分一致性逻辑（如需）。
+
+- [ ] **Routing Logic**
+  - **Upstream (Request)**: CPU -> L2 (Hit?) -> L3 (Hit?) -> Ring -> DDR
+  - **Downstream (Response)**: DDR -> Ring -> L3 -> L2 -> CPU
+  - **Peer-to-Peer**: L2 <-> L2 (Snoop/Coherence, if modeled)
+
+- [ ] **GEM5 Model Wrapping**
+  - `WrapperL2`: 接收来自Ring/CPU的包 -> 调用 GEM5 L2 -> 输出结果
+  - `WrapperL3`: 接收来自Ring/L2的包 -> 调用 GEM5 L3 -> 输出结果
+  - `WrapperDDR`: 接收来自Ring的包 -> 调用 GEM5 Memory -> 输出结果
+
+## P3: Analysis & Tuning
+- [ ] **Latency Profile**: 分析跨层级访问延迟 (L2 Hit, L3 Local Hit, L3 Remote Hit, DDR Access)
+- [ ] **Backpressure Verification**: 验证当 Ring 或 L3 拥塞时，对 L2/CPU 的反压机制
