@@ -1,7 +1,7 @@
 package chi
 
 import (
-	"github.com/Readm/flow_sim/internal/core/capability/decoder"
+	"github.com/Readm/flow_sim/internal/components/decoder"
 )
 
 // StaticDecoder maps all addresses to a single Home Node (for testing).

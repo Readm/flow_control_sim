@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Readm/flow_sim/internal/core/capability/cache"
+	"github.com/Readm/flow_sim/internal/components/cache"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/dataflow/message"
 	"github.com/Readm/flow_sim/internal/dataflow/transaction"

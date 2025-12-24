@@ -6,8 +6,8 @@ import (
 	"sync"
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
-	"github.com/Readm/flow_sim/internal/core/capability/cache"
-	"github.com/Readm/flow_sim/internal/core/capability/directory"
+	"github.com/Readm/flow_sim/internal/components/cache"
+	"github.com/Readm/flow_sim/internal/components/directory"
 	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/node"

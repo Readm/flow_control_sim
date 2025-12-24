@@ -329,7 +329,7 @@ decoder, err := GetCHIDecoder(node)
 
 ### 3.3 Cache 接口扩展
 
-**扩展方法** (internal/core/capability/cache/interfaces.go):
+**扩展方法** (internal/components/cache/interfaces.go):
 
 ```go
 // 新增 MOESI 的 Owned 状态
@@ -362,7 +362,7 @@ type Cache interface {
 - `HandleSnoop`: 处理 snoop 请求，返回数据并降级状态
 - `CanForward`: 判断是否可以转发数据（M/E/O 可以，S/I 不可以）
 
-**实现** (internal/core/capability/cache/fully_associative.go):
+**实现** (internal/components/cache/fully_associative.go):
 
 ```go
 func (c *FullyAssociativeCache) HandleSnoop(snoopOpcode int, addr uint64) (*SnoopResponse, error) {
@@ -410,7 +410,7 @@ func (c *FullyAssociativeCache) CanForward(addr uint64) bool {
 
 ### 3.4 Directory 接口扩展
 
-**扩展方法** (internal/core/capability/directory/interfaces.go):
+**扩展方法** (internal/components/directory/interfaces.go):
 
 ```go
 type Directory interface {
@@ -435,7 +435,7 @@ type Directory interface {
 - `MustWaitForWriteback`: Modified 状态需要等待写回
 - `HasPendingRequest`: 检测地址冲突（当前返回 false，TODO）
 
-**实现** (internal/core/capability/directory/fully_associative.go):
+**实现** (internal/components/directory/fully_associative.go):
 
 ```go
 func (d *FullyAssociativeDirectory) MustWaitForWriteback(addr uint64) bool {
@@ -458,7 +458,7 @@ func (d *FullyAssociativeDirectory) HasPendingRequest(addr uint64) bool {
 
 ### 3.5 Decoder 能力 (新增)
 
-**接口定义** (internal/core/capability/decoder/interfaces.go):
+**接口定义** (internal/components/decoder/interfaces.go):
 
 ```go
 package decoder
@@ -849,7 +849,7 @@ func TestNodeDataMap(t *testing.T) {
 
 #### 5.1.2 Cache 新方法测试
 
-**文件**: `internal/core/capability/cache/cache_test.go`
+**文件**: `internal/components/cache/cache_test.go`
 
 **覆盖场景**:
 - ✅ HandleSnoop: 各状态的 snoop 响应
@@ -885,7 +885,7 @@ func TestFullyAssociativeCache_HandleSnoop(t *testing.T) {
 
 #### 5.1.3 Directory 新方法测试
 
-**文件**: `internal/core/capability/directory/directory_test.go`
+**文件**: `internal/components/directory/directory_test.go`
 
 **覆盖场景**:
 - ✅ MustWaitForWriteback: Modified 需要写回
@@ -895,7 +895,7 @@ func TestFullyAssociativeCache_HandleSnoop(t *testing.T) {
 
 #### 5.1.4 Decoder 接口测试
 
-**文件**: `internal/core/capability/decoder/decoder_test.go`
+**文件**: `internal/components/decoder/decoder_test.go`
 
 **覆盖场景**:
 - ✅ 接口契约

@@ -1,9 +1,9 @@
 package transaction
 
 import (
-	"github.com/Readm/flow_sim/internal/core/capability/cache"
-	"github.com/Readm/flow_sim/internal/core/capability/decoder"
-	"github.com/Readm/flow_sim/internal/core/capability/directory"
+	"github.com/Readm/flow_sim/internal/components/cache"
+	"github.com/Readm/flow_sim/internal/components/decoder"
+	"github.com/Readm/flow_sim/internal/components/directory"
 	"github.com/Readm/flow_sim/internal/core/node"
 )
 

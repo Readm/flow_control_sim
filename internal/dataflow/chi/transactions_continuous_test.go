@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Readm/flow_sim/internal/core/capability/cache"
-	"github.com/Readm/flow_sim/internal/core/capability/decoder"
-	"github.com/Readm/flow_sim/internal/core/capability/directory"
+	"github.com/Readm/flow_sim/internal/components/cache"
+	"github.com/Readm/flow_sim/internal/components/decoder"
+	"github.com/Readm/flow_sim/internal/components/directory"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/dataflow/message"
 	"github.com/Readm/flow_sim/internal/dataflow/transaction"

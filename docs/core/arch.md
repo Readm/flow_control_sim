@@ -23,7 +23,7 @@
 ### 4. DataFlow 数据层 (`internal/dataflow`)
 - **Packet**: 最小传输单元，携带路由、类型和 Cycle 信息。
 - **Transaction**: 逻辑事务抽象，用于追踪复杂的一致性协议状态。
-- **Coherence/Directory**: 位于 `internal/core/capability`，提供缓存一致性逻辑支持。
+- **Coherence/Directory**: 位于 `internal/components`，提供缓存一致性逻辑支持。
 
 ## 执行模型
 
