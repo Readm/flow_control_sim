@@ -561,3 +561,249 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkBidirectionalRingCoreScaling tests a bidirectional ring network.
+// Topology: Each node connects to (i+1)%N (out 0) and (i-1+N)%N (out 1).
+// Routing: Shortest path.
+// Traffic: Every N/2 cycles, inject packet to random dest. Backpressure handled.
+func BenchmarkBidirectionalRingCoreScaling(b *testing.B) {
+	const (
+		linkLatency = 10
+	)
+
+	nodeCount := *benchNodeCount
+	injectInterval := nodeCount / 2
+	if injectInterval < 1 {
+		injectInterval = 1
+	}
+
+	// Ensure advanceCycles is large enough
+	// Max latency is ~ N/2 * linkLatency
+	maxLatency := (nodeCount / 2) * linkLatency
+	advanceCycles := 2000
+	if maxLatency*4 > advanceCycles {
+		advanceCycles = maxLatency * 4
+	}
+
+	numCPU := runtime.NumCPU()
+	var coreCountSamples []int
+	for i := 1; i < numCPU; i *= 2 {
+		coreCountSamples = append(coreCountSamples, i)
+	}
+	coreCountSamples = append(coreCountSamples, numCPU)
+	if len(coreCountSamples) > 1 && coreCountSamples[len(coreCountSamples)-1] == coreCountSamples[len(coreCountSamples)-2] {
+		coreCountSamples = coreCountSamples[:len(coreCountSamples)-1]
+	}
+
+	// Calibrate CPU cycles (reusing logic from previous benchmark)
+	// We want similar workload per packet/node activation
+	cyclesPerUS := node.CalibrateCyclesPerUS(100 * time.Millisecond)
+	minSpinCycles := int(5.0 * cyclesPerUS)
+	maxSpinCycles := int(20.0 * cyclesPerUS)
+	avgSpinCycles := uint64(12.5 * cyclesPerUS)
+
+	b.Logf("Bidirectional Ring: Nodes=%d, InjectInterval=%d, AdvanceCycles=%d", nodeCount, injectInterval, advanceCycles)
+
+	for _, coreCount := range coreCountSamples {
+		b.Run(fmt.Sprintf("Cores_%d", coreCount), func(b *testing.B) {
+			oldMaxProcs := runtime.GOMAXPROCS(coreCount)
+			defer runtime.GOMAXPROCS(oldMaxProcs)
+
+			net := New()
+			nodeHandles := make([]*NodeHandle, nodeCount)
+			var allOutputs [][]*queue.OutputQueue
+
+			// Create nodes with 2 inputs and 2 outputs
+			for i := 0; i < nodeCount; i++ {
+				n := node.NewWorkerNode(i)
+				// Input 0: from CCW neighbor (Clockwise link)
+				// Input 1: from CW neighbor (Counter-Clockwise link)
+				input0 := queue.NewInputQueue(64, 1) // From (i-1)
+				input1 := queue.NewInputQueue(64, 1) // From (i+1)
+
+				// Output 0: to CW neighbor (i+1)
+				// Output 1: to CCW neighbor (i-1)
+				output0 := queue.NewOutputQueue(64, 1)
+				output1 := queue.NewOutputQueue(64, 1)
+
+				if err := n.AddInputQueue(input0); err != nil {
+					b.Fatalf("Node%d AddInputQueue 0: %v", i, err)
+				}
+				if err := n.AddInputQueue(input1); err != nil {
+					b.Fatalf("Node%d AddInputQueue 1: %v", i, err)
+				}
+				if err := n.AddOutputQueue(output0); err != nil {
+					b.Fatalf("Node%d AddOutputQueue 0: %v", i, err)
+				}
+				if err := n.AddOutputQueue(output1); err != nil {
+					b.Fatalf("Node%d AddOutputQueue 1: %v", i, err)
+				}
+
+				nodeHandles[i] = &NodeHandle{
+					Node:    n,
+					Inputs:  []*queue.InputQueue{input0, input1},
+					Outputs: []*queue.OutputQueue{output0, output1},
+				}
+				allOutputs = append(allOutputs, []*queue.OutputQueue{output0, output1})
+
+				if err := net.AddNode(nodeHandles[i]); err != nil {
+					b.Fatalf("AddNode %d: %v", i, err)
+				}
+			}
+
+			// Helper to calc shortest path direction
+			// Returns: 0 for CW (via output 0), 1 for CCW (via output 1)
+			getDirection := func(src, dst int) int {
+				// Distance CW: (dst - src + N) % N
+				// Distance CCW: (src - dst + N) % N
+				cwDist := (dst - src + nodeCount) % nodeCount
+				ccwDist := (src - dst + nodeCount) % nodeCount
+				if cwDist <= ccwDist {
+					return 0 // CW
+				}
+				return 1 // CCW
+			}
+
+			var injectedCount int64
+			var receivedCount int64
+
+			// Setup process hook for all nodes
+			for i := 0; i < nodeCount; i++ {
+				nodeIdx := i
+				outputs := allOutputs[i]
+
+				nodeHandles[i].Node.(*node.WorkerNode).SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
+					// Simulate processing load
+					cycles := minSpinCycles
+					if maxSpinCycles > minSpinCycles {
+						cycles += rand.Intn(maxSpinCycles - minSpinCycles)
+					}
+					node.SpinWaitCycles(uint64(cycles))
+
+					// 1. Process Inputs (Forwarding)
+					for _, q := range inputs {
+						for _, ref := range q {
+							pkt := ref.Packet
+							if pkt.TargetID == nodeIdx {
+								// Reached destination: Consume
+								atomic.AddInt64(&receivedCount, 1)
+								ref.Queue.Free(ref.Slot)
+							} else {
+								// Forwarding
+								dir := getDirection(nodeIdx, pkt.TargetID)
+								outQ := outputs[dir]
+
+								// Backpressure check: Try to inject
+								// NOTE: OutputQueue.InjectPackets is atomic for the batch. Here batch is 1.
+								// If full, we do NOT Free() the slot, so it stays in InputQueue for next cycle.
+								if !outQ.IsFull() {
+									if err := outQ.InjectPackets(int(cycle), []packet.Packet{pkt}); err == nil {
+										ref.Queue.Free(ref.Slot) // Successfully forwarded
+									} else {
+										// This should not happen if IsFull() check passed, unless concurrent access (not simulated here)
+										// or strict capacity edge cases.
+										// But to be safe, if error, don't free.
+									}
+								} else {
+									// Full, do nothing. Packet remains in input queue.
+								}
+							}
+						}
+					}
+
+					// 2. Traffic Generation
+					// Every N/2 cycles, try to inject ONE packet
+					// N is nodeCount
+					if cycle%uint64(injectInterval) == 0 && int(cycle) < advanceCycles {
+						// Pick random target != self
+						target := rand.Intn(nodeCount)
+						if target == nodeIdx {
+							target = (target + 1) % nodeCount
+						}
+
+						dir := getDirection(nodeIdx, target)
+						outQ := outputs[dir]
+
+						// Check if we can inject
+						// If output queue is full, we DROP this generation opportunity (as per requirements "放弃这次产生")
+						if !outQ.IsFull() {
+							pkt := packet.Packet{
+								SourceID: nodeIdx,
+								TargetID: target,
+								Payload:  "bi-data",
+							}
+							if err := outQ.InjectPackets(int(cycle), []packet.Packet{pkt}); err == nil {
+								atomic.AddInt64(&injectedCount, 1)
+							}
+						}
+					}
+
+					return nil
+				})
+			}
+
+			// Connect nodes
+			// Link 0: Node i Output 0 -> Node (i+1) Input 0 (CW)
+			// Link 1: Node i Output 1 -> Node (i-1) Input 1 (CCW)
+			for i := 0; i < nodeCount; i++ {
+				cwNext := (i + 1) % nodeCount
+				// Connect CW: i:Out0 -> cwNext:In0
+				if _, err := net.Connect(i, 0, cwNext, 0, linkLatency, 1); err != nil {
+					b.Fatalf("Connect CW %d->%d: %v", i, cwNext, err)
+				}
+
+				ccwNext := (i - 1 + nodeCount) % nodeCount
+				// Connect CCW: i:Out1 -> ccwNext:In1
+				if _, err := net.Connect(i, 1, ccwNext, 1, linkLatency, 1); err != nil {
+					b.Fatalf("Connect CCW %d->%d: %v", i, ccwNext, err)
+				}
+			}
+
+			// Warmup
+			if err := net.AdvanceTo(net.CurrentCycle() + maxLatency + 100); err != nil {
+				b.Fatalf("Warmup failed: %v", err)
+			}
+
+			b.ResetTimer()
+			startTotalCycles := node.GetCPUCycles()
+
+			for i := 0; i < b.N; i++ {
+				if err := net.AdvanceTo(net.CurrentCycle() + advanceCycles); err != nil {
+					b.Fatalf("Advance failed: %v", err)
+				}
+			}
+
+			endTotalCycles := node.GetCPUCycles()
+			b.StopTimer()
+
+			// Validation logic
+			injected := atomic.LoadInt64(&injectedCount)
+			received := atomic.LoadInt64(&receivedCount)
+
+			// Simple check: injected should be > 0 (unless nodeCount is huge and cycles low)
+			if injected == 0 {
+				b.Fatalf("No packets injected!")
+			}
+
+			// Ratio might be lower due to flying packets, but shouldn't be zero
+			ratio := 0.0
+			if injected > 0 {
+				ratio = float64(received) / float64(injected)
+			}
+
+			b.ReportMetric(float64(injected), "packets_injected")
+			b.ReportMetric(float64(received), "packets_received")
+			b.ReportMetric(ratio*100, "reception_rate_pct")
+
+			// Efficiency metrics
+			simWorkPerOpCycles := float64(nodeCount) * float64(advanceCycles) * float64(avgSpinCycles) // N nodes * cycles * spin
+			simWorkPerCoreCycles := simWorkPerOpCycles / float64(coreCount)
+			actualCyclesPerOp := float64(endTotalCycles-startTotalCycles) / float64(b.N)
+			efficiencyPct := 0.0
+			if actualCyclesPerOp > 0 {
+				efficiencyPct = (simWorkPerCoreCycles / actualCyclesPerOp) * 100
+			}
+			b.ReportMetric(efficiencyPct, "efficiency_pct")
+		})
+	}
+}
