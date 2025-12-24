@@ -792,7 +792,7 @@ func BenchmarkBidirectionalRingCoreScaling(b *testing.B) {
 			}
 
 			b.ReportMetric(float64(injected), "packets_injected")
-			b.ReportMetric(float64(received), "packets_received")
+			// b.ReportMetric(float64(received), "packets_received") // Removed to match valid logic
 			b.ReportMetric(ratio*100, "reception_rate_pct")
 
 			// Efficiency metrics
@@ -803,6 +803,9 @@ func BenchmarkBidirectionalRingCoreScaling(b *testing.B) {
 			if actualCyclesPerOp > 0 {
 				efficiencyPct = (simWorkPerCoreCycles / actualCyclesPerOp) * 100
 			}
+			b.ReportMetric(simWorkPerOpCycles, "ideal_sim_work_cycles/op")
+			b.ReportMetric(simWorkPerCoreCycles, "ideal_cycles_per_core_op")
+			b.ReportMetric(actualCyclesPerOp, "actual_cycles/op")
 			b.ReportMetric(efficiencyPct, "efficiency_pct")
 		})
 	}
