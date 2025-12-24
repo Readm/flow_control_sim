@@ -1,0 +1,151 @@
+package cpu
+
+import (
+	"testing"
+
+	"github.com/Readm/flow_sim/internal/champsim/instruction"
+)
+
+// TestRegisterAllocator_BasicAllocation 测试基本分配
+func TestRegisterAllocator_BasicAllocation(t *testing.T) {
+	ra := NewRegisterAllocator(10)
+
+	// 初始时应该有 10 个可用寄存器
+	if ra.AvailableCount() != 10 {
+		t.Errorf("Expected 10 available registers, got %d", ra.AvailableCount())
+	}
+
+	// 分配一个寄存器
+	reg1, err := ra.Allocate()
+	if err != nil {
+		t.Fatalf("Failed to allocate register: %v", err)
+	}
+	if !reg1.IsValid() {
+		t.Error("Allocated register should be valid")
+	}
+	if ra.AvailableCount() != 9 {
+		t.Errorf("Expected 9 available registers, got %d", ra.AvailableCount())
+	}
+
+	// 分配另一个寄存器
+	reg2, err := ra.Allocate()
+	if err != nil {
+		t.Fatalf("Failed to allocate second register: %v", err)
+	}
+	if reg1 == reg2 {
+		t.Error("Allocated registers should be different")
+	}
+}
+
+// TestRegisterAllocator_FreeAndReuse 测试释放和重用
+func TestRegisterAllocator_FreeAndReuse(t *testing.T) {
+	ra := NewRegisterAllocator(5)
+
+	// 分配所有寄存器
+	regs := make([]instruction.PhysicalRegisterID, 5)
+	for i := 0; i < 5; i++ {
+		reg, err := ra.Allocate()
+		if err != nil {
+			t.Fatalf("Failed to allocate register %d: %v", i, err)
+		}
+		regs[i] = reg
+	}
+
+	if ra.AvailableCount() != 0 {
+		t.Errorf("Expected 0 available registers, got %d", ra.AvailableCount())
+	}
+
+	// 尝试再分配应该失败
+	_, err := ra.Allocate()
+	if err == nil {
+		t.Error("Expected error when allocating from full pool")
+	}
+
+	// 释放一个寄存器
+	ra.Free(regs[2])
+	if ra.AvailableCount() != 1 {
+		t.Errorf("Expected 1 available register after free, got %d", ra.AvailableCount())
+	}
+
+	// 现在应该可以再分配
+	reg, err := ra.Allocate()
+	if err != nil {
+		t.Fatalf("Failed to allocate after free: %v", err)
+	}
+	if reg != regs[2] {
+		t.Errorf("Expected to reuse freed register %d, got %d", regs[2], reg)
+	}
+}
+
+// TestRegisterAllocator_IsAllocated 测试分配状态查询
+func TestRegisterAllocator_IsAllocated(t *testing.T) {
+	ra := NewRegisterAllocator(10)
+
+	reg, _ := ra.Allocate()
+
+	if !ra.IsAllocated(reg) {
+		t.Error("Register should be marked as allocated")
+	}
+
+	ra.Free(reg)
+
+	if ra.IsAllocated(reg) {
+		t.Error("Register should not be marked as allocated after free")
+	}
+}
+
+// TestRegisterAllocator_Reset 测试重置
+func TestRegisterAllocator_Reset(t *testing.T) {
+	ra := NewRegisterAllocator(10)
+
+	// 分配几个寄存器
+	for i := 0; i < 5; i++ {
+		ra.Allocate()
+	}
+
+	if ra.AvailableCount() != 5 {
+		t.Errorf("Expected 5 available, got %d", ra.AvailableCount())
+	}
+
+	// 重置
+	ra.Reset()
+
+	if ra.AvailableCount() != 10 {
+		t.Errorf("Expected 10 available after reset, got %d", ra.AvailableCount())
+	}
+	if ra.AllocatedCount() != 0 {
+		t.Errorf("Expected 0 allocated after reset, got %d", ra.AllocatedCount())
+	}
+}
+
+// TestRegisterAllocator_InvalidRegister 测试无效寄存器处理
+func TestRegisterAllocator_InvalidRegister(t *testing.T) {
+	ra := NewRegisterAllocator(10)
+
+	// 释放无效寄存器应该不崩溃
+	ra.Free(instruction.InvalidRegister)
+
+	// 应该没有影响
+	if ra.AvailableCount() != 10 {
+		t.Errorf("Expected 10 available, got %d", ra.AvailableCount())
+	}
+}
+
+// TestRegisterAllocator_DoubleFree 测试重复释放
+func TestRegisterAllocator_DoubleFree(t *testing.T) {
+	ra := NewRegisterAllocator(10)
+
+	reg, _ := ra.Allocate()
+
+	// 第一次释放
+	ra.Free(reg)
+	if ra.AvailableCount() != 10 {
+		t.Errorf("Expected 10 available after first free, got %d", ra.AvailableCount())
+	}
+
+	// 第二次释放（应该被忽略）
+	ra.Free(reg)
+	if ra.AvailableCount() != 10 {
+		t.Errorf("Expected 10 available after double free, got %d", ra.AvailableCount())
+	}
+}

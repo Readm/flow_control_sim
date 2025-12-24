@@ -87,3 +87,6 @@ testdata/output/
 testdata/tmp/
 ring_simulator
 ThirdParty/
+*.champsimtrace
+*.xz
+
