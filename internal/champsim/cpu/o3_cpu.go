@@ -73,10 +73,25 @@ type O3CPU struct {
 	// standaloneMode 独立模式（自动完成内存操作，不等待框架）
 	standaloneMode bool
 
+	// ==================== 待处理的内存操作 ====================
+
+	// pendingLoads 待处理的load操作列表
+	// 跟踪每个load的完成时间，用于非standalone模式
+	pendingLoads []PendingMemOp
+
+	// pendingStores 待处理的store操作列表
+	pendingStores []PendingMemOp
+
 	// ==================== 统计信息 ====================
 
 	// stats CPU 统计信息
 	stats O3CPUStats
+}
+
+// PendingMemOp 待处理的内存操作
+type PendingMemOp struct {
+	InstrID    uint64 // 指令ID
+	ReadyCycle uint64 // 数据就绪周期
 }
 
 // O3CPUConfig CPU 配置参数
@@ -252,10 +267,11 @@ func (cpu *O3CPU) Tick() {
 	cpu.currentCycle++
 
 	// 按照 ChampSim 的顺序执行流水线阶段
-	cpu.retire()                     // retire_rob()
+	cpu.retire()                      // retire_rob()
+	cpu.processPendingMemOps()        // 处理待处理的内存操作（非standalone模式）
 	cpu.completeInflightInstruction() // complete_inflight_instruction()
-	cpu.execute()                    // execute_instruction()
-	cpu.schedule()                   // schedule_instruction()
+	cpu.execute()                     // execute_instruction()
+	cpu.schedule()                    // schedule_instruction()
 	// handle_memory_return() 由集成框架处理
 	// operate_lsq() 已集成在 execute 中
 	cpu.dispatch() // dispatch_instruction()
@@ -671,11 +687,15 @@ func (cpu *O3CPU) executeMemoryOperation(instr *instruction.OOOModelInstr) {
 					cpu.currentCycle,
 				)
 
-				// Cache会在standalone模式下自动fill
-				// 在集成模式下，Cache miss会分配MSHR，等待下级响应
+				// 在非standalone模式下，跟踪pending loads
+				if !cpu.standaloneMode {
+					cpu.pendingLoads = append(cpu.pendingLoads, PendingMemOp{
+						InstrID:    instr.InstrID,
+						ReadyCycle: readyCycle,
+					})
+				}
+
 				_ = hit
-				_ = readyCycle
-				// TODO: 跟踪readyCycle，在数据就绪时调用HandleLoadResponse
 			}
 		}
 
@@ -690,8 +710,16 @@ func (cpu *O3CPU) executeMemoryOperation(instr *instruction.OOOModelInstr) {
 					1, // AccessStore
 					cpu.currentCycle,
 				)
+
+				// 在非standalone模式下，跟踪pending stores
+				if !cpu.standaloneMode {
+					cpu.pendingStores = append(cpu.pendingStores, PendingMemOp{
+						InstrID:    instr.InstrID,
+						ReadyCycle: readyCycle,
+					})
+				}
+
 				_ = hit
-				_ = readyCycle
 			}
 		}
 
@@ -879,6 +907,38 @@ func (cpu *O3CPU) HandleStoreResponse(instrID uint64, cycle uint64) bool {
 	}
 
 	return true
+}
+
+// processPendingMemOps 处理待处理的内存操作
+//
+// 在非standalone模式下，检查pending loads/stores是否完成
+// 如果完成，调用HandleLoadResponse/HandleStoreResponse
+func (cpu *O3CPU) processPendingMemOps() {
+	// 处理 pending loads
+	remaining := cpu.pendingLoads[:0]
+	for _, op := range cpu.pendingLoads {
+		if op.ReadyCycle <= cpu.currentCycle {
+			// Load 完成，调用 HandleLoadResponse
+			cpu.HandleLoadResponse(op.InstrID, cpu.currentCycle)
+		} else {
+			// 还未完成，保留在列表中
+			remaining = append(remaining, op)
+		}
+	}
+	cpu.pendingLoads = remaining
+
+	// 处理 pending stores
+	remaining = cpu.pendingStores[:0]
+	for _, op := range cpu.pendingStores {
+		if op.ReadyCycle <= cpu.currentCycle {
+			// Store 完成，调用 HandleStoreResponse
+			cpu.HandleStoreResponse(op.InstrID, cpu.currentCycle)
+		} else {
+			// 还未完成，保留在列表中
+			remaining = append(remaining, op)
+		}
+	}
+	cpu.pendingStores = remaining
 }
 
 // GetLSQStats 返回 LSQ 统计信息（用于测试）

@@ -56,6 +56,16 @@ type SetAssociativeCache struct {
 	// mshr MSHR队列
 	mshr *MSHRQueue
 
+	// ==================== 下级存储 ====================
+
+	// lowerLevel 下级存储接口（DRAM或L2 Cache）
+	// nil表示没有下级（standalone模式会自动fill）
+	lowerLevel interface {
+		SendRequest(req interface{}) bool
+		Tick()
+		SetCycle(cycle uint64)
+	}
+
 	// ==================== 统计信息 ====================
 
 	stats CacheStats
@@ -157,6 +167,24 @@ func (c *SetAssociativeCache) getBlockAddr(addr uint64) uint64 {
 // standalone=false: Miss等待Fill（用于集成）
 func (c *SetAssociativeCache) SetStandaloneMode(standalone bool) {
 	c.standaloneMode = standalone
+}
+
+// SetLowerLevel 设置下级存储
+//
+// 参数：
+// - lowerLevel: 实现MemoryInterface的下级存储（DRAM或L2 Cache）
+//
+// 设置后，Cache miss时会自动向下级发送请求
+func (c *SetAssociativeCache) SetLowerLevel(lowerLevel interface {
+	SendRequest(req interface{}) bool
+	Tick()
+	SetCycle(cycle uint64)
+}) {
+	c.lowerLevel = lowerLevel
+	// 设置下级后，自动关闭standalone模式
+	if lowerLevel != nil {
+		c.standaloneMode = false
+	}
 }
 
 // SetCycle 设置当前周期
@@ -400,10 +428,25 @@ func (c *SetAssociativeCache) handleMiss(
 		return false, cycle + c.config.HitLatency + c.config.FillLatency, -1
 	}
 
-	// Standalone模式：自动完成fill
-	if c.standaloneMode {
-		// 在下一个周期自动完成fill
-		// 实际应用中，这会由下级cache或内存完成
+	// 向下级发送请求（如果有下级）
+	if c.lowerLevel != nil {
+		// 创建请求（使用interface{}的map结构，避免类型断言问题）
+		req := map[string]interface{}{
+			"Address":  addr,
+			"VAddress": vaddr,
+			"InstrID":  instrID,
+			"IsWrite":  (accessType == AccessStore),
+			"Data":     uint64(0),
+			"Callback": func(fillAddr uint64, fillData uint64, fillCycle uint64) {
+				// 下级返回数据时，填充到Cache
+				c.HandleFill(fillAddr, fillData, fillCycle)
+			},
+		}
+
+		// 发送请求
+		c.lowerLevel.SendRequest(req)
+	} else if c.standaloneMode {
+		// Standalone模式：自动完成fill（用于测试）
 		c.HandleFill(addr, 0, cycle+c.config.FillLatency)
 	}
 
