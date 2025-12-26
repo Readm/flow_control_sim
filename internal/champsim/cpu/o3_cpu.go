@@ -32,6 +32,17 @@ type O3CPU struct {
 	// dib Decoded Instruction Buffer
 	dib *DIB
 
+	// ==================== 内存层次 ====================
+
+	// l1dCache L1 Data Cache
+	// 在集成模式下使用，standalone模式下为nil
+	l1dCache interface {
+		Access(addr uint64, vaddr uint64, instrID uint64, accessType uint8, cycle uint64) (hit bool, readyCycle uint64, mshrIndex int)
+		HandleFill(addr uint64, data uint64, cycle uint64) bool
+		SetStandaloneMode(standalone bool)
+		GetStats() interface{}
+	}
+
 	// ==================== 流水线缓冲区 ====================
 
 	// fetchQueue Fetch 队列（从 trace 读取的指令）
@@ -174,6 +185,27 @@ func NewO3CPU(traceReader trace.TraceReader, config O3CPUConfig) *O3CPU {
 // standaloneMode=false: 内存操作等待框架响应（用于集成）
 func (cpu *O3CPU) SetStandaloneMode(standalone bool) {
 	cpu.standaloneMode = standalone
+	// 同时设置Cache的standalone模式
+	if cpu.l1dCache != nil {
+		cpu.l1dCache.SetStandaloneMode(standalone)
+	}
+}
+
+// SetL1DCache 设置 L1D Cache
+//
+// 参数：
+// - cache: 实现了Cache接口的对象（通常是*cache.SetAssociativeCache）
+func (cpu *O3CPU) SetL1DCache(cache interface {
+	Access(addr uint64, vaddr uint64, instrID uint64, accessType uint8, cycle uint64) (hit bool, readyCycle uint64, mshrIndex int)
+	HandleFill(addr uint64, data uint64, cycle uint64) bool
+	SetStandaloneMode(standalone bool)
+	GetStats() interface{}
+}) {
+	cpu.l1dCache = cache
+	// 同步standalone模式
+	if cache != nil {
+		cache.SetStandaloneMode(cpu.standaloneMode)
+	}
 }
 
 // DefaultO3CPUConfig 返回默认配置（基于 Intel Skylake）
@@ -625,8 +657,59 @@ func (cpu *O3CPU) execute() {
 // standaloneMode=true: 自动完成内存操作（简化模拟）
 // standaloneMode=false: 等待框架响应（真实集成）
 func (cpu *O3CPU) executeMemoryOperation(instr *instruction.OOOModelInstr) {
-	if cpu.standaloneMode {
-		// 独立模式：自动完成内存操作
+	// 如果有Cache，使用Cache
+	if cpu.l1dCache != nil {
+		// 处理所有load操作
+		for _, addr := range instr.SrcMemory {
+			if addr != 0 {
+				// 0 = Load (对应cache.AccessLoad)
+				hit, readyCycle, _ := cpu.l1dCache.Access(
+					addr,
+					addr, // vaddr = paddr (简化)
+					instr.InstrID,
+					0, // AccessLoad
+					cpu.currentCycle,
+				)
+
+				// Cache会在standalone模式下自动fill
+				// 在集成模式下，Cache miss会分配MSHR，等待下级响应
+				_ = hit
+				_ = readyCycle
+				// TODO: 跟踪readyCycle，在数据就绪时调用HandleLoadResponse
+			}
+		}
+
+		// 处理所有store操作
+		for _, addr := range instr.DestMemory {
+			if addr != 0 {
+				// 1 = Store (对应cache.AccessStore)
+				hit, readyCycle, _ := cpu.l1dCache.Access(
+					addr,
+					addr, // vaddr = paddr
+					instr.InstrID,
+					1, // AccessStore
+					cpu.currentCycle,
+				)
+				_ = hit
+				_ = readyCycle
+			}
+		}
+
+		// 在Cache standalone模式下，数据会自动就绪
+		// 需要立即调用HandleLoadResponse/HandleStoreResponse
+		if cpu.standaloneMode {
+			loadCount := len(instr.SrcMemory)
+			for i := 0; i < loadCount; i++ {
+				cpu.HandleLoadResponse(instr.InstrID, cpu.currentCycle+1)
+			}
+
+			storeCount := len(instr.DestMemory)
+			for i := 0; i < storeCount; i++ {
+				cpu.HandleStoreResponse(instr.InstrID, cpu.currentCycle+1)
+			}
+		}
+	} else if cpu.standaloneMode {
+		// 没有Cache但是standalone模式：自动完成内存操作
 		// 注意：一条指令可能有多个load/store操作，需要为每个操作调用一次Handle函数
 
 		// 处理所有load操作
@@ -640,11 +723,8 @@ func (cpu *O3CPU) executeMemoryOperation(instr *instruction.OOOModelInstr) {
 		for i := 0; i < storeCount; i++ {
 			cpu.HandleStoreResponse(instr.InstrID, cpu.currentCycle+1)
 		}
-
-		// 注意：不再直接设置 instr.Completed = true
-		// 应该由 complete_inflight_instruction() 设置
 	}
-	// 集成模式：什么都不做，等待框架调用 HandleLoadResponse/HandleStoreResponse
+	// 集成模式 + 无Cache：什么都不做，等待框架调用 HandleLoadResponse/HandleStoreResponse
 }
 
 // ==================== Retire 阶段 ====================
