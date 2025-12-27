@@ -24,6 +24,25 @@ type SnoopResponse struct {
 	HasData        bool   // Whether data is included
 }
 
+// CacheStats represents cache performance statistics.
+type CacheStats struct {
+	Hits       uint64 // Number of cache hits
+	Misses     uint64 // Number of cache misses
+	Accesses   uint64 // Total number of accesses (Hits + Misses)
+	Evictions  uint64 // Number of evictions
+	Writebacks uint64 // Number of writebacks (dirty evictions)
+}
+
+// AccessResult represents the result of a cache access.
+type AccessResult struct {
+	Hit       bool   // Whether the access was a hit
+	Data      []byte // Data if hit, nil if miss
+	NeedFill  bool   // Whether a fill from lower level is needed
+	OldState  State  // Previous state (for state tracking)
+	NewState  State  // New state after access
+	Writeback bool   // Whether a writeback is required (eviction of dirty line)
+}
+
 // Cache defines the interface for cache storage and state management.
 // This interface is protocol-agnostic and focuses purely on state/data storage.
 type Cache interface {
@@ -65,5 +84,31 @@ type Cache interface {
 	// Used in protocols that support direct cache-to-cache transfer (DMT).
 	// Returns true if the cache has the data in a state that allows forwarding.
 	CanForward(addr uint64) bool
+
+	// Access performs a cache access (read or write).
+	// This is a higher-level interface that combines state checking and updates.
+	// Parameters:
+	//   - addr: Target address
+	//   - isWrite: True for write access, false for read
+	// Returns:
+	//   - *AccessResult: Detailed result of the access
+	Access(addr uint64, isWrite bool) *AccessResult
+
+	// Fill fills a cache line with data from lower level.
+	// This is called when a miss occurs and data arrives from memory/lower cache.
+	// Parameters:
+	//   - addr: Target address
+	//   - data: Data to fill
+	//   - state: Initial state for the filled line (typically Exclusive or Shared)
+	// Returns:
+	//   - evictedAddr: Address of evicted line (0 if no eviction)
+	//   - needWriteback: Whether the evicted line needs writeback
+	Fill(addr uint64, data []byte, state State) (evictedAddr uint64, needWriteback bool)
+
+	// GetStats returns current cache statistics.
+	GetStats() CacheStats
+
+	// ResetStats resets all statistics counters to zero.
+	ResetStats()
 }
 

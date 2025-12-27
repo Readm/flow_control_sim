@@ -273,3 +273,197 @@ func (d *FullyAssociativeDirectory) HasPendingRequest(addr uint64) bool {
 	return false
 }
 
+// HandleMESIRequest implements Directory.HandleMESIRequest
+func (d *FullyAssociativeDirectory) HandleMESIRequest(addr uint64, requesterID int, isWrite bool) *MESIAction {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	entry, exists := d.entries[addr]
+
+	action := &MESIAction{
+		InvalidateList: []int{},
+		ForwarderID:    -1,
+		NeedMemory:     false,
+		NewState:       StateNotPresent,
+		GrantExclusive: false,
+	}
+
+	// Case 1: No directory entry exists (first access)
+	if !exists || entry.State == StateNotPresent {
+		if isWrite {
+			// Write request, no sharers -> grant Exclusive
+			action.NeedMemory = true
+			action.NewState = StateExclusive
+			action.GrantExclusive = true
+
+			// Update directory
+			d.ensureCapacity()
+			d.entries[addr] = &DirectoryEntry{
+				Addr:    addr,
+				State:   StateExclusive,
+				Sharers: []int{},
+				Owner:   requesterID,
+			}
+		} else {
+			// Read request, no sharers -> grant Exclusive (will be Shared if others request)
+			action.NeedMemory = true
+			action.NewState = StateExclusive
+			action.GrantExclusive = true
+
+			// Update directory
+			d.ensureCapacity()
+			d.entries[addr] = &DirectoryEntry{
+				Addr:    addr,
+				State:   StateExclusive,
+				Sharers: []int{requesterID},
+				Owner:   requesterID,
+			}
+		}
+		return action
+	}
+
+	// Case 2: Entry exists in Exclusive state
+	if entry.State == StateExclusive {
+		owner := entry.Owner
+
+		if isWrite {
+			// Write request
+			if owner == requesterID {
+				// Same owner, upgrade to Modified (no action needed)
+				entry.State = StateModified
+				action.NewState = StateModified
+				action.GrantExclusive = true
+			} else {
+				// Different owner, invalidate current owner
+				action.InvalidateList = []int{owner}
+				action.ForwarderID = owner // May forward data
+				action.NewState = StateModified
+				action.GrantExclusive = true
+
+				// Update directory
+				entry.State = StateModified
+				entry.Owner = requesterID
+				entry.Sharers = []int{}
+			}
+		} else {
+			// Read request
+			if owner == requesterID {
+				// Same owner, already have data (no action)
+				action.NewState = StateExclusive
+			} else {
+				// Different owner, downgrade to Shared
+				action.ForwarderID = owner // Current owner provides data
+				action.NewState = StateShared
+
+				// Update directory
+				entry.State = StateShared
+				entry.Sharers = []int{owner, requesterID}
+				entry.Owner = -1
+			}
+		}
+		return action
+	}
+
+	// Case 3: Entry exists in Modified state
+	if entry.State == StateModified {
+		owner := entry.Owner
+
+		if isWrite {
+			// Write request
+			if owner == requesterID {
+				// Same owner, already Modified (no action)
+				action.NewState = StateModified
+				action.GrantExclusive = true
+			} else {
+				// Different owner, invalidate and transfer ownership
+				action.InvalidateList = []int{owner}
+				action.ForwarderID = owner // Current owner must provide dirty data
+				action.NewState = StateModified
+				action.GrantExclusive = true
+
+				// Update directory
+				entry.Owner = requesterID
+			}
+		} else {
+			// Read request
+			if owner == requesterID {
+				// Same owner, already have data
+				action.NewState = StateModified
+			} else {
+				// Different owner, owner must writeback and downgrade to Shared
+				action.ForwarderID = owner // Owner provides data
+				action.NewState = StateShared
+
+				// Update directory
+				entry.State = StateShared
+				entry.Sharers = []int{owner, requesterID}
+				entry.Owner = -1
+			}
+		}
+		return action
+	}
+
+	// Case 4: Entry exists in Shared state
+	if entry.State == StateShared {
+		if isWrite {
+			// Write request, invalidate all sharers except requester
+			for _, sharerID := range entry.Sharers {
+				if sharerID != requesterID {
+					action.InvalidateList = append(action.InvalidateList, sharerID)
+				}
+			}
+
+			// Check if requester is already a sharer
+			isSharer := false
+			for _, sharerID := range entry.Sharers {
+				if sharerID == requesterID {
+					isSharer = true
+					break
+				}
+			}
+
+			if !isSharer {
+				// Not a sharer, need data from memory or another sharer
+				if len(entry.Sharers) > 0 {
+					action.ForwarderID = entry.Sharers[0]
+				} else {
+					action.NeedMemory = true
+				}
+			}
+
+			action.NewState = StateModified
+			action.GrantExclusive = true
+
+			// Update directory
+			entry.State = StateModified
+			entry.Sharers = []int{}
+			entry.Owner = requesterID
+		} else {
+			// Read request, add to sharers if not already
+			isSharer := false
+			for _, sharerID := range entry.Sharers {
+				if sharerID == requesterID {
+					isSharer = true
+					break
+				}
+			}
+
+			if !isSharer {
+				// Need data from memory or another sharer
+				if len(entry.Sharers) > 0 {
+					action.ForwarderID = entry.Sharers[0]
+				} else {
+					action.NeedMemory = true
+				}
+				entry.Sharers = append(entry.Sharers, requesterID)
+			}
+
+			action.NewState = StateShared
+		}
+		return action
+	}
+
+	// Default: should not reach here
+	return action
+}
+

@@ -14,11 +14,13 @@ type CacheLine struct {
 
 // FullyAssociativeCache implements a simple fully-associative cache with random replacement.
 type FullyAssociativeCache struct {
-	capacity int
-	lines    map[uint64]*CacheLine // Direct lookup by address
-	mu       sync.RWMutex
-	evictCB  EvictCallback
-	rng      *rand.Rand
+	capacity  int
+	lines     map[uint64]*CacheLine // Direct lookup by address
+	mu        sync.RWMutex
+	evictCB   EvictCallback
+	rng       *rand.Rand
+	stats     CacheStats // Statistics counters
+	blockSize uint64     // Block size in bytes (default 64)
 }
 
 // NewFullyAssociativeCache creates a new fully-associative cache with the specified capacity.
@@ -27,10 +29,18 @@ func NewFullyAssociativeCache(capacity int) *FullyAssociativeCache {
 		capacity = 64 // Default capacity
 	}
 	return &FullyAssociativeCache{
-		capacity: capacity,
-		lines:    make(map[uint64]*CacheLine),
-		rng:      rand.New(rand.NewSource(0)), // Deterministic seed for testing
+		capacity:  capacity,
+		lines:     make(map[uint64]*CacheLine),
+		rng:       rand.New(rand.NewSource(0)), // Deterministic seed for testing
+		blockSize: 64,                          // Default 64-byte blocks
 	}
+}
+
+// NewFullyAssociativeCacheWithBlockSize creates a cache with custom block size.
+func NewFullyAssociativeCacheWithBlockSize(capacity int, blockSize uint64) *FullyAssociativeCache {
+	cache := NewFullyAssociativeCache(capacity)
+	cache.blockSize = blockSize
+	return cache
 }
 
 // GetState returns the current state of the cache line at the given address.
@@ -251,5 +261,149 @@ func (c *FullyAssociativeCache) CanForward(addr uint64) bool {
 	return line.State == StateModified ||
 		line.State == StateExclusive ||
 		line.State == StateOwned
+}
+
+// Access implements Cache.Access
+func (c *FullyAssociativeCache) Access(addr uint64, isWrite bool) *AccessResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Update access counter
+	c.stats.Accesses++
+
+	// Align address to block boundary
+	blockAddr := (addr / c.blockSize) * c.blockSize
+
+	line, exists := c.lines[blockAddr]
+
+	// Miss case
+	if !exists || line.State == StateInvalid {
+		c.stats.Misses++
+		return &AccessResult{
+			Hit:       false,
+			Data:      nil,
+			NeedFill:  true,
+			OldState:  StateInvalid,
+			NewState:  StateInvalid,
+			Writeback: false,
+		}
+	}
+
+	// Hit case
+	c.stats.Hits++
+	oldState := line.State
+	newState := oldState
+
+	// State transition for write
+	if isWrite {
+		// Read -> Modified transition
+		if oldState != StateModified {
+			newState = StateModified
+			line.State = StateModified
+		}
+	}
+
+	// Return data copy
+	var dataCopy []byte
+	if line.Data != nil {
+		dataCopy = make([]byte, len(line.Data))
+		copy(dataCopy, line.Data)
+	}
+
+	return &AccessResult{
+		Hit:       true,
+		Data:      dataCopy,
+		NeedFill:  false,
+		OldState:  oldState,
+		NewState:  newState,
+		Writeback: false,
+	}
+}
+
+// Fill implements Cache.Fill
+func (c *FullyAssociativeCache) Fill(addr uint64, data []byte, state State) (uint64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Align address to block boundary
+	blockAddr := (addr / c.blockSize) * c.blockSize
+
+	// Check if line already exists (might happen in race conditions)
+	if _, exists := c.lines[blockAddr]; exists {
+		// Update existing line
+		c.lines[blockAddr].Data = data
+		c.lines[blockAddr].State = state
+		return 0, false
+	}
+
+	// Ensure capacity (might evict)
+	evictedAddr := uint64(0)
+	needWriteback := false
+
+	if len(c.lines) >= c.capacity {
+		// Need to evict
+		evictedAddr, needWriteback = c.evictOne()
+		c.stats.Evictions++
+		if needWriteback {
+			c.stats.Writebacks++
+		}
+	}
+
+	// Allocate new line
+	newLine := &CacheLine{
+		Addr:  blockAddr,
+		State: state,
+		Data:  make([]byte, len(data)),
+	}
+	copy(newLine.Data, data)
+	c.lines[blockAddr] = newLine
+
+	return evictedAddr, needWriteback
+}
+
+// evictOne evicts one cache line (internal helper)
+// Returns: (evicted address, needs writeback)
+func (c *FullyAssociativeCache) evictOne() (uint64, bool) {
+	if len(c.lines) == 0 {
+		return 0, false
+	}
+
+	// Collect all addresses
+	addrs := make([]uint64, 0, len(c.lines))
+	for addr := range c.lines {
+		addrs = append(addrs, addr)
+	}
+
+	// Randomly select one to evict
+	evictAddr := addrs[c.rng.Intn(len(addrs))]
+	line := c.lines[evictAddr]
+
+	needWriteback := line.State == StateModified
+
+	// Call evict callback before removing
+	if c.evictCB != nil {
+		oldData := make([]byte, len(line.Data))
+		copy(oldData, line.Data)
+		c.evictCB(evictAddr, line.State, oldData)
+	}
+
+	// Remove from map
+	delete(c.lines, evictAddr)
+
+	return evictAddr, needWriteback
+}
+
+// GetStats implements Cache.GetStats
+func (c *FullyAssociativeCache) GetStats() CacheStats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.stats
+}
+
+// ResetStats implements Cache.ResetStats
+func (c *FullyAssociativeCache) ResetStats() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stats = CacheStats{}
 }
 

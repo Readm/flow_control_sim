@@ -14,6 +14,15 @@ const (
 // Parameters: addr (address of evicted entry), state (state before eviction), sharers (sharers before eviction), owner (owner before eviction)
 type EvictCallback func(addr uint64, state State, sharers []int, owner int)
 
+// MESIAction represents an action to take in MESI protocol.
+type MESIAction struct {
+	InvalidateList []int  // List of node IDs to invalidate
+	ForwarderID    int    // Node ID that should forward data (-1 if none)
+	NeedMemory     bool   // Whether memory access is needed
+	NewState       State  // New state for the directory entry
+	GrantExclusive bool   // Whether to grant exclusive access to requester
+}
+
 // Directory defines the interface for directory storage and sharer tracking.
 // This interface is protocol-agnostic and focuses purely on tracking who has copies of cache lines.
 type Directory interface {
@@ -55,5 +64,14 @@ type Directory interface {
 	// Used for conflict detection and request serialization.
 	// Returns true if another transaction is already processing this address.
 	HasPendingRequest(addr uint64) bool
+
+	// HandleMESIRequest processes a MESI protocol request and returns required actions.
+	// Parameters:
+	//   - addr: Target address
+	//   - requesterID: Node ID making the request
+	//   - isWrite: True for write request (exclusive), false for read request (shared)
+	// Returns:
+	//   - *MESIAction: Actions to take (invalidations, forwarding, etc.)
+	HandleMESIRequest(addr uint64, requesterID int, isWrite bool) *MESIAction
 }
 
