@@ -165,3 +165,8 @@ func (h *DRAMNodeHandler) sendPendingResponses(cycle uint64) error {
 
 	return nil
 }
+
+// GetDRAMStats 获取 DRAM 统计信息
+func (h *DRAMNodeHandler) GetDRAMStats() dram.DRAMStats {
+	return h.dramChannel.GetStats()
+}

@@ -147,3 +147,13 @@ func (h *CPUNodeHandler) sendPendingRequests(cycle uint64) error {
 
 	return nil
 }
+
+// GetCPUStats 返回 CPU 统计信息
+func (h *CPUNodeHandler) GetCPUStats() cpu.O3CPUStats {
+	return h.cpu.GetStats()
+}
+
+// GetCacheStats 返回 Cache 统计信息
+func (h *CPUNodeHandler) GetCacheStats() interface{} {
+	return h.l1dCache.GetStats()
+}
