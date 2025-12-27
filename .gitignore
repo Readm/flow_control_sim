@@ -86,7 +86,7 @@ benchmark_*.txt
 testdata/output/
 testdata/tmp/
 ring_simulator
+# Third-party dependencies
 ThirdParty/
 *.champsimtrace
 *.xz
-
