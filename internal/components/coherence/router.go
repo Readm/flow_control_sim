@@ -6,21 +6,124 @@ import "fmt"
 type CoherenceRouter struct {
 	myNodeID int
 	tree     *CoherenceTree
+
+	// 路由表缓存（初始化时预计算）
+	// routingTable[dstDirectoryID] = nextHop
+	routingTable map[int]int
+
+	// 我所属的 Directory（缓存）
+	myDirectoryID int
 }
 
 // NewCoherenceRouter 创建一致性路由器
 func NewCoherenceRouter(myNodeID int, tree *CoherenceTree) *CoherenceRouter {
-	return &CoherenceRouter{
-		myNodeID: myNodeID,
-		tree:     tree,
+	router := &CoherenceRouter{
+		myNodeID:     myNodeID,
+		tree:         tree,
+		routingTable: make(map[int]int),
+	}
+
+	// 初始化时预计算路由表
+	router.precomputeRoutingTable()
+
+	return router
+}
+
+// precomputeRoutingTable 预计算路由表
+// 为每个可能的目标 Directory 计算下一跳
+func (r *CoherenceRouter) precomputeRoutingTable() {
+	// 1. 找到我所属的 Directory
+	myDirID := r.findMyDirectory()
+	r.myDirectoryID = myDirID
+
+	// 2. 为每个 Directory 计算下一跳
+	for dirID := range r.tree.DirectoryNodes {
+		nextHop := r.computeNextHop(myDirID, dirID)
+		if nextHop != -1 {
+			r.routingTable[dirID] = nextHop
+		}
 	}
 }
 
-// RouteForCoherence 一致性请求路由
+// findMyDirectory 查找我所属的 Directory
+func (r *CoherenceRouter) findMyDirectory() int {
+	// 查找包含当前节点的 Directory
+	for dirID, dirNode := range r.tree.DirectoryNodes {
+		for _, memberID := range dirNode.Domain {
+			if memberID == r.myNodeID {
+				return dirID
+			}
+		}
+	}
+
+	// 如果当前节点本身就是 Directory
+	if r.tree.DirectoryNodes[r.myNodeID] != nil {
+		return r.myNodeID
+	}
+
+	// 未找到（不应该发生）
+	return -1
+}
+
+// computeNextHop 计算从当前节点到目标 Directory 的下一跳
+func (r *CoherenceRouter) computeNextHop(myDirID, dstDirID int) int {
+	// 如果当前节点不是 Directory，第一跳一定是它的 Directory
+	if r.myNodeID != myDirID {
+		return myDirID
+	}
+
+	// 如果当前节点是 Directory
+	// 并且目标就是自己，下一跳就是自己
+	if myDirID == dstDirID {
+		return myDirID
+	}
+
+	// 获取从我的 Directory 到目标 Directory 的路径
+	path := r.computeDirectoryPath(myDirID, dstDirID)
+	if len(path) < 2 {
+		return -1
+	}
+
+	// 返回路径的第二个节点（下一跳）
+	return path[1]
+}
+
+// computeDirectoryPath 计算从源 Directory 到目标 Directory 的路径
+func (r *CoherenceRouter) computeDirectoryPath(srcDirID, dstDirID int) []int {
+	srcDir := r.tree.DirectoryNodes[srcDirID]
+	dstDir := r.tree.DirectoryNodes[dstDirID]
+
+	if srcDir == nil || dstDir == nil {
+		return nil
+	}
+
+	// 如果源和目标相同
+	if srcDirID == dstDirID {
+		return []int{srcDirID}
+	}
+
+	// 向上遍历找到公共父节点
+	commonParent := r.tree.findCommonParent(srcDir, dstDir)
+	if commonParent == nil {
+		return nil
+	}
+
+	// 路径：src -> ... -> commonParent -> ... -> dst
+	pathToParent := r.tree.getPathToAncestor(srcDir, commonParent)
+	pathFromParent := r.tree.getPathFromAncestor(commonParent, dstDir)
+
+	// 合并路径（避免重复 commonParent）
+	path := pathToParent
+	path = append(path, pathFromParent...)
+
+	return path
+}
+
+// RouteForCoherence 一致性请求路由（优化版：使用预计算的路由表）
 // 返回：下一跳节点 ID
 // 如果返回 myNodeID，表示本地处理（我就是 Home Node）
 func (r *CoherenceRouter) RouteForCoherence(addr uint64) (int, error) {
-	// 1. 找到该地址的 Home Node
+	// 1. 找到该地址的 Home Node（对于交错映射，这是 O(1) 操作）
 	homeNodeID, err := r.tree.GetHomeNode(addr)
 	if err != nil {
 		return -1, fmt.Errorf("无法找到 Home Node: %v", err)
@@ -31,18 +134,13 @@ func (r *CoherenceRouter) RouteForCoherence(addr uint64) (int, error) {
 		return r.myNodeID, nil
 	}
 
-	// 3. 获取从当前节点到 Home Node 的路径
-	path, err := r.tree.GetCoherencePath(r.myNodeID, addr)
-	if err != nil {
-		return -1, fmt.Errorf("无法找到路径: %v", err)
+	// 3. 从路由表查找下一跳（O(1) 查表，无需遍历树）
+	nextHop, exists := r.routingTable[homeNodeID]
+	if !exists {
+		return -1, fmt.Errorf("路由表中没有到 Home Node %d 的路由", homeNodeID)
 	}
 
-	// 4. 返回下一跳（路径的第二个节点）
-	if len(path) < 2 {
-		return -1, fmt.Errorf("路径长度不足: %v", path)
-	}
-
-	return path[1], nil
+	return nextHop, nil
 }
 
 // IsHomeNode 检查当前节点是否是某个地址的 Home Node
@@ -59,23 +157,13 @@ func (r *CoherenceRouter) GetHomeNode(addr uint64) (int, error) {
 	return r.tree.GetHomeNode(addr)
 }
 
-// GetMyDirectory 获取管理当前节点的 Directory
+// GetMyDirectory 获取管理当前节点的 Directory（使用缓存值）
 func (r *CoherenceRouter) GetMyDirectory() (int, error) {
-	// 查找当前节点所属的 Directory
-	for dirID, dirNode := range r.tree.DirectoryNodes {
-		for _, memberID := range dirNode.Domain {
-			if memberID == r.myNodeID {
-				return dirID, nil
-			}
-		}
+	// 直接返回初始化时缓存的值
+	if r.myDirectoryID == -1 {
+		return -1, fmt.Errorf("节点 %d 不属于任何 Directory Domain", r.myNodeID)
 	}
-
-	// 如果当前节点本身就是 Directory
-	if r.tree.DirectoryNodes[r.myNodeID] != nil {
-		return r.myNodeID, nil
-	}
-
-	return -1, fmt.Errorf("节点 %d 不属于任何 Directory Domain", r.myNodeID)
+	return r.myDirectoryID, nil
 }
 
 // RouteForMiss Cache miss 路由（向下游查找）
