@@ -9,7 +9,6 @@ import (
 
 	"github.com/Readm/flow_sim/internal/champsim/cache"
 	"github.com/Readm/flow_sim/internal/champsim/cpu"
-	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
@@ -34,9 +33,6 @@ type CPUNodeHandler struct {
 
 	// 输出队列（发送到DRAM）
 	outputQueue *queue.OutputQueue
-
-	// CPU执行时间模拟（SpinWait cycles）
-	spinCycles uint64
 }
 
 // NewCPUNodeHandler 创建 CPU Node Handler
@@ -48,14 +44,12 @@ type CPUNodeHandler struct {
 // - l1dCache: L1D Cache实例
 // - memoryAdapter: FlowSim Memory Adapter（连接Cache和网络）
 // - outputQueue: 输出队列（发送到DRAM）
-// - spinCycles: CPU执行时间模拟（0表示不模拟）
 func NewCPUNodeHandler(
 	nodeID, dramID int,
 	cpu *cpu.O3CPU,
 	l1dCache *cache.SetAssociativeCache,
 	memoryAdapter *FlowSimMemoryAdapter,
 	outputQueue *queue.OutputQueue,
-	spinCycles uint64,
 ) *CPUNodeHandler {
 	return &CPUNodeHandler{
 		cpu:           cpu,
@@ -64,7 +58,6 @@ func NewCPUNodeHandler(
 		nodeID:        nodeID,
 		dramID:        dramID,
 		outputQueue:   outputQueue,
-		spinCycles:    spinCycles,
 	}
 }
 
@@ -93,14 +86,6 @@ func (h *CPUNodeHandler) Process(cycle uint64, inputs [][]queue.PacketRef) error
 	// 3. 从MemoryAdapter获取pending requests并发送到DRAM
 	if err := h.sendPendingRequests(cycle); err != nil {
 		return fmt.Errorf("failed to send pending requests: %w", err)
-	}
-
-	// 4. 模拟CPU执行时间（与network benchmark保持一致）
-	// 在真实硬件中，CPU核心会花费时间执行指令
-	// 这里使用 SpinWaitCycles 模拟 CPU 的实际计算工作
-	// 范围：5-20us，与 GEM5 O3CPU 的执行时间相当
-	if h.spinCycles > 0 {
-		node.SpinWaitCycles(h.spinCycles)
 	}
 
 	return nil

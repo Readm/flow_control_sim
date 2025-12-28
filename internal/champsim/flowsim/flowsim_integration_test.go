@@ -71,7 +71,6 @@ func Test_FlowSim_CPU_DRAM_Integration(t *testing.T) {
 		l1dCache,
 		memoryAdapter,
 		cpuOutputQueue,
-		0, // no SpinWait simulation
 	)
 
 	// 创建DRAM Node Handler

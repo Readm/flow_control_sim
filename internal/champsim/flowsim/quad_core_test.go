@@ -86,7 +86,6 @@ func Test_QuadCore_MESI_DualChannel(t *testing.T) {
 			l1dCache,
 			memoryAdapter,
 			cpuOutputQueue,
-			0, // no SpinWait simulation
 		)
 
 		// 创建 Worker Node

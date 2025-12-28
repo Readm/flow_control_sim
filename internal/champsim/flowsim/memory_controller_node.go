@@ -12,15 +12,16 @@ import (
 type MemoryControllerHandler struct {
 	nodeID int
 
-	// 上游 L2 Cache 节点 ID
-	l2NodeID int
+	// 上游 Cache 节点 IDs (可以是 L2s 或 L3s)
+	// 用于将响应路由回正确的上游节点
+	upstreamNodeIDs []int
 
 	// 下游 DRAM Channel 节点 IDs
 	dramChannelIDs []int
 
 	// 输出队列
-	// outputQueues[0]: 发送到 L2
-	// outputQueues[1..n]: 发送到各个 DRAM Channel
+	// outputQueues[0..numUpstream-1]: 发送到各个上游Cache
+	// outputQueues[numUpstream..numUpstream+numDRAM-1]: 发送到各个 DRAM Channel
 	outputQueues []*queue.OutputQueue
 
 	// 地址映射策略
@@ -51,17 +52,17 @@ const (
 // NewMemoryControllerHandler 创建 Memory Controller Handler
 func NewMemoryControllerHandler(
 	nodeID int,
-	l2NodeID int,
+	upstreamNodeIDs []int,  // 上游节点IDs (L2s 或 L3s)
 	dramChannelIDs []int,
 	outputQueues []*queue.OutputQueue,
 	strategy AddressMappingStrategy,
 ) *MemoryControllerHandler {
 	return &MemoryControllerHandler{
-		nodeID:         nodeID,
-		l2NodeID:       l2NodeID,
-		dramChannelIDs: dramChannelIDs,
-		outputQueues:   outputQueues,
-		addressMapping: strategy,
+		nodeID:          nodeID,
+		upstreamNodeIDs: upstreamNodeIDs,
+		dramChannelIDs:  dramChannelIDs,
+		outputQueues:    outputQueues,
+		addressMapping:  strategy,
 		stats: MemoryControllerStats{
 			RequestsPerChannel: make([]uint64, len(dramChannelIDs)),
 		},
@@ -69,12 +70,15 @@ func NewMemoryControllerHandler(
 }
 
 // Process 处理输入包
-// inputs[0]: 来自 L2 的请求
-// inputs[1..n]: 来自各个 DRAM Channel 的响应
+// inputs[0..numUpstream-1]: 来自上游Cache节点的请求
+// inputs[numUpstream..numUpstream+numDRAM-1]: 来自各个 DRAM Channel 的响应
 func (h *MemoryControllerHandler) Process(cycle uint64, inputs [][]queue.PacketRef) error {
+	numUpstream := len(h.upstreamNodeIDs)
+
 	// 1. 处理来自 DRAM Channels 的响应
-	for channelIndex := 1; channelIndex < len(inputs); channelIndex++ {
-		for _, ref := range inputs[channelIndex] {
+	for dramIndex := 0; dramIndex < len(h.dramChannelIDs); dramIndex++ {
+		inputIndex := numUpstream + dramIndex
+		for _, ref := range inputs[inputIndex] {
 			if err := h.handleDRAMResponse(cycle, ref.Packet); err != nil {
 				return err
 			}
@@ -82,19 +86,21 @@ func (h *MemoryControllerHandler) Process(cycle uint64, inputs [][]queue.PacketR
 		}
 	}
 
-	// 2. 处理来自 L2 的请求
-	for _, ref := range inputs[0] {
-		if err := h.handleL2Request(cycle, ref.Packet); err != nil {
-			return err
+	// 2. 处理来自上游Cache节点的请求
+	for upstreamIndex := 0; upstreamIndex < numUpstream; upstreamIndex++ {
+		for _, ref := range inputs[upstreamIndex] {
+			if err := h.handleUpstreamRequest(cycle, ref.Packet); err != nil {
+				return err
+			}
+			ref.Queue.Free(ref.Slot)
 		}
-		ref.Queue.Free(ref.Slot)
 	}
 
 	return nil
 }
 
-// handleL2Request 处理来自 L2 的请求
-func (h *MemoryControllerHandler) handleL2Request(cycle uint64, pkt packet.Packet) error {
+// handleUpstreamRequest 处理来自上游Cache节点的请求
+func (h *MemoryControllerHandler) handleUpstreamRequest(cycle uint64, pkt packet.Packet) error {
 	payload, err := ParseMemoryRequestPayload(pkt)
 	if err != nil {
 		return err
@@ -118,9 +124,10 @@ func (h *MemoryControllerHandler) handleL2Request(cycle uint64, pkt packet.Packe
 		payload.Data,
 	)
 
-	// outputQueues[0] 是到 L2 的
-	// outputQueues[1..n] 是到各个 DRAM 的
-	dramQueueIndex := channelIndex + 1
+	// outputQueues[0..numUpstream-1] 是到上游Cache的
+	// outputQueues[numUpstream..numUpstream+numDRAM-1] 是到各个 DRAM 的
+	numUpstream := len(h.upstreamNodeIDs)
+	dramQueueIndex := numUpstream + channelIndex
 	h.outputQueues[dramQueueIndex].InjectPackets(int(cycle), []packet.Packet{requestPkt})
 
 	return nil
@@ -135,18 +142,36 @@ func (h *MemoryControllerHandler) handleDRAMResponse(cycle uint64, pkt packet.Pa
 
 	h.stats.Responses++
 
-	// 转发响应给 L2
+	// 从packet中获取目标节点ID（response应该发送回原始请求的源节点）
+	destNodeID := pkt.GetDestID()
+
+	// 查找目标节点在upstreamNodeIDs中的索引
+	upstreamIndex := -1
+	for i, nodeID := range h.upstreamNodeIDs {
+		if nodeID == destNodeID {
+			upstreamIndex = i
+			break
+		}
+	}
+
+	if upstreamIndex == -1 {
+		// 目标节点不在上游节点列表中，这不应该发生
+		// 为了向后兼容，默认发送到第一个上游节点
+		upstreamIndex = 0
+	}
+
+	// 转发响应给正确的上游Cache节点
 	responsePkt := NewMemoryResponsePacket(
 		h.nodeID,
-		h.l2NodeID,
+		h.upstreamNodeIDs[upstreamIndex],
 		payload.Address,
 		payload.Data,
 		payload.InstrID,
 		cycle,
 	)
 
-	// outputQueues[0] 是到 L2 的
-	h.outputQueues[0].InjectPackets(int(cycle), []packet.Packet{responsePkt})
+	// outputQueues[0..numUpstream-1] 是到上游Cache的
+	h.outputQueues[upstreamIndex].InjectPackets(int(cycle), []packet.Packet{responsePkt})
 
 	return nil
 }
