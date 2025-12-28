@@ -157,31 +157,64 @@ func (t *CoherenceTree) mapAddressToDirectory(addr uint64) (int, error) {
 // findResponsibleNode 查找负责该地址的节点（递归）
 // 返回最低层（最接近 CPU）的 Directory 节点
 func (t *CoherenceTree) findResponsibleNode(node *CoherenceNode, addr uint64) *CoherenceNode {
-	// 检查子节点是否有负责该地址的
+	// 如果没有子节点，当前节点就是负责节点
+	if len(node.Children) == 0 {
+		return node
+	}
+
+	// 检查是否所有子节点都有明确的地址责任
+	hasAnyRange := false
 	for _, child := range node.Children {
-		// 如果子节点有明确的地址责任
 		if child.AddressResponsibility != nil {
-			if child.AddressResponsibility.Contains(addr) {
-				// 递归查找子节点
+			hasAnyRange = true
+			break
+		}
+	}
+
+	if hasAnyRange {
+		// 如果有子节点有明确的地址责任，使用范围匹配
+		for _, child := range node.Children {
+			if child.AddressResponsibility != nil {
+				if child.AddressResponsibility.Contains(addr) {
+					// 递归查找子节点
+					responsible := t.findResponsibleNode(child, addr)
+					if responsible != nil {
+						return responsible
+					}
+					return child
+				}
+			}
+		}
+		// 没有子节点匹配该地址，返回当前节点
+		return node
+	} else {
+		// 如果所有子节点都没有地址范围，使用交错映射
+		// 收集所有子节点 ID 并排序
+		childIDs := make([]int, len(node.Children))
+		for i, child := range node.Children {
+			childIDs[i] = child.NodeID
+		}
+		sort.Ints(childIDs)
+
+		// 使用交错映射选择子节点
+		index := (addr / t.AddressMappingConfig.Granularity) % uint64(len(childIDs))
+		selectedChildID := childIDs[index]
+
+		// 找到对应的子节点
+		for _, child := range node.Children {
+			if child.NodeID == selectedChildID {
+				// 递归查找
 				responsible := t.findResponsibleNode(child, addr)
 				if responsible != nil {
 					return responsible
 				}
 				return child
 			}
-		} else {
-			// 如果子节点没有明确的地址责任，说明它负责所有地址
-			// 继续向下查找更低层的 Directory
-			responsible := t.findResponsibleNode(child, addr)
-			if responsible != nil {
-				return responsible
-			}
-			return child
 		}
-	}
 
-	// 如果没有子节点负责，当前节点就是负责节点
-	return node
+		// 理论上不应该到这里
+		return node
+	}
 }
 
 // GetCoherencePath 返回从 requester 到 Home Node 的路径
