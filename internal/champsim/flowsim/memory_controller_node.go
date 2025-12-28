@@ -52,7 +52,7 @@ const (
 // NewMemoryControllerHandler 创建 Memory Controller Handler
 func NewMemoryControllerHandler(
 	nodeID int,
-	upstreamNodeIDs []int,  // 上游节点IDs (L2s 或 L3s)
+	upstreamNodeIDs []int, // 上游节点IDs (L2s 或 L3s)
 	dramChannelIDs []int,
 	outputQueues []*queue.OutputQueue,
 	strategy AddressMappingStrategy,
@@ -143,7 +143,7 @@ func (h *MemoryControllerHandler) handleDRAMResponse(cycle uint64, pkt packet.Pa
 	h.stats.Responses++
 
 	// 从packet中获取目标节点ID（response应该发送回原始请求的源节点）
-	destNodeID := pkt.GetDestID()
+	destNodeID := pkt.TargetID
 
 	// 查找目标节点在upstreamNodeIDs中的索引
 	upstreamIndex := -1
@@ -185,8 +185,8 @@ func (h *MemoryControllerHandler) selectChannel(address uint64) int {
 		// 使用地址的某些 bits 来交错映射
 		// 例如，使用 bits [12:14] (假设 cache line size = 64B = 2^6)
 		// 这样每个 cache line 会映射到不同的通道
-		blockBits := 6                                        // log2(64)
-		channelBits := log2(uint64(numChannels))              // 需要多少位来表示通道数
+		blockBits := 6                           // log2(64)
+		channelBits := log2(uint64(numChannels)) // 需要多少位来表示通道数
 		channelIndex := (address >> blockBits) & ((1 << channelBits) - 1)
 		return int(channelIndex) % numChannels
 
