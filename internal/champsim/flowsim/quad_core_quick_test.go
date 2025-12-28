@@ -60,6 +60,7 @@ func Test_QuadCore_Quick(t *testing.T) {
 			cpuNodeIDs[i], l2NodeID,
 			o3cpu, l1dCache, memoryAdapter,
 			cpuOutputQueue,
+			0, // no SpinWait simulation
 		)
 
 		cpuNode := node.NewWorkerNode(cpuNodeIDs[i])

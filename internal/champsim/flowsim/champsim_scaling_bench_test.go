@@ -28,7 +28,8 @@ func (h *SystemHandlers) Cleanup() {
 
 // buildChampSimSystem builds a complete ChampSim system with configurable CPU count
 // Returns network and handlers for cleanup
-func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *SystemHandlers, error) {
+// spinCycles: CPU执行时间模拟（0表示不模拟）
+func buildChampSimSystem(numCPUs int, traceFile string, spinCycles uint64) (*network.Network, *SystemHandlers, error) {
 	const numChannels = 2
 
 	// Node IDs
@@ -69,6 +70,7 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 			cpuNodeIDs[i], l2NodeID,
 			o3cpu, l1dCache, memoryAdapter,
 			cpuOutputQueue,
+			spinCycles,
 		)
 
 		cpuNode := node.NewWorkerNode(cpuNodeIDs[i])
@@ -198,8 +200,8 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 }
 
 // runChampSimBenchmark runs ChampSim simulation using AdvanceTo
-func runChampSimBenchmark(b *testing.B, numCPUs int, maxCycles uint64, traceFile string) {
-	net, handlers, err := buildChampSimSystem(numCPUs, traceFile)
+func runChampSimBenchmark(b *testing.B, numCPUs int, maxCycles uint64, traceFile string, spinCycles uint64) {
+	net, handlers, err := buildChampSimSystem(numCPUs, traceFile, spinCycles)
 	if err != nil {
 		b.Fatalf("Failed to build system: %v", err)
 	}
@@ -242,6 +244,11 @@ func Benchmark_ChampSim_64CPU(b *testing.B) {
 	cyclesPerUS := node.CalibrateCyclesPerUS(100 * time.Millisecond)
 	b.Logf("Calibrated CPU Frequency: %.2f GHz", cyclesPerUS/1000.0)
 
+	// Calculate spin cycles for CPU execution simulation (5-20us, avg 12.5us)
+	// This matches the network benchmark's SpinWait behavior
+	avgSpinCycles := uint64(12.5 * cyclesPerUS)
+	b.Logf("CPU SpinWait cycles: %d (avg 12.5us)", avgSpinCycles)
+
 	numPhysicalCPU := runtime.NumCPU()
 
 	// Generate core count samples: 1, 2, 4, 8... up to 16
@@ -273,31 +280,33 @@ func Benchmark_ChampSim_64CPU(b *testing.B) {
 			// Run benchmark and accumulate actual cycles
 			for iteration := 0; iteration < b.N; iteration++ {
 				iterStart := node.GetCPUCycles()
-				runChampSimBenchmark(b, numSimCPUs, maxCycles, traceFile)
+				runChampSimBenchmark(b, numSimCPUs, maxCycles, traceFile, avgSpinCycles)
 				iterEnd := node.GetCPUCycles()
 				totalCycles += (iterEnd - iterStart)
 			}
 
 			b.StopTimer()
 
-			// Actual CPU cycles used per operation
+			// Calculate performance metrics
+			// Actual cycles per op (measured with RDTSC)
 			actualCyclesPerOp := float64(totalCycles) / float64(b.N)
 
-			// Store single core cycles for efficiency calculation
+			// Store single core baseline for speedup calculation
 			if coreCount == 1 {
 				singleCoreCycles = actualCyclesPerOp
 			}
 
-			// Calculate efficiency: (single_core_cycles / (actual_cycles * cores)) * 100
-			efficiencyPct := 0.0
-			if actualCyclesPerOp > 0 && singleCoreCycles > 0 {
-				efficiencyPct = (singleCoreCycles / (actualCyclesPerOp * float64(coreCount))) * 100
-			}
-
-			// Calculate speedup
+			// Calculate speedup relative to single core
 			speedup := 0.0
 			if actualCyclesPerOp > 0 && singleCoreCycles > 0 {
 				speedup = singleCoreCycles / actualCyclesPerOp
+			}
+
+			// Efficiency = (Speedup / Cores) * 100
+			// This shows how well we utilize the available cores
+			efficiencyPct := 0.0
+			if coreCount > 0 {
+				efficiencyPct = (speedup / float64(coreCount)) * 100
 			}
 
 			// Report metrics
