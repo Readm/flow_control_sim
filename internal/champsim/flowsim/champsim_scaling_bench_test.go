@@ -253,6 +253,11 @@ func BenchmarkChampSimCoreScaling(b *testing.B) {
 			oldMaxProcs := runtime.GOMAXPROCS(coreCount)
 			defer runtime.GOMAXPROCS(oldMaxProcs)
 
+			// Keep simulated CPUs fixed to measure framework efficiency
+			// The efficiency shows how well the framework parallelizes
+			// a FIXED simulation workload across varying core counts
+			scaledSimCPUs := numSimCPUs
+
 			// Reset timer before actual benchmark
 			b.ResetTimer()
 
@@ -261,7 +266,7 @@ func BenchmarkChampSimCoreScaling(b *testing.B) {
 			// Run benchmark and accumulate actual cycles
 			for iteration := 0; iteration < b.N; iteration++ {
 				iterStart := node.GetCPUCycles()
-				runChampSimBenchmark(b, numSimCPUs, maxCycles, traceFile)
+				runChampSimBenchmark(b, scaledSimCPUs, maxCycles, traceFile)
 				iterEnd := node.GetCPUCycles()
 				totalCycles += (iterEnd - iterStart)
 			}
@@ -274,11 +279,11 @@ func BenchmarkChampSimCoreScaling(b *testing.B) {
 			actualCyclesPerOp := float64(totalCycles) / float64(b.N)
 
 			// 2. Average work per simulation cycle (from actual measurements)
-			//    actualCyclesPerOp = numSimCPUs * maxCycles * avgSimWorkCycles
-			avgSimWorkCycles := actualCyclesPerOp / (float64(numSimCPUs) * float64(maxCycles))
+			//    actualCyclesPerOp = scaledSimCPUs * maxCycles * avgSimWorkCycles
+			avgSimWorkCycles := actualCyclesPerOp / (float64(scaledSimCPUs) * float64(maxCycles))
 
 			// 3. Total simulated work per operation
-			simWorkPerOpCycles := float64(numSimCPUs) * float64(maxCycles) * avgSimWorkCycles
+			simWorkPerOpCycles := float64(scaledSimCPUs) * float64(maxCycles) * avgSimWorkCycles
 
 			// 4. Ideal cycles per core (if perfectly parallelized)
 			simWorkPerCoreCycles := simWorkPerOpCycles / float64(coreCount)
@@ -290,6 +295,7 @@ func BenchmarkChampSimCoreScaling(b *testing.B) {
 			}
 
 			// Report metrics (matching network_perf_profile_test.go format)
+			b.ReportMetric(float64(scaledSimCPUs), "sim_cpus")
 			b.ReportMetric(avgSimWorkCycles, "avg_work_per_sim_cycle")
 			b.ReportMetric(simWorkPerOpCycles, "ideal_sim_work_cycles/op")
 			b.ReportMetric(simWorkPerCoreCycles, "ideal_cycles_per_core/op")
@@ -310,5 +316,58 @@ func runChampSimBenchmark(b *testing.B, numCPUs int, maxCycles uint64, traceFile
 	// Run simulation using AdvanceTo (standard framework usage)
 	if err := net.AdvanceTo(int(maxCycles - 1)); err != nil {
 		b.Fatalf("Simulation failed: %v", err)
+	}
+}
+
+// Benchmark_ChampSim_SystemScaling tests system scaling with fixed physical cores
+// This shows framework's ability to handle increasing system complexity
+func Benchmark_ChampSim_SystemScaling(b *testing.B) {
+	maxCycles := uint64(2000)
+	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+
+	// Check trace availability
+	testReader, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
+	if err != nil {
+		b.Skipf("Trace file not available: %v", err)
+	}
+	testReader.Close()
+
+	// Use all available cores
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	cyclesPerUS := node.CalibrateCyclesPerUS(100 * time.Millisecond)
+	b.Logf("Using all %d physical cores", runtime.NumCPU())
+	b.Logf("Calibrated CPU Frequency: %.2f GHz", cyclesPerUS/1000.0)
+
+	testCases := []struct {
+		name    string
+		numCPUs int
+	}{
+		{"CPUs_2", 2},
+		{"CPUs_4", 4},
+		{"CPUs_8", 8},
+		{"CPUs_16", 16},
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ResetTimer()
+			var totalCycles uint64
+
+			for i := 0; i < b.N; i++ {
+				iterStart := node.GetCPUCycles()
+				runChampSimBenchmark(b, tc.numCPUs, maxCycles, traceFile)
+				iterEnd := node.GetCPUCycles()
+				totalCycles += (iterEnd - iterStart)
+			}
+
+			b.StopTimer()
+
+			actualCyclesPerOp := float64(totalCycles) / float64(b.N)
+			nodeCount := tc.numCPUs + 4 // CPUs + L2 + MemCtrl + 2 DRAM
+
+			b.ReportMetric(float64(tc.numCPUs), "sim_cpus")
+			b.ReportMetric(float64(nodeCount), "total_nodes")
+			b.ReportMetric(actualCyclesPerOp, "actual_cycles/op")
+		})
 	}
 }
