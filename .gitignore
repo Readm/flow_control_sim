@@ -8,6 +8,7 @@
 *.out
 flow_sim
 main
+connectivity_test
 
 # Go build artifacts
 vendor/
