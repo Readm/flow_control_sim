@@ -346,6 +346,8 @@ func Benchmark_ChampSim_SystemScaling(b *testing.B) {
 		{"CPUs_4", 4},
 		{"CPUs_8", 8},
 		{"CPUs_16", 16},
+		{"CPUs_32", 32},
+		{"CPUs_64", 64},
 	}
 
 	for _, tc := range testCases {
