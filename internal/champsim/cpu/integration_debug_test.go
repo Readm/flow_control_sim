@@ -42,15 +42,21 @@ func TestIntegrationMode_Debug(t *testing.T) {
 
 		// 添加到 pending（每个 LSQ entry 都分配一个唯一的 message ID）
 		for _, load := range readyLoads {
-			pendingLoads = append(pendingLoads, PendingRequest{
-				InstrID: load.InstrID,
-				MsgID:   msgCounter,
-			})
-			msgCounter++
-			// 标记为已发出，防止重复发送
-			load.FetchIssued = true
-			if load.InstrID == 27 {
-				t.Logf("Cycle %d: Received LOAD request for Instr 27", cycle)
+			// 检查是否可以从 Store Queue 转发
+			canForward, _ := cpu.lsq.CheckStoreToLoadForwarding(load)
+			if canForward {
+				// 可以转发，直接完成（模拟 0 延迟）
+				cpu.HandleLoadResponse(load.InstrID, cycle)
+				load.FetchIssued = true // 防止重复处理
+			} else {
+				// 不能转发，发送到内存
+				pendingLoads = append(pendingLoads, PendingRequest{
+					InstrID: load.InstrID,
+					MsgID:   msgCounter,
+				})
+				msgCounter++
+				// 标记为已发出，防止重复发送
+				load.FetchIssued = true
 			}
 		}
 		for _, store := range readyStores {
@@ -61,18 +67,12 @@ func TestIntegrationMode_Debug(t *testing.T) {
 			msgCounter++
 			// 标记为已发出，防止重复发送
 			store.FetchIssued = true
-			if store.InstrID == 27 {
-				t.Logf("Cycle %d: Received STORE request for Instr 27", cycle)
-			}
 		}
 
 		// 立即响应所有 pending 的请求
 		newPendingLoads := []PendingRequest{}
 		for _, req := range pendingLoads {
 			success := cpu.HandleLoadResponse(req.InstrID, cycle+1)
-			if req.InstrID == 27 {
-				t.Logf("Cycle %d: HandleLoadResponse for Instr 27 (MsgID %d) -> %v", cycle, req.MsgID, success)
-			}
 			if !success {
 				// 响应失败，保留请求
 				newPendingLoads = append(newPendingLoads, req)

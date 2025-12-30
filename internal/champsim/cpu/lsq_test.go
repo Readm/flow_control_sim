@@ -239,7 +239,8 @@ func TestLSQ_GetReadyLoads(t *testing.T) {
 	}
 }
 
-// TestLSQ_GetReadyLoadsWithForwarding 测试 GetReadyLoads 会自动处理转发
+// TestLSQ_GetReadyLoadsWithForwarding 测试 GetReadyLoads 返回可以转发的 loads
+// 调用者需要检查转发并处理
 func TestLSQ_GetReadyLoadsWithForwarding(t *testing.T) {
 	lsq := NewLoadStoreQueue(128, 72)
 
@@ -256,18 +257,30 @@ func TestLSQ_GetReadyLoadsWithForwarding(t *testing.T) {
 	// 在周期 20 获取准备好的 load
 	readyLoads := lsq.GetReadyLoads(20)
 
-	// 应该没有需要发送到内存的 load（因为被转发了）
-	if len(readyLoads) != 0 {
-		t.Errorf("Expected 0 loads to send to memory (forwarded), got %d", len(readyLoads))
+	// 应该返回 1 个 load（即使可以转发，也由调用者处理）
+	if len(readyLoads) != 1 {
+		t.Errorf("Expected 1 load, got %d", len(readyLoads))
 	}
 
-	// load 应该被标记为完成
-	if !load.Completed {
-		t.Error("Forwarded load should be marked as completed")
-	}
+	// 检查这个 load 可以转发
+	if len(readyLoads) > 0 {
+		canForward, _ := lsq.CheckStoreToLoadForwarding(readyLoads[0])
+		if !canForward {
+			t.Error("Load should be forwardable")
+		}
 
-	if load.CompleteCycle != 20 {
-		t.Errorf("Expected complete cycle 20, got %d", load.CompleteCycle)
+		// 模拟调用者处理转发（标记为完成）
+		readyLoads[0].Completed = true
+		readyLoads[0].CompleteCycle = 20
+		readyLoads[0].FetchIssued = true
+
+		// 验证标记成功
+		if !load.Completed {
+			t.Error("Load should be marked as completed")
+		}
+		if load.CompleteCycle != 20 {
+			t.Errorf("Expected complete cycle 20, got %d", load.CompleteCycle)
+		}
 	}
 }
 

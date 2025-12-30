@@ -151,17 +151,9 @@ func (lsq *LoadStoreQueue) GetReadyLoads(currentCycle uint64) []*LSQEntry {
 
 	for _, entry := range lsq.loadQueue {
 		if entry.IsReady(currentCycle) {
-			// 检查是否可以从 SQ 转发
-			canForward, _ := lsq.CheckStoreToLoadForwarding(entry)
-			if !canForward {
-				// 不能转发，需要发送到内存
-				readyLoads = append(readyLoads, entry)
-			} else {
-				// 可以转发，直接标记为完成
-				entry.Completed = true
-				entry.CompleteCycle = currentCycle
-				entry.FetchIssued = true // 标记已处理
-			}
+			// 不在这里处理转发，让调用者（CPU）来处理
+			// 这样可以正确更新 ROB 的 CompletedMemOps
+			readyLoads = append(readyLoads, entry)
 		}
 	}
 
@@ -229,6 +221,16 @@ func (lsq *LoadStoreQueue) FindStoreByInstrID(instrID uint64) *LSQEntry {
 		}
 	}
 	return nil
+}
+
+// GetAllLoads 返回所有 load 条目（用于调试）
+func (lsq *LoadStoreQueue) GetAllLoads() []*LSQEntry {
+	return lsq.loadQueue
+}
+
+// GetAllStores 返回所有 store 条目（用于调试）
+func (lsq *LoadStoreQueue) GetAllStores() []*LSQEntry {
+	return lsq.storeQueue
 }
 
 // ==================== 内存一致性检查 ====================
