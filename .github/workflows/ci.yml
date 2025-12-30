@@ -12,7 +12,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        submodules: recursive  # Important: Checkout submodules (web)
+        submodules: true  # Checkout top-level submodules only (prevents recursive error)
 
     - name: Set up Go
       uses: actions/setup-go@v4

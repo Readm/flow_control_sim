@@ -6,16 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
-
 	"github.com/Readm/flow_sim/internal/config"
-	"github.com/Readm/flow_sim/pkg/visual/frame"
+	"github.com/Readm/flow_sim/internal/core/visualization"
+	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 	"github.com/Readm/flow_sim/tests/e2e/mocks"
 )
 
@@ -27,7 +27,7 @@ type Options struct {
 	DefaultTotalCycles int
 }
 
-// Server hosts HTTP + WS endpoints compatible with web/static resources.
+// Server hosts HTTP endpoints compatible with CyEditor.
 type Server struct {
 	controller *mocks.Controller
 	staticDir  string
@@ -38,10 +38,8 @@ type Server struct {
 	mux        *http.ServeMux
 	httpServer *httptest.Server
 
-	latestMu    sync.RWMutex
-	latestFrame *frame.Frame
+	latestMu sync.RWMutex
 
-	hub    *wsHub
 	cancel context.CancelFunc
 }
 
@@ -65,20 +63,22 @@ func New(opts Options) (*Server, error) {
 		staticDir:     opts.StaticDir,
 		defaultConfig: opts.DefaultConfig,
 		defaultCycles: opts.DefaultTotalCycles,
-		hub:           newHub(),
 	}
 
 	srv.mux = http.NewServeMux()
-	srv.mux.HandleFunc("/api/frame", srv.handleFrame)
-	srv.mux.HandleFunc("/api/control", srv.handleControl)
-	srv.mux.HandleFunc("/api/configs", srv.handleConfigs)
-	srv.mux.HandleFunc("/ws", srv.handleWebSocket)
+
+	// API Endpoints for CyEditor integration
+	srv.mux.HandleFunc("/load_networks", srv.cors(srv.handleLoadNetworks))
+	srv.mux.HandleFunc("/reset_network", srv.cors(srv.handleResetNetwork))
+	srv.mux.HandleFunc("/advance_to", srv.cors(srv.handleAdvanceTo))
+
+	// Serve Static Files
 	fileHandler := http.FileServer(http.Dir(srv.staticDir))
 	srv.mux.Handle("/", fileHandler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	srv.cancel = cancel
-	go srv.consumeFrames(ctx)
+	_ = ctx
 
 	srv.httpServer = httptest.NewServer(loggingMiddleware(srv.mux))
 	return srv, nil
@@ -92,7 +92,6 @@ func (s *Server) Close() {
 	if s.httpServer != nil {
 		s.httpServer.Close()
 	}
-	s.hub.closeAll()
 }
 
 // BaseURL returns the root URL of the server.
@@ -103,151 +102,86 @@ func (s *Server) BaseURL() string {
 	return s.httpServer.URL
 }
 
-func (s *Server) consumeFrames(ctx context.Context) {
-	for {
-		select {
-		case frame := <-s.controller.Frames():
-			if frame == nil {
-				continue
-			}
-			s.latestMu.Lock()
-			s.latestFrame = frame
-			s.latestMu.Unlock()
-			s.broadcast(frame)
-		case <-ctx.Done():
+// Handler returns the HTTP handler for custom serving.
+func (s *Server) Handler() http.Handler {
+	return loggingMiddleware(s.mux)
+}
+
+func (s *Server) StaticDir() string {
+	return filepath.Clean(s.staticDir)
+}
+
+// cors adds CORS headers to the response
+func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
 			return
 		}
+		next(w, r)
 	}
 }
 
-func (s *Server) broadcast(frame *frame.Frame) {
-	data, err := json.Marshal(frame)
-	if err != nil {
-		return
-	}
-	s.hub.broadcast(data)
-}
-
-func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
+// GET /load_networks
+func (s *Server) handleLoadNetworks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.latestMu.RLock()
-	frame := s.latestFrame
-	s.latestMu.RUnlock()
-	if frame == nil {
-		http.Error(w, "no frame available", http.StatusNotFound)
-		return
+
+	ns := s.controller.GetState()
+
+	var networks []protocol.CyNetwork
+	if ns != nil {
+		cyNet := visualization.StateToCyNetwork(*ns)
+		networks = append(networks, cyNet)
 	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(frame)
+	json.NewEncoder(w).Encode(networks)
 }
 
-func (s *Server) handleConfigs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	resp := []struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		TotalCycles int    `json:"totalCycles"`
-	}{
-		{Name: "demo", Description: "Minimal topology for Flow View tests", TotalCycles: s.defaultCycles},
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
-}
-
-func (s *Server) handleControl(w http.ResponseWriter, r *http.Request) {
+// POST /reset_network
+func (s *Server) handleResetNetwork(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	defer r.Body.Close()
-	var req controlRequest
+
+	w.Header().Set("Content-Type", "application/json")
+	ns := s.controller.GetState()
+	if ns != nil {
+		cyNet := visualization.StateToCyNetwork(*ns)
+		json.NewEncoder(w).Encode(cyNet)
+	} else {
+		w.Write([]byte("{}"))
+	}
+}
+
+// POST /advance_to
+func (s *Server) handleAdvanceTo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Cycle int `json:"cycle"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if err := s.applyControl(r.Context(), &req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	w.WriteHeader(http.StatusAccepted)
-	_, _ = w.Write([]byte("Command accepted"))
-}
 
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := (&websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
-	}).Upgrade(w, r, nil)
-	if err != nil {
-		return
-	}
-	s.hub.add(conn)
-
-	s.latestMu.RLock()
-	frame := s.latestFrame
-	s.latestMu.RUnlock()
-	if frame != nil {
-		if data, err := json.Marshal(frame); err == nil {
-			_ = conn.WriteMessage(websocket.TextMessage, data)
-		}
-	}
-
-	go s.readFromWebSocket(conn)
-}
-
-func (s *Server) readFromWebSocket(conn *websocket.Conn) {
-	defer s.hub.remove(conn)
-	for {
-		_, data, err := conn.ReadMessage()
-		if err != nil {
-			return
-		}
-		var req controlRequest
-		if err := json.Unmarshal(data, &req); err != nil {
-			continue
-		}
-		_ = s.applyControl(context.Background(), &req)
-	}
-}
-
-func (s *Server) applyControl(ctx context.Context, req *controlRequest) error {
-	if req == nil {
-		return errors.New("control request is nil")
-	}
-	switch req.Type {
-	case "advance":
-		cycles := req.Cycles
-		if cycles <= 0 {
-			cycles = 1
-		}
-		s.startRun(uint64(cycles))
-	case "reset":
-		// For reset, we don't actually run cycles, just accept the command
-		// The test will manually emit the reset frame
-		// In real server, reset creates a new manager and sends initial frame
-	default:
-		return errors.New("invalid command type")
-	}
-	return nil
-}
-
-func (s *Server) startRun(cycles uint64) {
-	cfg := s.defaultConfig
 	go func() {
-		_ = s.controller.Run(context.Background(), cfg, cycles)
+		_ = s.controller.Run(context.Background(), s.defaultConfig, uint64(req.Cycle))
 	}()
-}
 
-type controlRequest struct {
-	Type        string `json:"type"`
-	ConfigName  string `json:"configName"`
-	TotalCycles int    `json:"totalCycles"`
-	Cycles      int    `json:"cycles"`
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]string{"status": fmt.Sprintf("Advanced to %d", req.Cycle)}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func defaultEntityConfig() config.EntityConfig {
@@ -266,58 +200,7 @@ func defaultEntityConfig() config.EntityConfig {
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// fmt.Printf("[%s] %s %s\n", time.Now().Format(time.RFC3339), r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
-}
-
-// wsHub is a lightweight broadcaster for WebSocket clients.
-type wsHub struct {
-	mu      sync.Mutex
-	clients map[*websocket.Conn]struct{}
-}
-
-func newHub() *wsHub {
-	return &wsHub{
-		clients: make(map[*websocket.Conn]struct{}),
-	}
-}
-
-func (h *wsHub) add(conn *websocket.Conn) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.clients[conn] = struct{}{}
-}
-
-func (h *wsHub) remove(conn *websocket.Conn) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if _, ok := h.clients[conn]; ok {
-		delete(h.clients, conn)
-		conn.Close()
-	}
-}
-
-func (h *wsHub) broadcast(payload []byte) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for conn := range h.clients {
-		if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
-			delete(h.clients, conn)
-			conn.Close()
-		}
-	}
-}
-
-func (h *wsHub) closeAll() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for conn := range h.clients {
-		conn.Close()
-	}
-	h.clients = make(map[*websocket.Conn]struct{})
-}
-
-// StaticDir returns the absolute static directory path for debugging.
-func (s *Server) StaticDir() string {
-	return filepath.Clean(s.staticDir)
 }
