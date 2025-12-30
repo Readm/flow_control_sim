@@ -12,7 +12,12 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        submodules: true  # Checkout top-level submodules only (prevents recursive error)
+        submodules: false  # Disable built-in handling to avoid recursive errors
+
+    - name: Checkout Submodules Manually
+      run: |
+        git submodule update --init web
+        # Only init the top-level 'web' submodule, ignoring nested broken ones
 
     - name: Set up Go
       uses: actions/setup-go@v4
