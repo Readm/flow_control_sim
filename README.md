@@ -59,6 +59,10 @@ go test -bench=. ./internal/core/network/...
 # -run=^$: 跳过普通单元测试
 # -args -bench_nodes=N: 指定网络节点数量（默认50）
 go test -bench=BenchmarkRingCoreScaling -run=^$ ./internal/core/network -args -bench_nodes=100
+
+# 运行 ChampSim 64-CPU 并行扩展性基准测试
+# 测试不同物理核心数下的并行效率（1/2/4/8/16核）
+go test -bench=Benchmark_ChampSim_64CPU -run=^$ ./internal/champsim/flowsim -benchtime=1x -timeout=300s
 ```
 
 ## 项目结构
@@ -79,6 +83,63 @@ flow_sim/
 ├── scripts/                # 自动化测试与分析脚本
 └── docs/                   # 结构化文档目录
 ```
+
+## 性能基准测试
+
+### ChampSim 64-CPU 并行扩展性测试
+
+该测试模拟一个包含 64 个 CPU 核心的完整 ChampSim 系统，评估框架在不同物理核心数下的并行效率。
+
+#### 系统配置
+
+- **64 个 CPU 节点**：每个运行 O3 流水线模拟（~400K CPU cycles/cycle）
+- **32 个 L2 Cache**：每 2 个 CPU 共享 1 个 L2
+- **8 个 L3 Cache**：每 4 个 L2 共享 1 个 L3
+- **16 个 Ring Router**：连接 L3 和 Memory Controller 的 bufferless 双向环形网络
+- **8 个 Memory Controller + 8 个 DRAM**
+- **总计 136 个节点**，模拟 2000 个 cycles
+
+#### 运行基准测试
+
+```bash
+# 运行完整的并行扩展性测试（1/2/4/8/16核）
+go test -bench=Benchmark_ChampSim_64CPU -run=^$ ./internal/champsim/flowsim -benchtime=1x -timeout=300s
+
+# 运行特定核心数的测试
+go test -bench=Benchmark_ChampSim_64CPU/Cores_8 -run=^$ ./internal/champsim/flowsim -benchtime=1x -timeout=300s
+```
+
+#### 性能结果（参考）
+
+测试平台：AMD Ryzen 7 8745HS (16 物理核心)
+
+| 核心数 | 实际 CPU 周期 | 加速比 | 并行效率 |
+|--------|---------------|--------|----------|
+| 1 核   | 7.9B          | 1.00x  | 100.0%   |
+| 2 核   | 3.8B          | 2.08x  | 104.0%   |
+| 4 核   | 2.2B          | 3.64x  | 91.0%    |
+| 8 核   | 1.5B          | 5.34x  | 66.8%    |
+| 16 核  | 0.98B         | 8.08x  | 50.5%    |
+
+#### Profiling 分析
+
+测试自动输出详细的性能 profiling 数据：
+
+1. **同步阻塞 Profile**：显示哪些节点之间存在 WaitDone/Ready 阻塞
+2. **节点执行时间 Profile**：显示每个节点的平均处理时间
+3. **三阶段时间 Profile**：分析 Receive/Process/Send 三阶段的时间分布
+
+关键发现：
+- **Receive 阶段**占 92%+ 时间（同步等待上游）
+- **Ring Router 的 Send 阶段**在单核时是主要瓶颈
+- 多核并行执行显著减少同步等待时间
+
+#### 优化建议
+
+如需进一步提升并行效率：
+1. 减少同步依赖深度（缩短关键路径）
+2. 使用 bufferless link 减少 Ready 等待
+3. 增加 pipeline 深度允许更多 tick-ahead 优化
 
 ## 文档指引
 
