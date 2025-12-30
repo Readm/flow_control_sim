@@ -147,7 +147,7 @@ func TestConnectWithPort(t *testing.T) {
 	downstream := &MockDownstream{}
 
 	// Create port manually
-	port := NewPort()
+	port := NewPort(0, 0)
 
 	// Connect using existing port
 	ConnectWithPort(port, upstream, downstream)

@@ -12,7 +12,7 @@ import (
 // TestAsynchronousDrift verifies that two components can run at very different speeds
 // without losing packets or deadlocking.
 func TestAsynchronousDrift(t *testing.T) {
-	port := NewPort()
+	port := NewPort(0, 0)
 	in := port.AsInPort()
 	out := port.AsOutPort()
 
@@ -58,7 +58,7 @@ func TestAsynchronousDrift(t *testing.T) {
 // TestProtocolViolation_LateReceive verifies that calling Receive before WaitDone
 // still works because Receive is now internally blocking and draining.
 func TestProtocolViolation_LateReceive(t *testing.T) {
-	port := NewPort()
+	port := NewPort(0, 0)
 	in := port.AsInPort()
 	out := port.AsOutPort()
 

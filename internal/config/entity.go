@@ -10,12 +10,20 @@ import (
 // layer. Higher level packages are expected to extend this struct.
 type EntityConfig struct {
 	Nodes []NodeConfig `json:"nodes" yaml:"nodes"`
+	Edges []EdgeConfig `json:"edges" yaml:"edges"`
 	Link  LinkConfig   `json:"link" yaml:"link"`
 }
 
 // NodeConfig describes a single node in the topology.
 type NodeConfig struct {
-	ID int `json:"id" yaml:"id"`
+	ID   int    `json:"id" yaml:"id"`
+	Type string `json:"type" yaml:"type"`
+}
+
+// EdgeConfig describes a directional link between two nodes.
+type EdgeConfig struct {
+	Src int `json:"src" yaml:"src"`
+	Dst int `json:"dst" yaml:"dst"`
 }
 
 // LinkConfig exposes the knobs that impact link delay.

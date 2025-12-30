@@ -80,6 +80,7 @@ func New(opts Options) (*Server, error) {
 	srv.mux.HandleFunc("/load_networks", srv.cors(srv.handleLoadNetworks))
 	srv.mux.HandleFunc("/reset_network", srv.cors(srv.handleResetNetwork))
 	srv.mux.HandleFunc("/advance_to", srv.cors(srv.handleAdvanceTo))
+	srv.mux.HandleFunc("/build_network", srv.cors(srv.handleBuildNetwork))
 	srv.mux.HandleFunc("/ws", srv.handleWS)
 
 	// Serve Static Files
@@ -258,6 +259,36 @@ func (s *Server) handleAdvanceTo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]string{"status": fmt.Sprintf("Advanced to %d", req.Cycle)}
 	json.NewEncoder(w).Encode(resp)
+}
+
+// POST /build_network
+func (s *Server) handleBuildNetwork(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var cyNet protocol.CyNetwork
+	if err := json.NewDecoder(r.Body).Decode(&cyNet); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := visualization.CyNetworkToConfig(cyNet)
+	if err := s.controller.Rebuild(cfg); err != nil {
+		http.Error(w, "rebuild failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	// Retrieve new state to confirm
+	ns := s.controller.GetState()
+	if ns != nil {
+		newCyNet := visualization.StateToCyNetwork(*ns)
+		json.NewEncoder(w).Encode(newCyNet)
+	} else {
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
 }
 
 func defaultEntityConfig() config.EntityConfig {

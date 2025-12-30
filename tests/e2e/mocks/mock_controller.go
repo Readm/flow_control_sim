@@ -41,6 +41,56 @@ func (m *Controller) Subscribe() <-chan state.NetworkState {
 	return ch
 }
 
+// Rebuild resets the simulation state based on the provided configuration.
+func (m *Controller) Rebuild(cfg config.EntityConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	m.stateMu.Lock()
+
+	// Construct new state from config
+	newState := state.NetworkState{
+		CurrentCycle: 0,
+		Nodes:        make([]state.NodeState, 0, len(cfg.Nodes)),
+		Links:        make([]state.LinkState, 0, len(cfg.Edges)),
+	}
+
+	// Map Nodes
+	for _, n := range cfg.Nodes {
+		newState.Nodes = append(newState.Nodes, state.NodeState{
+			ID:   n.ID,
+			Type: n.Type,
+		})
+	}
+
+	// Map Links
+	for _, e := range cfg.Edges {
+		newState.Links = append(newState.Links, state.LinkState{
+			SourceID:  e.Src,
+			TargetID:  e.Dst,
+			Occupancy: []int{0},
+		})
+	}
+
+	m.latest = &newState
+	m.stateMu.Unlock()
+
+	// Notify subscribers of the reset (new state at cycle 0)
+	go func() {
+		m.subsMu.Lock()
+		defer m.subsMu.Unlock()
+		for _, ch := range m.subs {
+			select {
+			case ch <- newState:
+			default:
+			}
+		}
+	}()
+
+	return nil
+}
+
 // Run satisfies the simulation controller contract.
 func (m *Controller) Run(ctx context.Context, cfg config.EntityConfig, cycles uint64) error {
 	if ctx == nil {
