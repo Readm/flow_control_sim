@@ -6,6 +6,7 @@ package protocol
 // CyNetwork corresponds to the 'Network' schema in openapi.yaml.
 type CyNetwork struct {
 	Version string   `json:"version"`
+	Cycle   int      `json:"cycle"`
 	Nodes   []CyNode `json:"nodes"`
 	Edges   []CyEdge `json:"edges"`
 	// Extra fields for rendering control

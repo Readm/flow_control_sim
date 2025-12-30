@@ -14,6 +14,7 @@ func StateToCyNetwork(ns state.NetworkState) protocol.CyNetwork {
 		Version: "1.0.0",
 		Nodes:   make([]protocol.CyNode, 0, len(ns.Nodes)),
 		Edges:   make([]protocol.CyEdge, 0, len(ns.Links)),
+		Cycle:   ns.CurrentCycle,
 	}
 
 	// Helper for layout

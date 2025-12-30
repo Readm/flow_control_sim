@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"github.com/Readm/flow_sim/internal/config"
 	"github.com/Readm/flow_sim/internal/core/visualization"
@@ -38,7 +41,9 @@ type Server struct {
 	mux        *http.ServeMux
 	httpServer *httptest.Server
 
-	latestMu sync.RWMutex
+	clientsMu sync.Mutex
+	clients   map[*websocket.Conn]bool
+	upgrader  websocket.Upgrader
 
 	cancel context.CancelFunc
 }
@@ -63,6 +68,10 @@ func New(opts Options) (*Server, error) {
 		staticDir:     opts.StaticDir,
 		defaultConfig: opts.DefaultConfig,
 		defaultCycles: opts.DefaultTotalCycles,
+		clients:       make(map[*websocket.Conn]bool),
+		upgrader: websocket.Upgrader{
+			CheckOrigin: func(r *http.Request) bool { return true }, // Allow all CORS for e2e
+		},
 	}
 
 	srv.mux = http.NewServeMux()
@@ -71,6 +80,7 @@ func New(opts Options) (*Server, error) {
 	srv.mux.HandleFunc("/load_networks", srv.cors(srv.handleLoadNetworks))
 	srv.mux.HandleFunc("/reset_network", srv.cors(srv.handleResetNetwork))
 	srv.mux.HandleFunc("/advance_to", srv.cors(srv.handleAdvanceTo))
+	srv.mux.HandleFunc("/ws", srv.handleWS)
 
 	// Serve Static Files
 	fileHandler := http.FileServer(http.Dir(srv.staticDir))
@@ -78,10 +88,37 @@ func New(opts Options) (*Server, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	srv.cancel = cancel
-	_ = ctx
+
+	// Start broadcast loop
+	go srv.broadcastLoop(ctx)
 
 	srv.httpServer = httptest.NewServer(loggingMiddleware(srv.mux))
 	return srv, nil
+}
+
+func (s *Server) broadcastLoop(ctx context.Context) {
+	sub := s.controller.Subscribe()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ns := <-sub:
+			// Convert to CyNetwork
+			cyNet := visualization.StateToCyNetwork(ns)
+
+			// Broadcast to all clients
+			s.clientsMu.Lock()
+			for client := range s.clients {
+				err := client.WriteJSON(cyNet)
+				if err != nil {
+					log.Printf("WS write error: %v", err)
+					client.Close()
+					delete(s.clients, client)
+				}
+			}
+			s.clientsMu.Unlock()
+		}
+	}
 }
 
 // Close shuts down HTTP listeners and goroutines.
@@ -123,6 +160,45 @@ func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// GET /ws
+func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := s.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WS upgrade failed: %v", err)
+		return
+	}
+
+	s.clientsMu.Lock()
+	s.clients[conn] = true
+	s.clientsMu.Unlock()
+
+	// Send initial state
+	ns := s.controller.GetState()
+	if ns != nil {
+		cyNet := visualization.StateToCyNetwork(*ns)
+		if err := conn.WriteJSON(cyNet); err != nil {
+			log.Println("WS initial write failed:", err)
+			return
+		}
+	}
+
+	// Keep connection open until closed
+	go func() {
+		defer func() {
+			s.clientsMu.Lock()
+			delete(s.clients, conn)
+			s.clientsMu.Unlock()
+			conn.Close()
+		}()
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+		}
+	}()
 }
 
 // GET /load_networks
