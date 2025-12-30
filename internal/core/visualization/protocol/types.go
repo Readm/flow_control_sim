@@ -19,12 +19,43 @@ type CyNode struct {
 	NodeID          int           `json:"node_id"`
 	NodeName        string        `json:"node_name"`
 	NodeFeatures    []string      `json:"node_features"`
-	Cache           *interface{}  `json:"cache,omitempty"`     // map to CacheConfig if needed
-	Directory       *interface{}  `json:"directory,omitempty"` // map to DirectoryConfig if needed
+	Cache           *CyCache      `json:"cache,omitempty"`
+	Directory       *CyDirectory  `json:"directory,omitempty"`
 	CoherenceDomain int           `json:"coherence_domain_id,omitempty"`
-	InPorts         []interface{} `json:"in_ports,omitempty"`
-	OutPorts        []interface{} `json:"out_ports,omitempty"`
+	InPorts         []CyPort      `json:"in_ports,omitempty"`
+	OutPorts        []CyPort      `json:"out_ports,omitempty"`
 	Display         CyNodeDisplay `json:"display"`
+}
+
+// CyPort corresponds to 'Port' schema.
+type CyPort struct {
+	PortID      int   `json:"port_id"`
+	PacketTypes []int `json:"packet_types,omitempty"`
+	Bandwidth   int   `json:"bandwidth"`
+	// Additional fields for visualization state
+	BufferLength int    `json:"buffer_length"`
+	Capacity     int    `json:"capacity"`
+	Bitmap       string `json:"bitmap,omitempty"`
+}
+
+// CyCache corresponds to 'CacheConfig' schema.
+type CyCache struct {
+	Capacity          int    `json:"capacity"`
+	NumSets           int    `json:"num_sets"`
+	ReplacementPolicy string `json:"replacement_policy"`
+	States            string `json:"states"`
+	// State data
+	Hits     uint64 `json:"hits"`
+	Misses   uint64 `json:"misses"`
+	Accesses uint64 `json:"accesses"`
+}
+
+// CyDirectory corresponds to 'DirectoryConfig' schema.
+type CyDirectory struct {
+	Capacity          int    `json:"capacity"`
+	NumSets           int    `json:"num_sets"`
+	ReplacementPolicy string `json:"replacement_policy"`
+	States            string `json:"states"`
 }
 
 // CyNodeDisplay corresponds to the 'display' property of 'Node'.

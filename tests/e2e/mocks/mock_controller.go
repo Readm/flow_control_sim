@@ -5,9 +5,12 @@ package mocks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/Readm/flow_sim/internal/config"
+	"github.com/Readm/flow_sim/internal/core/loadbench"
+	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/state"
 )
 
@@ -20,6 +23,9 @@ var (
 type Controller struct {
 	stateMu sync.RWMutex
 	latest  *state.NetworkState
+
+	// Real network for simulation mode
+	realNetwork *network.Network
 
 	subsMu sync.Mutex
 	subs   []chan state.NetworkState
@@ -41,6 +47,51 @@ func (m *Controller) Subscribe() <-chan state.NetworkState {
 	return ch
 }
 
+// LoadPreset loads a pre-defined network topology.
+func (m *Controller) LoadPreset(name string, params map[string]int) error {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
+	var net *network.Network
+	var err error
+
+	switch name {
+	case "bi_ring":
+		nodes := 16
+		if n, ok := params["nodes"]; ok && n > 0 {
+			nodes = n
+		}
+		net, err = loadbench.BuildBidirectionalRing(nodes)
+	default:
+		return fmt.Errorf("unknown preset: %s", name)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	m.realNetwork = net
+
+	// Export initial state
+	// We use DetailLevelSummary for initial load. Run loop might use DetailLevelFull if needed.
+	initialState := net.ExportState(state.ExportConfig{DetailLevel: state.DetailLevelSummary})
+	m.latest = &initialState
+
+	// Notify subscribers of the reset (new state at cycle 0)
+	go func() {
+		m.subsMu.Lock()
+		defer m.subsMu.Unlock()
+		for _, ch := range m.subs {
+			select {
+			case ch <- initialState:
+			default:
+			}
+		}
+	}()
+
+	return nil
+}
+
 // Rebuild resets the simulation state based on the provided configuration.
 func (m *Controller) Rebuild(cfg config.EntityConfig) error {
 	if err := cfg.Validate(); err != nil {
@@ -48,6 +99,9 @@ func (m *Controller) Rebuild(cfg config.EntityConfig) error {
 	}
 
 	m.stateMu.Lock()
+
+	// Clear real network if we represent a static config build
+	m.realNetwork = nil
 
 	// Construct new state from config
 	newState := state.NetworkState{
@@ -103,10 +157,18 @@ func (m *Controller) Run(ctx context.Context, cfg config.EntityConfig, cycles ui
 		return ErrNoCycles
 	}
 
-	// Update the cycle count in the mock state
+	// Update the cycle count
 	m.stateMu.Lock()
 	var newState state.NetworkState
-	if m.latest != nil {
+
+	if m.realNetwork != nil {
+		// Run real simulation
+		// Note: We ignore errors here for simplicity in this mock wrapper,
+		// but in production log them.
+		_ = m.realNetwork.AdvanceTo(int(cycles))
+		newState = m.realNetwork.ExportState(state.ExportConfig{DetailLevel: state.DetailLevelSummary})
+		m.latest = &newState
+	} else if m.latest != nil {
 		m.latest.CurrentCycle = int(cycles)
 		// Also simulate some time passing or traffic changes if needed
 		// For now, just toggling link occupancy to show liveliness

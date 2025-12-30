@@ -51,6 +51,7 @@ type QueueState struct {
 	Length    int
 	Capacity  int
 	Bandwidth int
+	Bitmap    string // "1010..." representation of occupied slots
 	// Packets is a list of packet summaries.
 	// In Summary mode, this might be empty or partial.
 	Packets []PacketState

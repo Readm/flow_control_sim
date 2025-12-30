@@ -81,6 +81,7 @@ func New(opts Options) (*Server, error) {
 	srv.mux.HandleFunc("/reset_network", srv.cors(srv.handleResetNetwork))
 	srv.mux.HandleFunc("/advance_to", srv.cors(srv.handleAdvanceTo))
 	srv.mux.HandleFunc("/build_network", srv.cors(srv.handleBuildNetwork))
+	srv.mux.HandleFunc("/load_preset", srv.cors(srv.handleLoadPreset))
 	srv.mux.HandleFunc("/ws", srv.handleWS)
 
 	// Serve Static Files
@@ -291,6 +292,40 @@ func (s *Server) handleBuildNetwork(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// POST /load_preset
+func (s *Server) handleLoadPreset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name   string         `json:"name"`
+		Params map[string]int `json:"params"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := s.controller.LoadPreset(req.Name, req.Params); err != nil {
+		http.Error(w, "load preset failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	// Retrieve new state to return
+	ns := s.controller.GetState()
+	if ns != nil {
+		cyNet := visualization.StateToCyNetwork(*ns)
+		json.NewEncoder(w).Encode(cyNet)
+	} else {
+		// Should not happen if LoadPreset succeeds
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
+}
+
 func defaultEntityConfig() config.EntityConfig {
 	return config.EntityConfig{
 		Nodes: []config.NodeConfig{
@@ -307,7 +342,7 @@ func defaultEntityConfig() config.EntityConfig {
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// fmt.Printf("[%s] %s %s\n", time.Now().Format(time.RFC3339), r.Method, r.URL.Path)
+		fmt.Printf("[%s] %s %s\n", time.Now().Format(time.RFC3339), r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
 }

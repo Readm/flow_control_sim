@@ -51,8 +51,39 @@ func StateToCyNetwork(ns state.NetworkState) protocol.CyNetwork {
 			},
 		}
 
-		// Optional: Map Queues to InPorts/OutPorts or descriptions if needed
-		// For now, we stick to basic topology.
+		// Map Queues to Ports
+		for idx, q := range n.Inputs {
+			cyNode.InPorts = append(cyNode.InPorts, protocol.CyPort{
+				PortID:       idx,
+				Bandwidth:    q.Bandwidth,
+				BufferLength: q.Length,
+				Capacity:     q.Capacity,
+				Bitmap:       q.Bitmap,
+			})
+		}
+		for idx, q := range n.Outputs {
+			cyNode.OutPorts = append(cyNode.OutPorts, protocol.CyPort{
+				PortID:       idx,
+				Bandwidth:    q.Bandwidth,
+				BufferLength: q.Length,
+				Capacity:     q.Capacity,
+				Bitmap:       q.Bitmap,
+			})
+		}
+
+		// Map Cache (if any)
+		if len(n.Caches) > 0 {
+			c := n.Caches[0]
+			cyNode.Cache = &protocol.CyCache{
+				Capacity:          0,      // Config detail not usually in summary state, filler
+				NumSets:           0,      // filler
+				ReplacementPolicy: "LRU",  // filler
+				States:            "MESI", // filler
+				Hits:              c.Hits,
+				Misses:            c.Misses,
+				Accesses:          c.Accesses,
+			}
+		}
 
 		cyNet.Nodes = append(cyNet.Nodes, cyNode)
 	}
