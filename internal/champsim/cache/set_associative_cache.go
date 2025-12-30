@@ -3,6 +3,8 @@ package cache
 import (
 	"fmt"
 	"math/bits"
+
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
 )
 
 // SetAssociativeCache Set-Associative Cache
@@ -21,13 +23,13 @@ import (
 type SetAssociativeCache struct {
 	// ==================== 配置 ====================
 
-	config CacheConfig
+	config compcache.CacheConfig
 
 	// ==================== Cache 存储 ====================
 
 	// blocks: 二维数组 [set][way]
 	// 总共 NumSets * NumWays 个 blocks
-	blocks [][]CacheBlock
+	blocks [][]compcache.CacheBlock
 
 	// ==================== 地址分解参数 ====================
 
@@ -72,7 +74,7 @@ type SetAssociativeCache struct {
 }
 
 // NewSetAssociativeCache 创建新的 Set-Associative Cache
-func NewSetAssociativeCache(config CacheConfig) (*SetAssociativeCache, error) {
+func NewSetAssociativeCache(config compcache.CacheConfig) (*SetAssociativeCache, error) {
 	// 验证配置
 	if err := validateConfig(config); err != nil {
 		return nil, err
@@ -85,9 +87,9 @@ func NewSetAssociativeCache(config CacheConfig) (*SetAssociativeCache, error) {
 	tagShift := uint32(offsetBits + setIndexBits)
 
 	// 分配 blocks 数组
-	blocks := make([][]CacheBlock, config.NumSets)
+	blocks := make([][]compcache.CacheBlock, config.NumSets)
 	for i := range blocks {
-		blocks[i] = make([]CacheBlock, config.NumWays)
+		blocks[i] = make([]compcache.CacheBlock, config.NumWays)
 	}
 
 	cache := &SetAssociativeCache{
@@ -107,7 +109,7 @@ func NewSetAssociativeCache(config CacheConfig) (*SetAssociativeCache, error) {
 }
 
 // validateConfig 验证配置的合法性
-func validateConfig(config CacheConfig) error {
+func validateConfig(config compcache.CacheConfig) error {
 	// NumSets 必须是2的幂
 	if config.NumSets == 0 || (config.NumSets&(config.NumSets-1)) != 0 {
 		return fmt.Errorf("NumSets must be power of 2, got %d", config.NumSets)
@@ -318,11 +320,10 @@ func (c *SetAssociativeCache) Access(
 	addr uint64,
 	vaddr uint64,
 	instrID uint64,
-	accessType uint8,
+	at compcache.AccessType,
 	cycle uint64,
 ) (hit bool, readyCycle uint64, mshrIndex int) {
-	// 转换为AccessType
-	at := AccessType(accessType)
+
 	c.currentCycle = cycle
 
 	// 对齐到block边界
@@ -334,11 +335,11 @@ func (c *SetAssociativeCache) Access(
 
 	// 更新统计
 	c.stats.Accesses++
-	if at == AccessLoad {
+	if at == compcache.AccessLoad {
 		c.stats.Loads++
-	} else if at == AccessStore {
+	} else if at == compcache.AccessStore {
 		c.stats.Stores++
-	} else if at == AccessPrefetch {
+	} else if at == compcache.AccessPrefetch {
 		c.stats.Prefetches++
 	}
 
@@ -350,9 +351,9 @@ func (c *SetAssociativeCache) Access(
 		c.updateLRU(setIndex, way)
 
 		c.stats.Hits++
-		if at == AccessLoad {
+		if at == compcache.AccessLoad {
 			c.stats.LoadHits++
-		} else if at == AccessStore {
+		} else if at == compcache.AccessStore {
 			c.stats.StoreHits++
 			// Store hit: 标记为dirty
 			c.blocks[setIndex][way].Dirty = true
@@ -365,9 +366,9 @@ func (c *SetAssociativeCache) Access(
 
 	// Miss: 处理miss
 	c.stats.Misses++
-	if at == AccessLoad {
+	if at == compcache.AccessLoad {
 		c.stats.LoadMisses++
-	} else if at == AccessStore {
+	} else if at == compcache.AccessStore {
 		c.stats.StoreMisses++
 	}
 
@@ -384,7 +385,7 @@ func (c *SetAssociativeCache) handleMiss(
 	addr uint64,
 	vaddr uint64,
 	instrID uint64,
-	accessType AccessType,
+	accessType compcache.AccessType,
 	cycle uint64,
 ) (hit bool, readyCycle uint64, mshrIndex int) {
 	// 检查MSHR中是否已有相同地址的请求
@@ -435,7 +436,7 @@ func (c *SetAssociativeCache) handleMiss(
 			"Address":  addr,
 			"VAddress": vaddr,
 			"InstrID":  instrID,
-			"IsWrite":  (accessType == AccessStore),
+			"IsWrite":  (accessType == compcache.AccessStore),
 			"Data":     uint64(0),
 			"Callback": func(fillAddr uint64, fillData uint64, fillCycle uint64) {
 				// 下级返回数据时，填充到Cache
@@ -496,7 +497,7 @@ func (c *SetAssociativeCache) HandleFill(addr uint64, data uint64, cycle uint64)
 	block.VAddress = 0
 	if entry != nil {
 		block.VAddress = entry.VAddress
-		block.Prefetch = (entry.Type == AccessPrefetch)
+		block.Prefetch = (entry.Type == compcache.AccessPrefetch)
 	}
 	block.Data = data
 	block.Dirty = false

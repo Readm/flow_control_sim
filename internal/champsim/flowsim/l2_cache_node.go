@@ -4,6 +4,7 @@ package flowsim
 
 import (
 	"github.com/Readm/flow_sim/internal/champsim/cache"
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
@@ -105,9 +106,9 @@ func (h *L2CacheNodeHandler) handleCPURequest(cycle uint64, cpuNodeID int, cpuIn
 	h.stats.Accesses++
 
 	// 确定访问类型
-	accessType := uint8(0) // Read
+	accessType := compcache.AccessLoad // Read
 	if payload.IsWrite {
-		accessType = 1 // Write
+		accessType = compcache.AccessStore // Write
 	}
 
 	// 检查 L2 Cache 是否命中

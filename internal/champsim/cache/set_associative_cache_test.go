@@ -2,11 +2,13 @@ package cache
 
 import (
 	"testing"
+
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
 )
 
 // TestNewSetAssociativeCache 测试创建cache
 func TestNewSetAssociativeCache(t *testing.T) {
-	config := DefaultL1DConfig()
+	config := compcache.DefaultL1DConfig()
 	cache, err := NewSetAssociativeCache(config)
 
 	if err != nil {
@@ -42,12 +44,12 @@ func TestNewSetAssociativeCache(t *testing.T) {
 func TestValidateConfig(t *testing.T) {
 	tests := []struct {
 		name    string
-		config  CacheConfig
+		config  compcache.CacheConfig
 		wantErr bool
 	}{
 		{
 			name: "Valid config",
-			config: CacheConfig{
+			config: compcache.CacheConfig{
 				NumSets:   64,
 				NumWays:   8,
 				BlockSize: 64,
@@ -57,7 +59,7 @@ func TestValidateConfig(t *testing.T) {
 		},
 		{
 			name: "NumSets not power of 2",
-			config: CacheConfig{
+			config: compcache.CacheConfig{
 				NumSets:   63,
 				NumWays:   8,
 				BlockSize: 64,
@@ -67,7 +69,7 @@ func TestValidateConfig(t *testing.T) {
 		},
 		{
 			name: "NumWays zero",
-			config: CacheConfig{
+			config: compcache.CacheConfig{
 				NumSets:   64,
 				NumWays:   0,
 				BlockSize: 64,
@@ -77,7 +79,7 @@ func TestValidateConfig(t *testing.T) {
 		},
 		{
 			name: "BlockSize not power of 2",
-			config: CacheConfig{
+			config: compcache.CacheConfig{
 				NumSets:   64,
 				NumWays:   8,
 				BlockSize: 63,
@@ -87,7 +89,7 @@ func TestValidateConfig(t *testing.T) {
 		},
 		{
 			name: "MSHRSize zero",
-			config: CacheConfig{
+			config: compcache.CacheConfig{
 				NumSets:   64,
 				NumWays:   8,
 				BlockSize: 64,
@@ -109,10 +111,10 @@ func TestValidateConfig(t *testing.T) {
 
 // TestAddressDecomposition 测试地址分解
 func TestAddressDecomposition(t *testing.T) {
-	config := CacheConfig{
-		NumSets:   64,   // 6 bits for set index
+	config := compcache.CacheConfig{
+		NumSets:   64, // 6 bits for set index
 		NumWays:   8,
-		BlockSize: 64,   // 6 bits for offset
+		BlockSize: 64, // 6 bits for offset
 		MSHRSize:  8,
 	}
 
@@ -174,7 +176,7 @@ func TestAddressDecomposition(t *testing.T) {
 
 // TestFindBlockAndLRU 测试查找和LRU
 func TestFindBlockAndLRU(t *testing.T) {
-	config := DefaultL1DConfig()
+	config := compcache.DefaultL1DConfig()
 	cache, err := NewSetAssociativeCache(config)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
@@ -244,11 +246,11 @@ func TestFindBlockAndLRU(t *testing.T) {
 func TestDefaultConfigs(t *testing.T) {
 	tests := []struct {
 		name   string
-		config CacheConfig
+		config compcache.CacheConfig
 	}{
-		{"L1D", DefaultL1DConfig()},
-		{"L2C", DefaultL2CConfig()},
-		{"LLC", DefaultLLCConfig()},
+		{"L1D", compcache.DefaultL1DConfig()},
+		{"L2C", compcache.DefaultL2CConfig()},
+		{"LLC", compcache.DefaultLLCConfig()},
 	}
 
 	for _, tt := range tests {

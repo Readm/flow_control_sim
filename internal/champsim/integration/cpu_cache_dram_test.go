@@ -8,6 +8,7 @@ import (
 	"github.com/Readm/flow_sim/internal/champsim/dram"
 	"github.com/Readm/flow_sim/internal/champsim/memory"
 	"github.com/Readm/flow_sim/internal/champsim/trace"
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
 )
 
 // Test_CPU_Cache_DRAM_Integration 端到端集成测试
@@ -35,7 +36,7 @@ func Test_CPU_Cache_DRAM_Integration(t *testing.T) {
 	dramAdapter := memory.NewDRAMAdapter(dramChannel)
 
 	// 3. 创建L1D Cache
-	cacheConfig := cache.DefaultL1DConfig()
+	cacheConfig := compcache.DefaultL1DConfig()
 	l1dCache, err := cache.NewSetAssociativeCache(cacheConfig)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
@@ -200,7 +201,7 @@ func Test_CPU_Cache_DRAM_Performance(t *testing.T) {
 	cpu1 := cpu.NewO3CPU(traceReader1, cpu.DefaultO3CPUConfig())
 	cpu1.SetStandaloneMode(true)
 
-	cache1, _ := cache.NewSetAssociativeCache(cache.DefaultL1DConfig())
+	cache1, _ := cache.NewSetAssociativeCache(compcache.DefaultL1DConfig())
 	cpu1.SetL1DCache(cache1)
 
 	for cycle := uint64(0); cycle < maxCycles; cycle++ {
@@ -225,7 +226,7 @@ func Test_CPU_Cache_DRAM_Performance(t *testing.T) {
 	dramChannel2, _ := dram.NewDRAMChannel(dram.DefaultDRAMConfig())
 	dramAdapter2 := memory.NewDRAMAdapter(dramChannel2)
 
-	cache2, _ := cache.NewSetAssociativeCache(cache.DefaultL1DConfig())
+	cache2, _ := cache.NewSetAssociativeCache(compcache.DefaultL1DConfig())
 	cache2.SetLowerLevel(dramAdapter2)
 
 	cpu2 := cpu.NewO3CPU(traceReader2, cpu.DefaultO3CPUConfig())

@@ -49,6 +49,9 @@ func TestIntegrationMode_Debug(t *testing.T) {
 			msgCounter++
 			// 标记为已发出，防止重复发送
 			load.FetchIssued = true
+			if load.InstrID == 27 {
+				t.Logf("Cycle %d: Received LOAD request for Instr 27", cycle)
+			}
 		}
 		for _, store := range readyStores {
 			pendingStores = append(pendingStores, PendingRequest{
@@ -58,12 +61,19 @@ func TestIntegrationMode_Debug(t *testing.T) {
 			msgCounter++
 			// 标记为已发出，防止重复发送
 			store.FetchIssued = true
+			if store.InstrID == 27 {
+				t.Logf("Cycle %d: Received STORE request for Instr 27", cycle)
+			}
 		}
 
 		// 立即响应所有 pending 的请求
 		newPendingLoads := []PendingRequest{}
 		for _, req := range pendingLoads {
-			if !cpu.HandleLoadResponse(req.InstrID, cycle+1) {
+			success := cpu.HandleLoadResponse(req.InstrID, cycle+1)
+			if req.InstrID == 27 {
+				t.Logf("Cycle %d: HandleLoadResponse for Instr 27 (MsgID %d) -> %v", cycle, req.MsgID, success)
+			}
+			if !success {
 				// 响应失败，保留请求
 				newPendingLoads = append(newPendingLoads, req)
 			}
@@ -107,9 +117,10 @@ func TestIntegrationMode_Debug(t *testing.T) {
 			if robSize > 0 {
 				instr := cpu.rob.PeekAt(0)
 				if instr != nil {
-					t.Logf("  Head: ID=%d, Exec=%v, Comp=%v, CompletedMemOps=%d/%d",
+					t.Logf("  Head: ID=%d, Exec=%v, Comp=%v, CompletedMemOps=%d/%d, IsMemory=%v, NumSrcRegs=%d",
 						instr.InstrID, instr.Executed, instr.Completed,
-						instr.CompletedMemOps, instr.NumMemOps())
+						instr.CompletedMemOps, instr.NumMemOps(), instr.HasMemOp(), len(instr.SrcRegisters))
+					// Print dependencies if possible, or source reg availability
 				}
 			}
 		}

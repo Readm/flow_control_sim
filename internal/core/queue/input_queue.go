@@ -28,6 +28,15 @@ type InputQueue struct {
 	bitmapWidth     int
 	nextUpdateCycle int
 
+	// ===== Cache line padding (避免 false sharing) =====
+	_ [128]byte // Padding to isolate length on its own cache line
+
+	// ===== Runtime state (isolated cache line) =====
+	length int // Current number of packets (cached, O(1) access)
+
+	// ===== Cache line padding =====
+	_ [128]byte // Padding to prevent false sharing with arrayMu
+
 	// ===== Synchronization for array operations =====
 	arrayMu sync.Mutex
 
@@ -125,6 +134,7 @@ func (iq *InputQueue) Tick(cycle int) error {
 			}
 			iq.freeBitmap[slot] = false
 			iq.blockReasons[slot] = 0
+			iq.length++ // 增加计数
 			iq.arrayMu.Unlock()
 
 			received = append(received, pkt)
@@ -188,6 +198,7 @@ func (iq *InputQueue) Pick() []packet.Packet {
 		// Mark slot as free
 		iq.freeBitmap[info.index] = true
 		iq.blockReasons[info.index] = 0
+		iq.length-- // 减少计数
 
 		debug.Logf("InputQueue: Picked packet: Src=%d Dst=%d", info.packet.Packet.SourceID, info.packet.Packet.TargetID)
 	}
@@ -215,13 +226,7 @@ func (iq *InputQueue) isFree(index int) bool {
 
 // Length returns the number of packets currently stored in the queue.
 func (iq *InputQueue) Length() int {
-	count := 0
-	for i := 0; i < iq.capacity; i++ {
-		if !iq.freeBitmap[i] {
-			count++
-		}
-	}
-	return count
+	return iq.length // O(1) - 直接返回缓存的计数
 }
 
 // Capacity returns the queue capacity.
@@ -316,6 +321,7 @@ func (iq *InputQueue) Free(slot int) {
 		if !iq.freeBitmap[slot] {
 			iq.freeBitmap[slot] = true
 			iq.blockReasons[slot] = 0
+			iq.length-- // 减少计数
 			// We don't clear the slot data itself, it will be overwritten
 		}
 	}

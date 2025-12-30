@@ -2,6 +2,7 @@ package ahead_port
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
@@ -91,15 +92,29 @@ type Port struct {
 	// ===== Packet cache for out-of-order packets =====
 	pendingPackets map[int][]packet.Packet
 	pendingMu      sync.Mutex
+
+	// ===== Profiling: Node IDs =====
+	sourceNodeID int // Upstream (sender) Node ID
+	targetNodeID int // Downstream (receiver) Node ID
+
+	// ===== Profiling: Atomic counters (lock-free) =====
+	doneBlockCount  atomic.Uint64 // WaitDone blocked count
+	doneFastCount   atomic.Uint64 // WaitDone fast path count
+	readyBlockCount atomic.Uint64 // Ready blocked count
+	readyFastCount  atomic.Uint64 // Ready fast path count
 }
 
 // NewPort creates a new port instance.
-func NewPort() *Port {
+// sourceNodeID: ID of the upstream (sender) node
+// targetNodeID: ID of the downstream (receiver) node
+func NewPort(sourceNodeID, targetNodeID int) *Port {
 	return &Port{
 		channel:        make(chan PacketWithCycle, 64), // Increased capacity
 		upstreamSync:   NewComponentSync(),
 		downstreamSync: NewComponentSync(),
 		pendingPackets: make(map[int][]packet.Packet),
+		sourceNodeID:   sourceNodeID,
+		targetNodeID:   targetNodeID,
 	}
 }
 
@@ -125,6 +140,13 @@ func (p *Port) PeekReady(cycle int) (bool, bool) {
 
 // IsReady blocks until the downstream component has decided its ready state for the given cycle.
 func (p *Port) IsReady(cycle int) bool {
+	// Profiling: Check if we'll hit the fast path
+	if int64(cycle) < atomic.LoadInt64(&p.downstreamSync.readyUntil) {
+		p.readyFastCount.Add(1) // Fast path - no blocking
+	} else {
+		p.readyBlockCount.Add(1) // Slow path - may block
+	}
+
 	return p.downstreamSync.Ready(cycle)
 }
 
@@ -197,6 +219,13 @@ func (p *Port) drainChannel() {
 
 // WaitDone blocks until the upstream component has completed the specified cycle.
 func (p *Port) WaitDone(cycle int) {
+	// Profiling: Check if we'll hit the fast path
+	if int(atomic.LoadInt64(&p.upstreamSync.done)) >= cycle {
+		p.doneFastCount.Add(1) // Fast path - no blocking
+	} else {
+		p.doneBlockCount.Add(1) // Slow path - will block
+	}
+
 	p.upstreamSync.WaitDone(cycle)
 }
 
@@ -222,4 +251,36 @@ func (p *Port) AsInPort() InPort {
 // This should be used by downstream components that receive data.
 func (p *Port) AsOutPort() OutPort {
 	return p
+}
+
+// ===== Profiling Getters =====
+
+// SourceNodeID returns the upstream (sender) node ID.
+func (p *Port) SourceNodeID() int {
+	return p.sourceNodeID
+}
+
+// TargetNodeID returns the downstream (receiver) node ID.
+func (p *Port) TargetNodeID() int {
+	return p.targetNodeID
+}
+
+// DoneBlockCount returns the number of times WaitDone blocked.
+func (p *Port) DoneBlockCount() uint64 {
+	return p.doneBlockCount.Load()
+}
+
+// DoneFastCount returns the number of times WaitDone used fast path.
+func (p *Port) DoneFastCount() uint64 {
+	return p.doneFastCount.Load()
+}
+
+// ReadyBlockCount returns the number of times Ready blocked.
+func (p *Port) ReadyBlockCount() uint64 {
+	return p.readyBlockCount.Load()
+}
+
+// ReadyFastCount returns the number of times Ready used fast path.
+func (p *Port) ReadyFastCount() uint64 {
+	return p.readyFastCount.Load()
 }

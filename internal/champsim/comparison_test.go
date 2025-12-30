@@ -9,6 +9,7 @@ import (
 	"github.com/Readm/flow_sim/internal/champsim/flowsim"
 	"github.com/Readm/flow_sim/internal/champsim/memory"
 	"github.com/Readm/flow_sim/internal/champsim/trace"
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -99,7 +100,7 @@ func runDirectIntegration(t *testing.T, traceFile string, maxCycles int) Simulat
 	dramAdapter := memory.NewDRAMAdapter(dramChannel)
 
 	// 创建 L1D Cache
-	cacheConfig := cache.DefaultL1DConfig()
+	cacheConfig := compcache.DefaultL1DConfig()
 	l1dCache, err := cache.NewSetAssociativeCache(cacheConfig)
 	if err != nil {
 		t.Fatalf("Failed to create L1D cache: %v", err)
@@ -175,7 +176,7 @@ func runFlowSimIntegration(t *testing.T, traceFile string, maxCycles int) Simula
 	o3cpu.SetStandaloneMode(false)
 
 	// 创建 L1D Cache
-	l1dCache, err := cache.NewSetAssociativeCache(cache.DefaultL1DConfig())
+	l1dCache, err := cache.NewSetAssociativeCache(compcache.DefaultL1DConfig())
 	if err != nil {
 		t.Fatalf("Failed to create L1D cache: %v", err)
 	}
@@ -238,8 +239,8 @@ func runFlowSimIntegration(t *testing.T, traceFile string, maxCycles int) Simula
 	})
 
 	// 连接节点
-	net.Connect(cpuNodeID, 0, dramNodeID, 0, 1, 1)   // CPU -> DRAM
-	net.Connect(dramNodeID, 0, cpuNodeID, 0, 1, 1)   // DRAM -> CPU
+	net.Connect(cpuNodeID, 0, dramNodeID, 0, 1, 1) // CPU -> DRAM
+	net.Connect(dramNodeID, 0, cpuNodeID, 0, 1, 1) // DRAM -> CPU
 
 	// 运行仿真
 	if err := net.AdvanceTo(maxCycles - 1); err != nil {

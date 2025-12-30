@@ -11,7 +11,30 @@ package ahead_port
 //
 // Returns the created Port for monitoring/debugging if needed.
 func Connect(upstream, downstream interface{}) *Port {
-	port := NewPort()
+	// Use placeholder IDs for backward compatibility
+	port := NewPort(-1, -1)
+
+	// Set upstream component's downstream port (InPort view)
+	if setter, ok := upstream.(interface{ SetDownstreamPort(InPort) }); ok {
+		setter.SetDownstreamPort(port.AsInPort())
+	} else {
+		panic("upstream component does not have SetDownstreamPort(InPort) method")
+	}
+
+	// Set downstream component's upstream port (OutPort view)
+	if setter, ok := downstream.(interface{ SetUpstreamPort(OutPort) }); ok {
+		setter.SetUpstreamPort(port.AsOutPort())
+	} else {
+		panic("downstream component does not have SetUpstreamPort(OutPort) method")
+	}
+
+	return port
+}
+
+// ConnectWithIDs creates a Port with specified node IDs and connects two components.
+// This is useful for profiling where you need to track which nodes are communicating.
+func ConnectWithIDs(sourceNodeID, targetNodeID int, upstream, downstream interface{}) *Port {
+	port := NewPort(sourceNodeID, targetNodeID)
 
 	// Set upstream component's downstream port (InPort view)
 	if setter, ok := upstream.(interface{ SetDownstreamPort(InPort) }); ok {

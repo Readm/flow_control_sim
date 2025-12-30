@@ -95,9 +95,11 @@ func TestInputQueuePick(t *testing.T) {
 	iq.slots[0] = packet.PacketWithCycle{Cycle: 3, Packet: packet.Packet{SourceID: 1}}
 	iq.freeBitmap[0] = false
 	iq.blockReasons[0] = 0
+	iq.length++ // 更新计数器
 	iq.slots[1] = packet.PacketWithCycle{Cycle: 5, Packet: packet.Packet{SourceID: 2}}
 	iq.freeBitmap[1] = false
 	iq.blockReasons[1] = 0
+	iq.length++ // 更新计数器
 	iq.arrayMu.Unlock()
 
 	picked := iq.Pick()

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Readm/flow_sim/internal/components/cache"
@@ -114,6 +115,15 @@ type BaseNode struct {
 	currentCycle     uint64
 	advanceTarget    uint64   // Target cycle for current AdvanceTo
 	outputQueueAhead []uint64 // Next cycle to tick for each output queue
+
+	// ===== Profiling: 节点执行时间统计 (使用 CPU cycles) =====
+	totalProcessCycles atomic.Uint64 // 累计处理时间（CPU cycles，不包含等待）- 兼容旧代码
+	processCount       atomic.Uint64 // 处理次数
+
+	// 三阶段详细统计
+	receiveCycles atomic.Uint64 // Receive 阶段时间（包含同步等待）
+	processCycles atomic.Uint64 // Process 阶段时间（实际计算）
+	sendCycles    atomic.Uint64 // Send 阶段时间（发送到下游）
 }
 
 // NewBaseNode creates a new BaseNode.
@@ -140,6 +150,71 @@ func (n *BaseNode) CurrentCycle() int {
 
 // ID returns the node identifier.
 func (n *BaseNode) ID() int { return n.id }
+
+// ===== Profiling Getters =====
+
+// TotalProcessCycles returns the total CPU cycles spent in processing (excluding sync wait).
+func (n *BaseNode) TotalProcessCycles() uint64 {
+	return n.totalProcessCycles.Load()
+}
+
+// ProcessCount returns the number of times this node has been processed.
+func (n *BaseNode) ProcessCount() uint64 {
+	return n.processCount.Load()
+}
+
+// AvgProcessCycles returns the average CPU cycles per process.
+func (n *BaseNode) AvgProcessCycles() uint64 {
+	count := n.processCount.Load()
+	if count == 0 {
+		return 0
+	}
+	return n.totalProcessCycles.Load() / count
+}
+
+// ===== 三阶段详细 Profiling Getters =====
+
+// ReceiveCycles returns the total CPU cycles spent in Receive phase (including sync wait).
+func (n *BaseNode) ReceiveCycles() uint64 {
+	return n.receiveCycles.Load()
+}
+
+// ProcessCycles returns the total CPU cycles spent in Process phase (actual computation).
+func (n *BaseNode) ProcessCycles() uint64 {
+	return n.processCycles.Load()
+}
+
+// SendCycles returns the total CPU cycles spent in Send phase (sending to downstream).
+func (n *BaseNode) SendCycles() uint64 {
+	return n.sendCycles.Load()
+}
+
+// AvgReceiveCycles returns the average CPU cycles per Receive.
+func (n *BaseNode) AvgReceiveCycles() uint64 {
+	count := n.processCount.Load()
+	if count == 0 {
+		return 0
+	}
+	return n.receiveCycles.Load() / count
+}
+
+// AvgProcessCyclesDetailed returns the average CPU cycles per Process (detailed).
+func (n *BaseNode) AvgProcessCyclesDetailed() uint64 {
+	count := n.processCount.Load()
+	if count == 0 {
+		return 0
+	}
+	return n.processCycles.Load() / count
+}
+
+// AvgSendCycles returns the average CPU cycles per Send.
+func (n *BaseNode) AvgSendCycles() uint64 {
+	count := n.processCount.Load()
+	if count == 0 {
+		return 0
+	}
+	return n.sendCycles.Load() / count
+}
 
 // AddInputQueue registers an InputQueue.
 func (n *BaseNode) AddInputQueue(q InputQueue) error {
@@ -254,25 +329,44 @@ func (n *BaseNode) InjectPacket(pkt packet.Packet) error {
 // Order: Receive (Input) -> Process (Handler) -> Send (Output)
 func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
 
-	// 1. Phase 1: Receive (Input)
+	// ===== Phase 1: Receive (Input) =====
+	receiveStart := GetCPUCycles()
+
 	// Input queues wait for upstream and receive data for CURRENT cycle.
-	// Returns the number of packets processed, or error
+	// This includes sync wait time (WaitDone blocking)
 	if err := n.tickInputQueues(cycle); err != nil {
 		return fmt.Errorf("node %d input tick failed: %w", n.id, err)
 	}
 
-	// 2. Phase 2: Process (Handler)
+	receiveEnd := GetCPUCycles()
+	n.receiveCycles.Add(receiveEnd - receiveStart)
+
+	// ===== Phase 2: Process (Handler) =====
+	processStart := GetCPUCycles()
+
 	// Handler logic processes the data we just received.
 	// Packets are available in n.inputBuffer (which points to n.inputValues)
 	if err := n.handler.Process(cycle, n.inputBuffer); err != nil {
 		return fmt.Errorf("node %d process failed: %w", n.id, err)
 	}
 
-	// 3. Phase 3: Send (Output)
+	processEnd := GetCPUCycles()
+	n.processCycles.Add(processEnd - processStart)
+
+	// ===== Phase 3: Send (Output) =====
+	sendStart := GetCPUCycles()
+
 	// Output queues send the data just injected to downstream.
 	if err := n.tickOutputQueues(cycle); err != nil {
 		return fmt.Errorf("node %d output tick failed: %w", n.id, err)
 	}
+
+	sendEnd := GetCPUCycles()
+	n.sendCycles.Add(sendEnd - sendStart)
+
+	// ===== Update counters =====
+	n.totalProcessCycles.Add((processEnd - processStart) + (sendEnd - sendStart)) // 兼容旧代码
+	n.processCount.Add(1)
 
 	return nil
 }

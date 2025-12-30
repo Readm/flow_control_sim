@@ -1,5 +1,9 @@
 package cache
 
+import (
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
+)
+
 // MSHREntry MSHR (Miss Status Holding Register) 条目
 //
 // 对应 ChampSim 的 mshr_type
@@ -29,7 +33,7 @@ type MSHREntry struct {
 	CPU uint32
 
 	// Type 访问类型（Load/Store/Prefetch）
-	Type AccessType
+	Type compcache.AccessType
 
 	// PrefetchFromThis 是否从这个级别预取
 	PrefetchFromThis bool

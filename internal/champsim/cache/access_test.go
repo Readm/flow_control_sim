@@ -2,11 +2,13 @@ package cache
 
 import (
 	"testing"
+
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
 )
 
 // TestAccess_Hit 测试cache hit
 func TestAccess_Hit(t *testing.T) {
-	config := DefaultL1DConfig()
+	config := compcache.DefaultL1DConfig()
 	cache, err := NewSetAssociativeCache(config)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
@@ -14,7 +16,7 @@ func TestAccess_Hit(t *testing.T) {
 
 	// 第一次访问：miss
 	addr := uint64(0x1000)
-	hit, readyCycle, mshrIndex := cache.Access(addr, addr, 1, uint8(AccessLoad), 0)
+	hit, readyCycle, mshrIndex := cache.Access(addr, addr, 1, compcache.AccessLoad, 0)
 
 	if hit {
 		t.Error("Expected miss on first access")
@@ -26,7 +28,7 @@ func TestAccess_Hit(t *testing.T) {
 
 	// Standalone模式会自动fill
 	// 第二次访问：hit
-	hit, readyCycle, _ = cache.Access(addr, addr, 2, uint8(AccessLoad), 10)
+	hit, readyCycle, _ = cache.Access(addr, addr, 2, compcache.AccessLoad, 10)
 
 	if !hit {
 		t.Error("Expected hit on second access")
@@ -64,7 +66,7 @@ func TestAccess_Hit(t *testing.T) {
 
 // TestAccess_Miss 测试cache miss
 func TestAccess_Miss(t *testing.T) {
-	config := DefaultL1DConfig()
+	config := compcache.DefaultL1DConfig()
 	cache, err := NewSetAssociativeCache(config)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
@@ -72,7 +74,7 @@ func TestAccess_Miss(t *testing.T) {
 
 	// 访问未缓存的地址
 	addr := uint64(0x2000)
-	hit, readyCycle, mshrIndex := cache.Access(addr, addr, 1, uint8(AccessLoad), 0)
+	hit, readyCycle, mshrIndex := cache.Access(addr, addr, 1, compcache.AccessLoad, 0)
 
 	if hit {
 		t.Error("Expected miss")
@@ -102,7 +104,7 @@ func TestAccess_Miss(t *testing.T) {
 
 // TestAccess_StoreHit 测试store hit（应该标记dirty）
 func TestAccess_StoreHit(t *testing.T) {
-	config := DefaultL1DConfig()
+	config := compcache.DefaultL1DConfig()
 	cache, err := NewSetAssociativeCache(config)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
@@ -111,10 +113,10 @@ func TestAccess_StoreHit(t *testing.T) {
 	addr := uint64(0x3000)
 
 	// 第一次load：miss + auto fill
-	cache.Access(addr, addr, 1, uint8(AccessLoad), 0)
+	cache.Access(addr, addr, 1, compcache.AccessLoad, 0)
 
 	// 第二次store：hit，应该标记dirty
-	hit, _, _ := cache.Access(addr, addr, 2, uint8(AccessStore), 10)
+	hit, _, _ := cache.Access(addr, addr, 2, compcache.AccessStore, 10)
 
 	if !hit {
 		t.Error("Expected hit on store")
@@ -146,7 +148,7 @@ func TestAccess_StoreHit(t *testing.T) {
 
 // TestAccess_MSHRMerge 测试MSHR合并（多个请求访问同一地址）
 func TestAccess_MSHRMerge(t *testing.T) {
-	config := DefaultL1DConfig()
+	config := compcache.DefaultL1DConfig()
 	cache, err := NewSetAssociativeCache(config)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
@@ -158,13 +160,13 @@ func TestAccess_MSHRMerge(t *testing.T) {
 	addr := uint64(0x4000)
 
 	// 第一次访问：miss，分配MSHR
-	hit1, ready1, mshr1 := cache.Access(addr, addr, 1, uint8(AccessLoad), 0)
+	hit1, ready1, mshr1 := cache.Access(addr, addr, 1, compcache.AccessLoad, 0)
 	if hit1 {
 		t.Error("Expected miss on first access")
 	}
 
 	// 第二次访问同一地址：应该合并到已存在的MSHR
-	hit2, ready2, mshr2 := cache.Access(addr, addr, 2, uint8(AccessLoad), 5)
+	hit2, ready2, mshr2 := cache.Access(addr, addr, 2, compcache.AccessLoad, 5)
 	if hit2 {
 		t.Error("Expected miss on second access (same addr)")
 	}
@@ -199,7 +201,7 @@ func TestAccess_MSHRMerge(t *testing.T) {
 
 // TestAccess_MSHRFull 测试MSHR满
 func TestAccess_MSHRFull(t *testing.T) {
-	config := DefaultL1DConfig()
+	config := compcache.DefaultL1DConfig()
 	config.MSHRSize = 2 // 只允许2个MSHR条目
 
 	cache, err := NewSetAssociativeCache(config)
@@ -211,8 +213,8 @@ func TestAccess_MSHRFull(t *testing.T) {
 	cache.SetStandaloneMode(false)
 
 	// 填满MSHR
-	cache.Access(0x1000, 0x1000, 1, uint8(AccessLoad), 0)
-	cache.Access(0x2000, 0x2000, 2, uint8(AccessLoad), 0)
+	cache.Access(0x1000, 0x1000, 1, compcache.AccessLoad, 0)
+	cache.Access(0x2000, 0x2000, 2, compcache.AccessLoad, 0)
 
 	mshrSize, _ := cache.GetMSHRStats()
 	if mshrSize != 2 {
@@ -220,7 +222,7 @@ func TestAccess_MSHRFull(t *testing.T) {
 	}
 
 	// 第三次访问：MSHR已满
-	hit, _, mshrIndex := cache.Access(0x3000, 0x3000, 3, uint8(AccessLoad), 0)
+	hit, _, mshrIndex := cache.Access(0x3000, 0x3000, 3, compcache.AccessLoad, 0)
 
 	if hit {
 		t.Error("Expected miss")
@@ -243,7 +245,7 @@ func TestAccess_MSHRFull(t *testing.T) {
 
 // TestHandleFill 测试Fill处理
 func TestHandleFill(t *testing.T) {
-	config := DefaultL1DConfig()
+	config := compcache.DefaultL1DConfig()
 	cache, err := NewSetAssociativeCache(config)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
@@ -255,7 +257,7 @@ func TestHandleFill(t *testing.T) {
 	addr := uint64(0x5000)
 
 	// 第一次访问：miss
-	hit, _, _ := cache.Access(addr, addr, 1, uint8(AccessLoad), 0)
+	hit, _, _ := cache.Access(addr, addr, 1, compcache.AccessLoad, 0)
 	if hit {
 		t.Error("Expected miss")
 	}
@@ -297,7 +299,7 @@ func TestHandleFill(t *testing.T) {
 	}
 
 	// 第二次访问应该hit
-	hit, _, _ = cache.Access(addr, addr, 2, uint8(AccessLoad), 20)
+	hit, _, _ = cache.Access(addr, addr, 2, compcache.AccessLoad, 20)
 	if !hit {
 		t.Error("Expected hit after fill")
 	}
@@ -305,9 +307,9 @@ func TestHandleFill(t *testing.T) {
 
 // TestAccess_Writeback 测试dirty block的writeback
 func TestAccess_Writeback(t *testing.T) {
-	config := DefaultL1DConfig()
-	config.NumSets = 1  // 只有1个set
-	config.NumWays = 2  // 2-way，方便测试替换
+	config := compcache.DefaultL1DConfig()
+	config.NumSets = 1 // 只有1个set
+	config.NumWays = 2 // 2-way，方便测试替换
 
 	cache, err := NewSetAssociativeCache(config)
 	if err != nil {
@@ -319,17 +321,17 @@ func TestAccess_Writeback(t *testing.T) {
 	addr2 := uint64(0x0040) // set 0 (相同set，不同tag)
 
 	// 访问addr1并写入（变成dirty）
-	cache.Access(addr1, addr1, 1, uint8(AccessLoad), 0)
-	cache.Access(addr1, addr1, 2, uint8(AccessStore), 10) // dirty
+	cache.Access(addr1, addr1, 1, compcache.AccessLoad, 0)
+	cache.Access(addr1, addr1, 2, compcache.AccessStore, 10) // dirty
 
 	// 访问addr2（也会变dirty）
-	cache.Access(addr2, addr2, 3, uint8(AccessLoad), 20)
-	cache.Access(addr2, addr2, 4, uint8(AccessStore), 30) // dirty
+	cache.Access(addr2, addr2, 3, compcache.AccessLoad, 20)
+	cache.Access(addr2, addr2, 4, compcache.AccessStore, 30) // dirty
 
 	// 现在两个way都满了且dirty
 	// 访问第三个地址，应该触发writeback
 	addr3 := uint64(0x0080) // set 0 (相同set，不同tag)
-	cache.Access(addr3, addr3, 5, uint8(AccessLoad), 40)
+	cache.Access(addr3, addr3, 5, compcache.AccessLoad, 40)
 
 	// 验证writeback统计
 	statsInterface := cache.GetStats()

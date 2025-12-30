@@ -194,9 +194,11 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 		linkInstance = link.NewLink(sourceID, targetID, latency, bandwidth)
 	}
 
-	// Connect using ahead_port.Connect
-	ahead_port.Connect(sourceOutput, linkInstance)
-	ahead_port.Connect(linkInstance, targetInput)
+	// Connect using ahead_port.ConnectWithIDs for profiling
+	// Port 1: sourceOutput -> linkInstance (sourceID sends to link)
+	ahead_port.ConnectWithIDs(sourceID, targetID, sourceOutput, linkInstance)
+	// Port 2: linkInstance -> targetInput (link sends to targetID)
+	ahead_port.ConnectWithIDs(sourceID, targetID, linkInstance, targetInput)
 
 	// Link will be initialized in Advance or explicitly by user
 
@@ -339,10 +341,10 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 			bandwidth,
 		)
 
-		// Connect using ahead_port.Connect
+		// Connect using ahead_port.ConnectWithIDs for profiling
 		// OutputQueue -> Link -> InputQueue
-		ahead_port.Connect(sourceOutput, linkInstance)
-		ahead_port.Connect(linkInstance, targetInput)
+		ahead_port.ConnectWithIDs(edgeSchema.SrcNodeID, edgeSchema.DstNodeID, sourceOutput, linkInstance)
+		ahead_port.ConnectWithIDs(edgeSchema.SrcNodeID, edgeSchema.DstNodeID, linkInstance, targetInput)
 
 		// Link will be initialized in Advance or explicitly by user
 

@@ -3,6 +3,7 @@ package cpu
 import (
 	"github.com/Readm/flow_sim/internal/champsim/instruction"
 	"github.com/Readm/flow_sim/internal/champsim/trace"
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
 )
 
 // O3CPU Out-of-Order CPU 模型
@@ -37,7 +38,7 @@ type O3CPU struct {
 	// l1dCache L1 Data Cache
 	// 在集成模式下使用，standalone模式下为nil
 	l1dCache interface {
-		Access(addr uint64, vaddr uint64, instrID uint64, accessType uint8, cycle uint64) (hit bool, readyCycle uint64, mshrIndex int)
+		Access(addr uint64, vaddr uint64, instrID uint64, accessType compcache.AccessType, cycle uint64) (hit bool, readyCycle uint64, mshrIndex int)
 		HandleFill(addr uint64, data uint64, cycle uint64) bool
 		SetStandaloneMode(standalone bool)
 		GetStats() interface{}
@@ -166,10 +167,10 @@ type O3CPUStats struct {
 	IPC float64
 
 	// 各阶段停顿
-	FetchStalls   uint64
-	DecodeStalls  uint64
+	FetchStalls    uint64
+	DecodeStalls   uint64
 	DispatchStalls uint64
-	ExecuteStalls uint64
+	ExecuteStalls  uint64
 
 	// 分支预测
 	BranchMispredictions uint64
@@ -179,18 +180,18 @@ type O3CPUStats struct {
 // NewO3CPU 创建新的 O3 CPU
 func NewO3CPU(traceReader trace.TraceReader, config O3CPUConfig) *O3CPU {
 	return &O3CPU{
-		traceReader:         traceReader,
-		rob:                 NewReorderBuffer(config.ROBSize),
-		lsq:                 NewLoadStoreQueue(config.LQSize, config.SQSize),
-		regAlloc:            NewRegisterAllocator(config.PhysicalRegisters),
-		dib:         NewDIB(config.DIBSize, DefaultDIBShift),
-		fetchQueue:  make([]*instruction.OOOModelInstr, 0, config.FetchQueueSize),
-		decodeQueue: make([]*instruction.OOOModelInstr, 0, config.DecodeQueueSize),
-		config:      config,
-		currentCycle:        0,
-		instrCounter:        0,
-		stats:               O3CPUStats{},
-		standaloneMode:      true, // 默认为独立模式
+		traceReader:    traceReader,
+		rob:            NewReorderBuffer(config.ROBSize),
+		lsq:            NewLoadStoreQueue(config.LQSize, config.SQSize),
+		regAlloc:       NewRegisterAllocator(config.PhysicalRegisters),
+		dib:            NewDIB(config.DIBSize, DefaultDIBShift),
+		fetchQueue:     make([]*instruction.OOOModelInstr, 0, config.FetchQueueSize),
+		decodeQueue:    make([]*instruction.OOOModelInstr, 0, config.DecodeQueueSize),
+		config:         config,
+		currentCycle:   0,
+		instrCounter:   0,
+		stats:          O3CPUStats{},
+		standaloneMode: true, // 默认为独立模式
 	}
 }
 
@@ -211,7 +212,7 @@ func (cpu *O3CPU) SetStandaloneMode(standalone bool) {
 // 参数：
 // - cache: 实现了Cache接口的对象（通常是*cache.SetAssociativeCache）
 func (cpu *O3CPU) SetL1DCache(cache interface {
-	Access(addr uint64, vaddr uint64, instrID uint64, accessType uint8, cycle uint64) (hit bool, readyCycle uint64, mshrIndex int)
+	Access(addr uint64, vaddr uint64, instrID uint64, accessType compcache.AccessType, cycle uint64) (hit bool, readyCycle uint64, mshrIndex int)
 	HandleFill(addr uint64, data uint64, cycle uint64) bool
 	SetStandaloneMode(standalone bool)
 	GetStats() interface{}
@@ -235,13 +236,13 @@ func DefaultO3CPUConfig() O3CPUConfig {
 		RetireWidth:   4,
 
 		// 缓冲区大小
-		FetchQueueSize:  64,
-		DecodeQueueSize: 64,
-		ROBSize:         DefaultROBSize,
-		LQSize:                 DefaultLQSize,
-		SQSize:                 DefaultSQSize,
-		PhysicalRegisters:      180, // Skylake: 180 integer registers
-		DIBSize:                DefaultDIBSize,
+		FetchQueueSize:    64,
+		DecodeQueueSize:   64,
+		ROBSize:           DefaultROBSize,
+		LQSize:            DefaultLQSize,
+		SQSize:            DefaultSQSize,
+		PhysicalRegisters: 180, // Skylake: 180 integer registers
+		DIBSize:           DefaultDIBSize,
 
 		// 延迟
 		FetchLatency:    1,
@@ -388,7 +389,6 @@ func (cpu *O3CPU) decode() {
 		decodeCount++
 	}
 }
-
 
 // ==================== Dispatch 阶段 ====================
 

@@ -98,12 +98,12 @@ type CacheConfig struct {
 // 参考 ChampSim 默认配置
 func DefaultL1DConfig() CacheConfig {
 	return CacheConfig{
-		NumSets:        64,   // 64 sets
-		NumWays:        8,    // 8-way
-		BlockSize:      64,   // 64 bytes
-		MSHRSize:       8,    // 8 MSHRs
-		HitLatency:     4,    // 4 cycles
-		FillLatency:    4,    // 4 cycles
+		NumSets:        64, // 64 sets
+		NumWays:        8,  // 8-way
+		BlockSize:      64, // 64 bytes
+		MSHRSize:       8,  // 8 MSHRs
+		HitLatency:     4,  // 4 cycles
+		FillLatency:    4,  // 4 cycles
 		Name:           "L1D",
 		CPU:            0,
 		PrefetchAsLoad: false,
@@ -113,12 +113,12 @@ func DefaultL1DConfig() CacheConfig {
 // DefaultL2CConfig 返回默认的 L2 Cache 配置
 func DefaultL2CConfig() CacheConfig {
 	return CacheConfig{
-		NumSets:        512,  // 512 sets
-		NumWays:        8,    // 8-way
-		BlockSize:      64,   // 64 bytes
-		MSHRSize:       16,   // 16 MSHRs
-		HitLatency:     10,   // 10 cycles
-		FillLatency:    10,   // 10 cycles
+		NumSets:        512, // 512 sets
+		NumWays:        8,   // 8-way
+		BlockSize:      64,  // 64 bytes
+		MSHRSize:       16,  // 16 MSHRs
+		HitLatency:     10,  // 10 cycles
+		FillLatency:    10,  // 10 cycles
 		Name:           "L2C",
 		CPU:            0,
 		PrefetchAsLoad: false,

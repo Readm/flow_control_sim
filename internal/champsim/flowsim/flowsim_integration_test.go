@@ -7,6 +7,7 @@ import (
 	"github.com/Readm/flow_sim/internal/champsim/cpu"
 	"github.com/Readm/flow_sim/internal/champsim/dram"
 	"github.com/Readm/flow_sim/internal/champsim/trace"
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -29,7 +30,7 @@ func Test_FlowSim_CPU_DRAM_Integration(t *testing.T) {
 	o3cpu.SetStandaloneMode(false) // 非standalone模式
 
 	// 创建L1D Cache
-	l1dCache, err := cache.NewSetAssociativeCache(cache.DefaultL1DConfig())
+	l1dCache, err := cache.NewSetAssociativeCache(compcache.DefaultL1DConfig())
 	if err != nil {
 		t.Fatalf("Failed to create L1D cache: %v", err)
 	}
@@ -127,10 +128,10 @@ func Test_FlowSim_CPU_DRAM_Integration(t *testing.T) {
 
 	// 连接: CPU(output 0) -> DRAM(input 0)
 	linkCPUtoDRAM, err := net.Connect(
-		cpuNodeID, 0,    // CPU node, output 0
-		dramNodeID, 0,   // DRAM node, input 0
-		1,              // latency = 1 cycle
-		1,              // bandwidth = 1 packet/cycle
+		cpuNodeID, 0, // CPU node, output 0
+		dramNodeID, 0, // DRAM node, input 0
+		1, // latency = 1 cycle
+		1, // bandwidth = 1 packet/cycle
 	)
 	if err != nil {
 		t.Fatalf("Failed to connect CPU to DRAM: %v", err)
@@ -139,10 +140,10 @@ func Test_FlowSim_CPU_DRAM_Integration(t *testing.T) {
 
 	// 连接: DRAM(output 0) -> CPU(input 0)
 	linkDRAMtoCPU, err := net.Connect(
-		dramNodeID, 0,   // DRAM node, output 0
-		cpuNodeID, 0,    // CPU node, input 0
-		1,              // latency = 1 cycle
-		1,              // bandwidth = 1 packet/cycle
+		dramNodeID, 0, // DRAM node, output 0
+		cpuNodeID, 0, // CPU node, input 0
+		1, // latency = 1 cycle
+		1, // bandwidth = 1 packet/cycle
 	)
 	if err != nil {
 		t.Fatalf("Failed to connect DRAM to CPU: %v", err)

@@ -5,6 +5,7 @@ import (
 
 	"github.com/Readm/flow_sim/internal/champsim/cache"
 	"github.com/Readm/flow_sim/internal/champsim/trace"
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
 )
 
 // Test_CPUCache_Integration 测试CPU+Cache集成
@@ -23,7 +24,7 @@ func Test_CPUCache_Integration(t *testing.T) {
 	cpu.SetStandaloneMode(true)
 
 	// 创建L1D Cache
-	cacheConfig := cache.DefaultL1DConfig()
+	cacheConfig := compcache.DefaultL1DConfig()
 	l1dCache, err := cache.NewSetAssociativeCache(cacheConfig)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
@@ -134,7 +135,7 @@ func Test_CPUCache_比较无Cache性能(t *testing.T) {
 	cpuWithCache := NewO3CPU(traceReader2, DefaultO3CPUConfig())
 	cpuWithCache.SetStandaloneMode(true)
 
-	l1dCache, err := cache.NewSetAssociativeCache(cache.DefaultL1DConfig())
+	l1dCache, err := cache.NewSetAssociativeCache(compcache.DefaultL1DConfig())
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -201,7 +202,7 @@ func Test_CPUCache_长时间运行(t *testing.T) {
 	cpu := NewO3CPU(traceReader, cpuConfig)
 	cpu.SetStandaloneMode(true)
 
-	cacheConfig := cache.DefaultL1DConfig()
+	cacheConfig := compcache.DefaultL1DConfig()
 	l1dCache, err := cache.NewSetAssociativeCache(cacheConfig)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)

@@ -43,6 +43,10 @@ type Link struct {
 	fromUpstream ahead_port.OutPort // Receive from upstream
 	toDownstream ahead_port.InPort  // Send to downstream
 
+	// ===== Profiling: Port references for sync profiling =====
+	upstreamPort   *ahead_port.Port // Port from OutputQueue to Link (for WaitDone profiling)
+	downstreamPort *ahead_port.Port // Port from Link to InputQueue (for Ready profiling)
+
 	// ===== Handler pattern =====
 	handler LinkHandler
 
@@ -86,12 +90,20 @@ func NewLinkWithHandler(sourceID, targetID, latency, bandwidth int, handler Link
 // SetUpstreamPort sets the port for receiving data from upstream.
 func (l *Link) SetUpstreamPort(port ahead_port.OutPort) {
 	l.fromUpstream = port
+	// Try to get the concrete Port for profiling
+	if p, ok := port.(*ahead_port.Port); ok {
+		l.upstreamPort = p
+	}
 	// No default ready signals. Handlers must provide them in their Process method.
 }
 
 // SetDownstreamPort sets the port for sending data to downstream.
 func (l *Link) SetDownstreamPort(port ahead_port.InPort) {
 	l.toDownstream = port
+	// Try to get the concrete Port for profiling
+	if p, ok := port.(*ahead_port.Port); ok {
+		l.downstreamPort = p
+	}
 }
 
 // UpdateUpstreamReady updates the ready state of the upstream port for a specific cycle.
@@ -224,4 +236,18 @@ func (l *Link) PendingPacketCount() int {
 		count += n
 	}
 	return count
+}
+
+// ===== Profiling Getters =====
+
+// GetUpstreamPort returns the upstream Port for profiling.
+// Returns nil if the port is not a concrete *Port type.
+func (l *Link) GetUpstreamPort() *ahead_port.Port {
+	return l.upstreamPort
+}
+
+// GetDownstreamPort returns the downstream Port for profiling.
+// Returns nil if the port is not a concrete *Port type.
+func (l *Link) GetDownstreamPort() *ahead_port.Port {
+	return l.downstreamPort
 }

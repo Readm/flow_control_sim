@@ -2,9 +2,7 @@ package node
 
 import (
 	"fmt"
-	"sync"
 
-	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
@@ -33,10 +31,22 @@ type BufferlessRingRouterNode struct {
 
 	workerID       int // ID of the connected worker node
 	bufferCapacity int // Internal buffer capacity
+	bufferMask     int // Bitmask for fast modulo (capacity - 1)
 
-	// Only one buffer for local injection (ring traffic never buffered in router)
-	injectionBuffer []packet.Packet // Buffer for local packets waiting to inject onto ring
-	bufferMu        sync.Mutex      // Protects injectionBuffer
+	// Ring buffer for local injection (zero-allocation, lock-free)
+	injectionBuffer []packet.Packet // Pre-allocated buffer
+	bufferHead      int             // Read index
+	bufferTail      int             // Write index
+	bufferSize      int             // Current occupancy
+
+	// Pre-allocated temporary slices for batch operations
+	tempForward []packet.Packet // Reused for forwarding packets
+	tempEject   []packet.Packet // Reused for ejecting packets
+	tempInject  []packet.Packet // Reused for injecting packets
+
+	// Cached output queue references (set on first Process call)
+	ringOutQueue  OutputQueue
+	localOutQueue OutputQueue
 }
 
 // NewBufferlessRingRouter creates a router node for bufferless ring topology.
@@ -44,107 +54,115 @@ type BufferlessRingRouterNode struct {
 // Parameters:
 // - routerID: ID of this router node
 // - workerID: ID of the connected worker node
-// - bufferCapacity: internal buffer size for injection queue
+// - bufferCapacity: internal buffer size for injection queue (should be power of 2 for optimal performance)
 func NewBufferlessRingRouter(routerID, workerID, bufferCapacity int) *BufferlessRingRouterNode {
+	// Ensure capacity is power of 2 for fast modulo via bitmask
+	capacity := bufferCapacity
+	if capacity&(capacity-1) != 0 {
+		// Round up to next power of 2
+		capacity = 1
+		for capacity < bufferCapacity {
+			capacity <<= 1
+		}
+	}
+
 	router := &BufferlessRingRouterNode{
 		workerID:        workerID,
-		bufferCapacity:  bufferCapacity,
-		injectionBuffer: make([]packet.Packet, 0, bufferCapacity),
+		bufferCapacity:  capacity,
+		bufferMask:      capacity - 1,                        // For fast modulo: index & mask
+		injectionBuffer: make([]packet.Packet, capacity),     // Pre-allocate full capacity
+		bufferHead:      0,
+		bufferTail:      0,
+		bufferSize:      0,
+		tempForward:     make([]packet.Packet, 0, 64), // Pre-allocate with reasonable capacity
+		tempEject:       make([]packet.Packet, 0, 64),
+		tempInject:      make([]packet.Packet, 0, 64),
 	}
 	router.BaseNode = NewBaseNode(routerID, router)
 	return router
 }
 
 // Process implements the NodeHandler interface.
-// It replaces the old Tick logic for custom packet collection and routing.
+// Highly optimized version with zero-allocation, batch operations, and cached references.
 func (r *BufferlessRingRouterNode) Process(cycle uint64, inputs [][]queue.PacketRef) error {
-	if len(inputs) < 2 {
-		return fmt.Errorf("router node %d: expected 2 input queues, got %d", r.id, len(inputs))
+	// Cache output queues on first call (avoid OutputQueues() slice copy every cycle)
+	if r.ringOutQueue == nil {
+		outputs := r.OutputQueues()
+		r.ringOutQueue = outputs[0]
+		r.localOutQueue = outputs[1]
 	}
 
-	outputs := r.OutputQueues()
-	if len(outputs) < 2 {
-		return fmt.Errorf("router node %d: expected 2 output queues, got %d", r.id, len(outputs))
-	}
-
-	// Map inputs/outputs
-	// inputs[0] is ringIn, inputs[1] is localIn
+	// Direct references (no slice copies)
 	ringInRefs := inputs[0]
 	localInRefs := inputs[1]
+	ringOutQueue := r.ringOutQueue
+	localOutQueue := r.localOutQueue
 
-	ringOutQueue := outputs[0]
-	localOutQueue := outputs[1]
+	// Cache IsFull results to avoid repeated checks
+	ringOutFull := ringOutQueue.IsFull()
+	localOutFull := localOutQueue.IsFull()
 
-	r.bufferMu.Lock()
-	defer r.bufferMu.Unlock()
+	// Reset temp slices (reuse allocated capacity, zero length)
+	r.tempForward = r.tempForward[:0]
+	r.tempEject = r.tempEject[:0]
+	r.tempInject = r.tempInject[:0]
 
-	debug.Logf("Router[%d]: cycle=%d, ringIn=%d, localIn=%d, buffer=%d",
-		r.id, cycle, len(ringInRefs), len(localInRefs), len(r.injectionBuffer))
-
-	// === Priority 1: Process ring packets (ALWAYS forwarded, never buffered) ===
+	// === Priority 1: Process ring packets (classify into forward/eject) ===
 	for _, ref := range ringInRefs {
 		pkt := ref.Packet
-		// Check if this packet should be ejected to local worker
-		if pkt.TargetID == r.workerID && !localOutQueue.IsFull() {
+		if pkt.TargetID == r.workerID && !localOutFull {
 			// Eject to local worker
-			debug.Logf("Router[%d]: Ejecting packet Src=%d Dst=%d to worker %d",
-				r.id, pkt.SourceID, pkt.TargetID, r.workerID)
-			if err := localOutQueue.InjectPackets(int(cycle), []packet.Packet{pkt}); err != nil {
-				return fmt.Errorf("router %d: failed to eject packet to worker: %w", r.id, err)
-			}
+			r.tempEject = append(r.tempEject, pkt)
 			ref.Queue.Free(ref.Slot)
 		} else {
-			// Forward to next router on ring (either wrong destination OR local busy)
-			debug.Logf("Router[%d]: Forwarding packet Src=%d Dst=%d on ring (target=%d, localFull=%v)",
-				r.id, pkt.SourceID, pkt.TargetID, r.workerID, localOutQueue.IsFull())
-			if err := ringOutQueue.InjectPackets(int(cycle), []packet.Packet{pkt}); err != nil {
-				return fmt.Errorf("router %d: failed to forward packet on ring: %w", r.id, err)
-			}
+			// Forward on ring
+			r.tempForward = append(r.tempForward, pkt)
 			ref.Queue.Free(ref.Slot)
 		}
 	}
 
 	// === Priority 2: Process buffered injection packets ===
-	newInjectionBuffer := make([]packet.Packet, 0, len(r.injectionBuffer)) // Reuse capacity hint or implementation optimization
-	for _, pkt := range r.injectionBuffer {
-		if !ringOutQueue.IsFull() {
-			debug.Logf("Router[%d]: Injecting buffered packet Src=%d Dst=%d onto ring",
-				r.id, pkt.SourceID, pkt.TargetID)
-			if err := ringOutQueue.InjectPackets(int(cycle), []packet.Packet{pkt}); err != nil {
-				return fmt.Errorf("router %d: failed to inject buffered local packet: %w", r.id, err)
-			}
-		} else {
-			// Still blocked, keep in buffer
-			newInjectionBuffer = append(newInjectionBuffer, pkt)
+	if r.bufferSize > 0 && !ringOutFull {
+		// Try to inject buffered packets
+		for r.bufferSize > 0 {
+			pkt := r.injectionBuffer[r.bufferHead]
+			r.tempInject = append(r.tempInject, pkt)
+			r.bufferHead = (r.bufferHead + 1) & r.bufferMask // Fast modulo via bitmask
+			r.bufferSize--
 		}
 	}
-	r.injectionBuffer = newInjectionBuffer // Optimization: This does alloc. Better to use a ring buffer or similar internally if this is hot.
-	// But optimizing router internal buffer is out of scope for "BaseNode optimization", sticking to requirements.
 
 	// === Priority 3: Process new local packets ===
 	for _, ref := range localInRefs {
 		pkt := ref.Packet
-		if !ringOutQueue.IsFull() {
-			// Inject directly onto ring
-			debug.Logf("Router[%d]: Injecting local packet Src=%d Dst=%d onto ring",
-				r.id, pkt.SourceID, pkt.TargetID)
-			if err := ringOutQueue.InjectPackets(int(cycle), []packet.Packet{pkt}); err != nil {
-				return fmt.Errorf("router %d: failed to inject local packet: %w", r.id, err)
-			}
-			ref.Queue.Free(ref.Slot)
-		} else {
-			// Ring is full, try to buffer the packet
-			if len(r.injectionBuffer) < r.bufferCapacity {
-				debug.Logf("Router[%d]: Buffering local packet Src=%d Dst=%d (ring full)",
-					r.id, pkt.SourceID, pkt.TargetID)
-				r.injectionBuffer = append(r.injectionBuffer, pkt)
+		if !ringOutFull || r.bufferSize < r.bufferCapacity {
+			if !ringOutFull {
+				// Inject directly
+				r.tempInject = append(r.tempInject, pkt)
 				ref.Queue.Free(ref.Slot)
 			} else {
-				// Injection buffer full - this is a backpressure condition
-				// DO NOT Free -> Packet stays in InputQueue -> Upstream sees backpressure
-				debug.Logf("Router[%d]: Backpressure to local: injection buffer full", r.id)
+				// Buffer it (ring is full but buffer has space)
+				r.injectionBuffer[r.bufferTail] = pkt
+				r.bufferTail = (r.bufferTail + 1) & r.bufferMask // Fast modulo via bitmask
+				r.bufferSize++
+				ref.Queue.Free(ref.Slot)
 			}
 		}
+		// else: backpressure - DO NOT Free, packet stays in InputQueue
+	}
+
+	// === Batch inject all packets ===
+	iCycle := int(cycle)
+
+	if len(r.tempEject) > 0 {
+		localOutQueue.InjectPackets(iCycle, r.tempEject)
+	}
+
+	// Combine forward + inject into ringOut
+	if len(r.tempForward) > 0 || len(r.tempInject) > 0 {
+		// Merge into tempForward to reuse one batch call
+		r.tempForward = append(r.tempForward, r.tempInject...)
+		ringOutQueue.InjectPackets(iCycle, r.tempForward)
 	}
 
 	return nil
@@ -157,12 +175,12 @@ func (r *BufferlessRingRouterNode) GetWorkerID() int {
 
 // GetBufferOccupancy returns the current injection buffer occupancy.
 func (r *BufferlessRingRouterNode) GetBufferOccupancy() int {
-	return len(r.injectionBuffer)
+	return r.bufferSize
 }
 
 // GetInjectionBufferOccupancy returns the injection buffer occupancy.
 func (r *BufferlessRingRouterNode) GetInjectionBufferOccupancy() int {
-	return len(r.injectionBuffer)
+	return r.bufferSize
 }
 
 // GetBufferCapacity returns the buffer capacity.
@@ -181,7 +199,7 @@ func (r *BufferlessRingRouterNode) GetVisualState() string {
 		// 格式: R<routerID>[buf:<占用>/<容量>] W<workerID>
 		return fmt.Sprintf("R%d[%d/%d]W%d",
 			r.id-100, // Router ID (显示为0-3而不是100-103)
-			len(r.injectionBuffer),
+			r.bufferSize,
 			r.bufferCapacity,
 			r.workerID)
 	}

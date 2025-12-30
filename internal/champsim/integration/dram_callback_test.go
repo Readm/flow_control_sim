@@ -6,6 +6,7 @@ import (
 	"github.com/Readm/flow_sim/internal/champsim/cache"
 	"github.com/Readm/flow_sim/internal/champsim/dram"
 	"github.com/Readm/flow_sim/internal/champsim/memory"
+	compcache "github.com/Readm/flow_sim/internal/components/cache"
 )
 
 // Test_DRAM_Callback_Basic 测试DRAM callback是否被调用
@@ -20,7 +21,7 @@ func Test_DRAM_Callback_Basic(t *testing.T) {
 	dramAdapter := memory.NewDRAMAdapter(dramChannel)
 
 	// 创建Cache
-	l1dCache, err := cache.NewSetAssociativeCache(cache.DefaultL1DConfig())
+	l1dCache, err := cache.NewSetAssociativeCache(compcache.DefaultL1DConfig())
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
