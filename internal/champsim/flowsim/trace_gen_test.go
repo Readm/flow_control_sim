@@ -78,19 +78,34 @@ func TestGenerateChampSimTrace(t *testing.T) {
 	// 5. 导出 trace (带元数据)
 	nodeNames := make(map[int]string)
 
-	// RingRouter 命名
-	for i := 200; i < 216; i++ {
-		nodeNames[i] = fmt.Sprintf("RingRouter_%d", i-200)
+	// CPU 命名 (0-63)
+	for i := 0; i < 64; i++ {
+		nodeNames[i] = fmt.Sprintf("CPU_%d", i)
 	}
 
-	// L3 命名
+	// L2 命名 (64-95)
+	for i := 64; i < 96; i++ {
+		nodeNames[i] = fmt.Sprintf("L2_%d", i-64)
+	}
+
+	// L3 命名 (96-103)
 	for i := 96; i < 104; i++ {
 		nodeNames[i] = fmt.Sprintf("L3_%d", i-96)
 	}
 
-	// MemCtrl 命名
+	// MemCtrl 命名 (104-111)
 	for i := 104; i < 112; i++ {
 		nodeNames[i] = fmt.Sprintf("MemCtrl_%d", i-104)
+	}
+
+	// DRAM 命名 (112-119)
+	for i := 112; i < 120; i++ {
+		nodeNames[i] = fmt.Sprintf("DRAM_%d", i-112)
+	}
+
+	// RingRouter 命名 (200-215)
+	for i := 200; i < 216; i++ {
+		nodeNames[i] = fmt.Sprintf("RingRouter_%d", i-200)
 	}
 
 	threadNames := map[int]string{
