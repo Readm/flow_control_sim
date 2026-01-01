@@ -12,6 +12,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
+	"github.com/Readm/flow_sim/internal/core/trace"
 )
 
 // ... (rest of imports and structs unchanged) ...
@@ -98,6 +99,9 @@ type Network struct {
 	workerWg     sync.WaitGroup
 	nodeCmds     []chan int
 	linkCmds     []chan int
+
+	// Trace recorder（可选，用于生成 Chrome trace）
+	tracer *trace.TraceRecorder
 }
 
 // New creates an empty network.
@@ -116,6 +120,24 @@ func (n *Network) CurrentCycle() int {
 	return n.currentCycle
 }
 
+// SetTracer 设置 trace recorder 并将其传播到所有节点
+// 必须在 Finalize/Advance 之前调用
+func (n *Network) SetTracer(tracer *trace.TraceRecorder) {
+	n.tracer = tracer
+
+	// 将 tracer 传播到所有已添加的节点
+	for _, handle := range n.nodes {
+		if baseNode, ok := handle.Node.(*node.BaseNode); ok {
+			baseNode.SetTracer(tracer)
+		}
+	}
+}
+
+// GetTracer 获取 trace recorder
+func (n *Network) GetTracer() *trace.TraceRecorder {
+	return n.tracer
+}
+
 // AddNode registers a node handle in the network.
 // Must be called before Advance. Panics if network is frozen.
 func (n *Network) AddNode(handle *NodeHandle) error {
@@ -132,6 +154,14 @@ func (n *Network) AddNode(handle *NodeHandle) error {
 	}
 
 	n.nodes[id] = handle
+
+	// 如果已经设置了 tracer，自动传播到新添加的节点
+	if n.tracer != nil {
+		if baseNode, ok := handle.Node.(*node.BaseNode); ok {
+			baseNode.SetTracer(n.tracer)
+		}
+	}
+
 	return nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/Readm/flow_sim/internal/components/directory"
 	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/core/queue"
+	"github.com/Readm/flow_sim/internal/core/trace"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -120,6 +121,11 @@ type BaseNode struct {
 	// 使用编译时控制: go build -tags profile
 	// 只记录 Handler.Process 的纯执行时间，不包含 Queue 的 Tick 时间
 	profile NodeProfile
+
+	// ===== Tracing: Chrome trace 追踪（可选）=====
+	// 使用编译时控制: go build -tags trace
+	// 可以为 nil（不追踪）
+	tracer *trace.TraceRecorder
 
 	// 兼容旧代码的计数器
 	totalProcessCycles atomic.Uint64 // 累计处理时间（CPU cycles）
@@ -361,6 +367,19 @@ func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
 	receiveEnd := GetCPUCycles()
 	n.receiveCycles.Add(receiveEnd - receiveStart)
 
+	// Trace: 记录 Receive Phase
+	if n.tracer != nil {
+		packetCount := 0
+		for _, input := range n.inputBuffer {
+			packetCount += len(input)
+		}
+		n.tracer.RecordComplete("Receive", trace.CategoryNode, n.id, trace.TidReceive,
+			int64(receiveStart), int64(receiveEnd), map[string]interface{}{
+				"cycle":   cycle,
+				"packets": packetCount,
+			})
+	}
+
 	// ===== Phase 2: Process (Handler) =====
 	processStart := GetCPUCycles()
 
@@ -378,6 +397,14 @@ func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
 	// 旧 profiling: 包含所有时间（待废弃）
 	n.processCycles.Add(processEnd - processStart)
 
+	// Trace: 记录 Process Phase
+	if n.tracer != nil {
+		n.tracer.RecordComplete("Process", trace.CategoryNode, n.id, trace.TidProcess,
+			int64(processStart), int64(processEnd), map[string]interface{}{
+				"cycle": cycle,
+			})
+	}
+
 	// ===== Phase 3: Send (Output) =====
 	sendStart := GetCPUCycles()
 
@@ -388,6 +415,20 @@ func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
 
 	sendEnd := GetCPUCycles()
 	n.sendCycles.Add(sendEnd - sendStart)
+
+	// Trace: 记录 Send Phase
+	if n.tracer != nil {
+		// 计算发送的包数量
+		sentCount := 0
+		for _, output := range n.outputs {
+			sentCount += output.Length()
+		}
+		n.tracer.RecordComplete("Send", trace.CategoryNode, n.id, trace.TidSend,
+			int64(sendStart), int64(sendEnd), map[string]interface{}{
+				"cycle": cycle,
+				"sent":  sentCount,
+			})
+	}
 
 	// ===== Update counters =====
 	n.totalProcessCycles.Add((processEnd - processStart) + (sendEnd - sendStart)) // 兼容旧代码
@@ -541,4 +582,16 @@ func (n *BaseNode) GetAllData() map[string]interface{} {
 		copy[k] = v
 	}
 	return copy
+}
+
+// ===== Tracer Methods =====
+
+// SetTracer 设置 trace recorder（用于 Chrome trace）
+func (n *BaseNode) SetTracer(tracer *trace.TraceRecorder) {
+	n.tracer = tracer
+}
+
+// GetTracer 获取 trace recorder
+func (n *BaseNode) GetTracer() *trace.TraceRecorder {
+	return n.tracer
 }
