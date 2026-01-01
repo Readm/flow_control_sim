@@ -40,6 +40,10 @@ type Node interface {
 	DeleteData(key string)
 	UpdateData(modifier func(map[string]interface{}))
 	UpdateKeyData(key string, modifier func(interface{}) interface{})
+
+	// Tracer methods (for Chrome trace)
+	SetTracer(tracer *trace.TraceRecorder)
+	GetTracer() *trace.TraceRecorder
 }
 
 // Tickable is an interface for components that can be ticked.
@@ -354,7 +358,6 @@ func (n *BaseNode) InjectPacket(pkt packet.Packet) error {
 // Tick executes one cycle of the node's logic.
 // Order: Receive (Input) -> Process (Handler) -> Send (Output)
 func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
-
 	// ===== Phase 1: Receive (Input) =====
 	receiveStart := GetCPUCycles()
 

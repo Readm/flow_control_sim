@@ -78,7 +78,22 @@ func (tr *TraceRecorder) RecordComplete(
 	endCycle int64,
 	args map[string]interface{},
 ) {
-	if !tr.shouldRecord(pid, startCycle, endCycle-startCycle) {
+	// 从 args 中提取 cycle (如果有) 用于过滤
+	simCycle := int64(0)
+	if args != nil {
+		if c, ok := args["cycle"]; ok {
+			switch v := c.(type) {
+			case int:
+				simCycle = int64(v)
+			case uint64:
+				simCycle = int64(v)
+			case int64:
+				simCycle = v
+			}
+		}
+	}
+
+	if !tr.shouldRecord(pid, simCycle, endCycle-startCycle) {
 		return
 	}
 
@@ -98,7 +113,22 @@ func (tr *TraceRecorder) RecordInstant(
 	cycle int64,
 	args map[string]interface{},
 ) {
-	if !tr.shouldRecord(pid, cycle, 0) {
+	// 从 args 中提取 cycle (如果有) 用于过滤
+	simCycle := int64(0)
+	if args != nil {
+		if c, ok := args["cycle"]; ok {
+			switch v := c.(type) {
+			case int:
+				simCycle = int64(v)
+			case uint64:
+				simCycle = int64(v)
+			case int64:
+				simCycle = v
+			}
+		}
+	}
+
+	if !tr.shouldRecord(pid, simCycle, 0) {
 		return
 	}
 

@@ -127,9 +127,7 @@ func (n *Network) SetTracer(tracer *trace.TraceRecorder) {
 
 	// 将 tracer 传播到所有已添加的节点
 	for _, handle := range n.nodes {
-		if baseNode, ok := handle.Node.(*node.BaseNode); ok {
-			baseNode.SetTracer(tracer)
-		}
+		handle.Node.SetTracer(tracer)
 	}
 }
 
@@ -157,9 +155,7 @@ func (n *Network) AddNode(handle *NodeHandle) error {
 
 	// 如果已经设置了 tracer，自动传播到新添加的节点
 	if n.tracer != nil {
-		if baseNode, ok := handle.Node.(*node.BaseNode); ok {
-			baseNode.SetTracer(n.tracer)
-		}
+		handle.Node.SetTracer(n.tracer)
 	}
 
 	return nil
