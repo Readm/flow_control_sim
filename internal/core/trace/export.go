@@ -23,17 +23,57 @@ type TraceOutput struct {
 	OtherData map[string]interface{} `json:"otherData,omitempty"`
 }
 
+// normalizeTimestamps 将所有时间戳归一化到从 0 开始
+// Chrome trace viewer 期望时间戳从 0 或接近 0 开始
+func normalizeTimestamps(events []TraceEvent) []TraceEvent {
+	if len(events) == 0 {
+		return events
+	}
+
+	// 找到最小时间戳（只考虑 Complete 和 Instant 事件）
+	minTimestamp := int64(^uint64(0) >> 1) // Max int64
+	for _, e := range events {
+		if e.Phase == PhaseComplete || e.Phase == PhaseInstant {
+			if e.Timestamp < minTimestamp {
+				minTimestamp = e.Timestamp
+			}
+		}
+	}
+
+	// 如果最小时间戳已经接近 0，不需要调整
+	if minTimestamp < 1000000 { // < 1ms
+		return events
+	}
+
+	// 创建归一化后的事件副本
+	normalized := make([]TraceEvent, len(events))
+	for i, e := range events {
+		normalized[i] = e
+		// 只调整 Complete 和 Instant 事件的时间戳
+		// Metadata 事件的时间戳保持为 0
+		if e.Phase == PhaseComplete || e.Phase == PhaseInstant {
+			normalized[i].Timestamp -= minTimestamp
+		}
+	}
+
+	return normalized
+}
+
 // Export 导出 trace 到 JSON 文件
 // 支持自动 gzip 压缩（文件名以 .gz 结尾）
 func (tr *TraceRecorder) Export(filename string) error {
 	events := tr.GetEvents()
 
+	// 归一化时间戳：将所有时间戳调整为从 0 开始
+	// 这样 Chrome trace viewer 才能正确显示
+	normalizedEvents := normalizeTimestamps(events)
+
 	output := TraceOutput{
-		TraceEvents:     events,
+		TraceEvents:     normalizedEvents,
 		DisplayTimeUnit: "ns", // Chrome 会按纳秒显示
 		OtherData: map[string]interface{}{
 			"version":     "flow_sim v1.0",
-			"event_count": len(events),
+			"event_count": len(normalizedEvents),
 			"config": map[string]interface{}{
 				"max_cycles":      tr.config.MaxCycles,
 				"sample_rate":     tr.config.SampleRate,
