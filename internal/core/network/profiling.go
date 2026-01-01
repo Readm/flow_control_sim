@@ -12,12 +12,14 @@ type BlockStat struct {
 	TargetID int
 
 	// WaitDone 统计
-	DoneBlocks uint64 // WaitDone 阻塞次数（走慢速路径）
-	DoneFast   uint64 // WaitDone 快速路径次数
+	DoneBlocks    uint64 // WaitDone 阻塞次数（走慢速路径）
+	DoneFast      uint64 // WaitDone 快速路径次数
+	DoneBlockTime uint64 // WaitDone 总阻塞时间（cycles）
 
 	// Ready 统计
-	ReadyBlocks uint64 // Ready 阻塞次数（走慢速路径）
-	ReadyFast   uint64 // Ready 快速路径次数
+	ReadyBlocks    uint64 // Ready 阻塞次数（走慢速路径）
+	ReadyFast      uint64 // Ready 快速路径次数
+	ReadyBlockTime uint64 // Ready 总阻塞时间（cycles）
 
 	// 阻塞率
 	DoneBlockRate  float64 // WaitDone 阻塞率 (%)
@@ -38,15 +40,15 @@ func (n *Network) CollectSyncProfile() []BlockStat {
 		}
 
 		var sourceID, targetID int
-		var doneBlocks, doneFast, readyBlocks, readyFast uint64
+		var doneBlocks, doneFast, doneBlockTime uint64
+		var readyBlocks, readyFast, readyBlockTime uint64
 
 		// 从任一 Port 获取 Node ID
 		if upstreamPort != nil {
 			sourceID = upstreamPort.SourceNodeID()
 			targetID = upstreamPort.TargetNodeID()
 			// WaitDone 统计来自 upstreamPort (Link 调用 Receive)
-			doneBlocks = upstreamPort.DoneBlockCount()
-			doneFast = upstreamPort.DoneFastCount()
+			doneFast, doneBlocks, doneBlockTime = upstreamPort.GetWaitDoneProfile()
 		} else {
 			sourceID = downstreamPort.SourceNodeID()
 			targetID = downstreamPort.TargetNodeID()
@@ -54,8 +56,7 @@ func (n *Network) CollectSyncProfile() []BlockStat {
 
 		// Ready 统计来自 downstreamPort (Link 调用 TrySend)
 		if downstreamPort != nil {
-			readyBlocks = downstreamPort.ReadyBlockCount()
-			readyFast = downstreamPort.ReadyFastCount()
+			readyFast, readyBlocks, readyBlockTime = downstreamPort.GetReadyProfile()
 		}
 
 		// 计算阻塞率
@@ -78,8 +79,10 @@ func (n *Network) CollectSyncProfile() []BlockStat {
 				TargetID:       targetID,
 				DoneBlocks:     doneBlocks,
 				DoneFast:       doneFast,
+				DoneBlockTime:  doneBlockTime,
 				ReadyBlocks:    readyBlocks,
 				ReadyFast:      readyFast,
+				ReadyBlockTime: readyBlockTime,
 				DoneBlockRate:  doneBlockRate,
 				ReadyBlockRate: readyBlockRate,
 			})
@@ -173,6 +176,75 @@ func (n *Network) PrintTopBlockers(topN int) {
 			s.SourceID, s.TargetID,
 			s.DoneBlocks, s.DoneBlockRate)
 	}
+	fmt.Println()
+}
+
+// PrintBlockingTimeProfile 打印阻塞时间统计（按 WaitDone 阻塞时间排序）
+func (n *Network) PrintBlockingTimeProfile(topN int) {
+	stats := n.CollectSyncProfile()
+
+	if len(stats) == 0 {
+		fmt.Println("\n===== 阻塞时间 Profile =====")
+		fmt.Println("没有检测到同步阻塞")
+		return
+	}
+
+	// 按 WaitDone 阻塞时间降序排序
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].DoneBlockTime > stats[j].DoneBlockTime
+	})
+
+	if topN > len(stats) || topN <= 0 {
+		topN = len(stats)
+	}
+
+	fmt.Printf("\n===== Top %d 阻塞时间 (按 WaitDone 阻塞时间排序) =====\n", topN)
+	fmt.Printf("%-10s %-10s %-15s %-15s %-15s %-15s\n",
+		"Source", "Target",
+		"DoneBlockTime", "AvgBlockTime",
+		"ReadyBlockTime", "AvgBlockTime")
+	fmt.Println(strings.Repeat("-", 90))
+
+	for i := 0; i < topN; i++ {
+		s := stats[i]
+		avgDoneBlockTime := uint64(0)
+		if s.DoneBlocks > 0 {
+			avgDoneBlockTime = s.DoneBlockTime / s.DoneBlocks
+		}
+		avgReadyBlockTime := uint64(0)
+		if s.ReadyBlocks > 0 {
+			avgReadyBlockTime = s.ReadyBlockTime / s.ReadyBlocks
+		}
+		fmt.Printf("%-10d %-10d %-15d %-15d %-15d %-15d\n",
+			s.SourceID, s.TargetID,
+			s.DoneBlockTime, avgDoneBlockTime,
+			s.ReadyBlockTime, avgReadyBlockTime)
+	}
+
+	// 汇总统计
+	var totalDoneBlockTime, totalReadyBlockTime uint64
+	var totalDoneBlocks, totalReadyBlocks uint64
+	for _, s := range stats {
+		totalDoneBlockTime += s.DoneBlockTime
+		totalReadyBlockTime += s.ReadyBlockTime
+		totalDoneBlocks += s.DoneBlocks
+		totalReadyBlocks += s.ReadyBlocks
+	}
+
+	avgTotalDoneBlockTime := uint64(0)
+	if totalDoneBlocks > 0 {
+		avgTotalDoneBlockTime = totalDoneBlockTime / totalDoneBlocks
+	}
+	avgTotalReadyBlockTime := uint64(0)
+	if totalReadyBlocks > 0 {
+		avgTotalReadyBlockTime = totalReadyBlockTime / totalReadyBlocks
+	}
+
+	fmt.Println(strings.Repeat("-", 90))
+	fmt.Printf("%-10s %-10s %-15d %-15d %-15d %-15d\n",
+		"TOTAL", "",
+		totalDoneBlockTime, avgTotalDoneBlockTime,
+		totalReadyBlockTime, avgTotalReadyBlockTime)
 	fmt.Println()
 }
 

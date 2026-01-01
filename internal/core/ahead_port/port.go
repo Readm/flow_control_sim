@@ -97,11 +97,9 @@ type Port struct {
 	sourceNodeID int // Upstream (sender) Node ID
 	targetNodeID int // Downstream (receiver) Node ID
 
-	// ===== Profiling: Atomic counters (lock-free) =====
-	doneBlockCount  atomic.Uint64 // WaitDone blocked count
-	doneFastCount   atomic.Uint64 // WaitDone fast path count
-	readyBlockCount atomic.Uint64 // Ready blocked count
-	readyFastCount  atomic.Uint64 // Ready fast path count
+	// ===== Profiling: 性能统计（使用编译时控制）=====
+	// 使用 -tags profile 启用，否则零开销
+	profile PortProfile
 }
 
 // NewPort creates a new port instance.
@@ -140,14 +138,18 @@ func (p *Port) PeekReady(cycle int) (bool, bool) {
 
 // IsReady blocks until the downstream component has decided its ready state for the given cycle.
 func (p *Port) IsReady(cycle int) bool {
-	// Profiling: Check if we'll hit the fast path
+	// Profiling: 记录快速/慢速路径和阻塞时间
 	if int64(cycle) < atomic.LoadInt64(&p.downstreamSync.readyUntil) {
-		p.readyFastCount.Add(1) // Fast path - no blocking
-	} else {
-		p.readyBlockCount.Add(1) // Slow path - may block
+		p.profile.RecordReadyFast()
+		return p.downstreamSync.Ready(cycle)
 	}
 
-	return p.downstreamSync.Ready(cycle)
+	// 慢速路径：需要等待 ready 决策
+	start := GetCPUCycles()
+	result := p.downstreamSync.Ready(cycle)
+	blockTime := GetCPUCycles() - start
+	p.profile.RecordReadySlow(blockTime)
+	return result
 }
 
 // MarkDone marks that the upstream component has completed the specified cycle.
@@ -219,11 +221,15 @@ func (p *Port) drainChannel() {
 
 // WaitDone blocks until the upstream component has completed the specified cycle.
 func (p *Port) WaitDone(cycle int) {
-	// Profiling: Check if we'll hit the fast path
+	// Profiling: 记录快速/慢速路径和阻塞时间
 	if int(atomic.LoadInt64(&p.upstreamSync.done)) >= cycle {
-		p.doneFastCount.Add(1) // Fast path - no blocking
+		p.profile.RecordWaitDoneFast()
 	} else {
-		p.doneBlockCount.Add(1) // Slow path - will block
+		start := GetCPUCycles()
+		p.upstreamSync.WaitDone(cycle)
+		blockTime := GetCPUCycles() - start
+		p.profile.RecordWaitDoneSlow(blockTime)
+		return
 	}
 
 	p.upstreamSync.WaitDone(cycle)
@@ -265,22 +271,35 @@ func (p *Port) TargetNodeID() int {
 	return p.targetNodeID
 }
 
-// DoneBlockCount returns the number of times WaitDone blocked.
+// GetWaitDoneProfile 获取 WaitDone 的 profiling 数据
+// 返回: (快速路径次数, 慢速路径次数, 总阻塞时间)
+func (p *Port) GetWaitDoneProfile() (fastPath, slowPath, blockTime uint64) {
+	return p.profile.GetWaitDoneStats()
+}
+
+// GetReadyProfile 获取 Ready 的 profiling 数据
+// 返回: (快速路径次数, 慢速路径次数, 总阻塞时间)
+func (p *Port) GetReadyProfile() (fastPath, slowPath, blockTime uint64) {
+	return p.profile.GetReadyStats()
+}
+
+// 兼容旧接口
 func (p *Port) DoneBlockCount() uint64 {
-	return p.doneBlockCount.Load()
+	_, slow, _ := p.profile.GetWaitDoneStats()
+	return slow
 }
 
-// DoneFastCount returns the number of times WaitDone used fast path.
 func (p *Port) DoneFastCount() uint64 {
-	return p.doneFastCount.Load()
+	fast, _, _ := p.profile.GetWaitDoneStats()
+	return fast
 }
 
-// ReadyBlockCount returns the number of times Ready blocked.
 func (p *Port) ReadyBlockCount() uint64 {
-	return p.readyBlockCount.Load()
+	_, slow, _ := p.profile.GetReadyStats()
+	return slow
 }
 
-// ReadyFastCount returns the number of times Ready used fast path.
 func (p *Port) ReadyFastCount() uint64 {
-	return p.readyFastCount.Load()
+	fast, _, _ := p.profile.GetReadyStats()
+	return fast
 }

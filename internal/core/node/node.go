@@ -116,11 +116,16 @@ type BaseNode struct {
 	advanceTarget    uint64   // Target cycle for current AdvanceTo
 	outputQueueAhead []uint64 // Next cycle to tick for each output queue
 
-	// ===== Profiling: 节点执行时间统计 (使用 CPU cycles) =====
-	totalProcessCycles atomic.Uint64 // 累计处理时间（CPU cycles，不包含等待）- 兼容旧代码
+	// ===== Profiling: 节点执行时间统计 =====
+	// 使用编译时控制: go build -tags profile
+	// 只记录 Handler.Process 的纯执行时间，不包含 Queue 的 Tick 时间
+	profile NodeProfile
+
+	// 兼容旧代码的计数器
+	totalProcessCycles atomic.Uint64 // 累计处理时间（CPU cycles）
 	processCount       atomic.Uint64 // 处理次数
 
-	// 三阶段详细统计
+	// 旧的三阶段统计（包含阻塞时间，待废弃）
 	receiveCycles atomic.Uint64 // Receive 阶段时间（包含同步等待）
 	processCycles atomic.Uint64 // Process 阶段时间（实际计算）
 	sendCycles    atomic.Uint64 // Send 阶段时间（发送到下游）
@@ -214,6 +219,21 @@ func (n *BaseNode) AvgSendCycles() uint64 {
 		return 0
 	}
 	return n.sendCycles.Load() / count
+}
+
+// ===== 新 Profiling Getters（编译时控制）=====
+
+// GetProcessProfile 获取 Process 执行的 profiling 数据
+// 只包含 Handler.Process 的纯执行时间，不含 Queue Tick 时间
+// 返回: (总时间, 调用次数)
+func (n *BaseNode) GetProcessProfile() (totalTime, count uint64) {
+	return n.profile.GetProcessStats()
+}
+
+// GetAvgProcessExecTime 获取平均 Process 执行时间
+// 只包含 Handler.Process 的纯执行时间
+func (n *BaseNode) GetAvgProcessExecTime() uint64 {
+	return n.profile.GetAvgProcessTime()
 }
 
 // AddInputQueue registers an InputQueue.
@@ -351,6 +371,11 @@ func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
 	}
 
 	processEnd := GetCPUCycles()
+
+	// 新 profiling: 只记录 Handler.Process 的纯执行时间
+	n.profile.RecordProcessExec(processEnd - processStart)
+
+	// 旧 profiling: 包含所有时间（待废弃）
 	n.processCycles.Add(processEnd - processStart)
 
 	// ===== Phase 3: Send (Output) =====

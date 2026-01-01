@@ -507,6 +507,7 @@ func Benchmark_ChampSim_64CPU(b *testing.B) {
 				// 1. 同步阻塞 Profiling
 				lastNet.PrintSyncProfile()
 				lastNet.PrintTopBlockers(10)
+				lastNet.PrintBlockingTimeProfile(20) // 新增：阻塞时间 profiling
 
 				// 2. 节点执行时间 Profiling
 				lastNet.PrintTopSlowestNodes(20)
