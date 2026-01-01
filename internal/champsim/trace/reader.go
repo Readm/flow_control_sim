@@ -24,6 +24,10 @@ type TraceReader interface {
 
 	// Close 关闭 trace 文件
 	Close() error
+
+	// Warmup 预热 trace reader，提前加载数据但不改变读取位置
+	// 用于避免第一次读取时的延迟（例如解压缩）
+	Warmup() error
 }
 
 // BulkTraceReader 批量 trace 读取器
@@ -335,4 +339,15 @@ func (r *BulkTraceReader) Close() error {
 		return r.file.Close()
 	}
 	return nil
+}
+
+// Warmup 预热 trace reader，提前加载第一批数据
+func (r *BulkTraceReader) Warmup() error {
+	// 如果 buffer 已经有数据，说明已经预热过了
+	if len(r.instrBuffer) > 0 {
+		return nil
+	}
+
+	// 触发第一次 buffer 填充
+	return r.refillBuffer()
 }

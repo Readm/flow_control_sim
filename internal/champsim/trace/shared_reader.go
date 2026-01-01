@@ -482,6 +482,18 @@ func (r *SharedTraceReader) Close() error {
 	return globalTracePool.ReleaseSharedTrace(r.shared.filename, r)
 }
 
+// Warmup 预热 trace reader，提前加载第一个数据块
+// 这样第一次 ReadInstruction() 时不会因为解压而阻塞
+func (r *SharedTraceReader) Warmup() error {
+	// 如果已经有 currentBlock，说明已经预热过了
+	if r.currentBlock != nil {
+		return nil
+	}
+
+	// 触发第一个块的加载
+	return r.refillCache()
+}
+
 // prefetchLoop 后台预取goroutine
 // 持续预取 maxBlockID + prefetchDist 的块，避免CPU阻塞等待
 func (s *SharedTraceData) prefetchLoop() {

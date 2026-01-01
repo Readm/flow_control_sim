@@ -405,6 +405,14 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 		net.Connect(dramNodeIDs[mcIdx], 0, memCtrlWorkerIDs[mcIdx], 1, 20, 1)
 	}
 
+	// 预热 trace readers：提前加载第一个数据块，避免 cycle 0 的解压延迟
+	// 这样 cycle 0 的 CPU Process 时间才能反映真实的执行效率
+	for i, reader := range handlers.traceReaders {
+		if err := reader.Warmup(); err != nil {
+			return nil, nil, fmt.Errorf("failed to warmup trace reader %d: %w", i, err)
+		}
+	}
+
 	return net, handlers, nil
 }
 

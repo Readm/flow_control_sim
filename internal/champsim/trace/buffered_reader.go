@@ -148,3 +148,11 @@ func (r *BufferedTraceReader) Close() error {
 	}
 	return nil
 }
+
+// Warmup 预热 trace reader，代理到底层 reader
+func (r *BufferedTraceReader) Warmup() error {
+	if r.underlying != nil {
+		return r.underlying.Warmup()
+	}
+	return nil
+}
