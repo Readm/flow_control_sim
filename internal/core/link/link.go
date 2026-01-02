@@ -9,28 +9,34 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// CreateLinkHandler is a factory function that creates link handlers by type.
+// CreateLinkType is a factory function that creates link types by name.
 //
-// Supported handler types:
-// - "buffered": BufferedLinkHandler with ring buffer and backpressure
-// - "bufferless": BufferlessLinkHandler (always-ready, no physical buffering)
+// Supported link types:
+// - "buffered": BufferedLinkType with ring buffer and backpressure
+// - "bufferless": BufferlessLinkType (always-ready, no physical buffering)
 //
 // Parameters:
-// - handlerType: type of link handler ("buffered", "bufferless")
+// - typeName: type of link ("buffered", "bufferless")
 // - latency: latency parameter (used by buffered, ignored by bufferless)
 // - bandwidth: bandwidth parameter (used by buffered, ignored by bufferless)
 //
 // Returns:
-// - LinkHandler instance, or panic if handlerType is unknown
-func CreateLinkHandler(handlerType string, latency, bandwidth int) LinkHandler {
-	switch handlerType {
+// - LinkType instance, or panic if typeName is unknown
+func CreateLinkType(typeName string, latency, bandwidth int) LinkType {
+	switch typeName {
 	case "buffered":
-		return NewBufferedLinkHandler(latency, bandwidth)
+		return NewBufferedLinkType(latency, bandwidth)
 	case "bufferless":
-		return NewBufferlessLinkHandler()
+		return NewBufferlessLinkType()
 	default:
-		panic(fmt.Sprintf("unknown link handler type: %s", handlerType))
+		panic(fmt.Sprintf("unknown link type: %s", typeName))
 	}
+}
+
+// CreateLinkHandler is deprecated. Use CreateLinkType instead.
+// Deprecated: Use CreateLinkType.
+func CreateLinkHandler(handlerType string, latency, bandwidth int) LinkHandler {
+	return CreateLinkType(handlerType, latency, bandwidth)
 }
 
 // Link represents a directed edge in the topology.
@@ -47,8 +53,8 @@ type Link struct {
 	upstreamPort   *ahead_port.Port // Port from OutputQueue to Link (for WaitDone profiling)
 	downstreamPort *ahead_port.Port // Port from Link to InputQueue (for Ready profiling)
 
-	// ===== Handler pattern =====
-	handler LinkHandler
+	// ===== Link type (buffered/bufferless strategy) =====
+	linkType LinkType
 
 	// ===== Link parameters =====
 	latency      int
@@ -56,25 +62,25 @@ type Link struct {
 	currentCycle int
 	tickHook     func(cycle int)
 
-	// Note: pendingPackets is removed, state is now owned by handler
+	// Note: pendingPackets is removed, state is now owned by linkType
 }
 
-// NewLink creates a Link with BufferedLinkHandler by default.
+// NewLink creates a Link with BufferedLinkType by default.
 func NewLink(sourceID, targetID, latency, bandwidth int) *Link {
-	handler := NewBufferedLinkHandler(latency, bandwidth)
-	return NewLinkWithHandler(sourceID, targetID, latency, bandwidth, handler)
+	linkType := NewBufferedLinkType(latency, bandwidth)
+	return NewLinkWithType(sourceID, targetID, latency, bandwidth, linkType)
 }
 
-// NewLinkWithHandler creates a new Link with a custom handler.
-func NewLinkWithHandler(sourceID, targetID, latency, bandwidth int, handler LinkHandler) *Link {
+// NewLinkWithType creates a new Link with a custom link type.
+func NewLinkWithType(sourceID, targetID, latency, bandwidth int, linkType LinkType) *Link {
 	if latency <= 0 {
 		panic("latency must be positive")
 	}
 	if bandwidth <= 0 {
 		panic("bandwidth must be positive")
 	}
-	if handler == nil {
-		panic("handler must not be nil")
+	if linkType == nil {
+		panic("linkType must not be nil")
 	}
 
 	return &Link{
@@ -82,9 +88,15 @@ func NewLinkWithHandler(sourceID, targetID, latency, bandwidth int, handler Link
 		targetID:     targetID,
 		latency:      latency,
 		bandwidth:    bandwidth,
-		handler:      handler,
+		linkType:     linkType,
 		currentCycle: 0,
 	}
+}
+
+// NewLinkWithHandler is deprecated. Use NewLinkWithType instead.
+// Deprecated: Use NewLinkWithType.
+func NewLinkWithHandler(sourceID, targetID, latency, bandwidth int, handler LinkHandler) *Link {
+	return NewLinkWithType(sourceID, targetID, latency, bandwidth, handler)
 }
 
 // SetUpstreamPort sets the port for receiving data from upstream.
@@ -116,7 +128,7 @@ func (l *Link) UpdateUpstreamReady(cycle int, ready bool) {
 
 // Init initializes the link after being connected to the network.
 func (l *Link) Init() {
-	l.handler.Init(l)
+	l.linkType.Init(l)
 }
 
 // SourceID returns the ID of the upstream node.
@@ -133,7 +145,7 @@ func (l *Link) Bandwidth() int { return l.bandwidth }
 
 // GetHandler returns the handler for this link.
 func (l *Link) GetHandler() LinkHandler {
-	return l.handler
+	return l.linkType
 }
 
 // CurrentCycle returns the current simulation cycle of the link.
@@ -143,7 +155,7 @@ func (l *Link) CurrentCycle() int {
 
 // SnapshotOccupancy reports the pending packet count per slot/offset.
 func (l *Link) SnapshotOccupancy() []int {
-	return l.handler.GetOccupancy(l.currentCycle)
+	return l.linkType.GetOccupancy(l.currentCycle)
 }
 
 // Tick processes a single cycle.
@@ -158,7 +170,7 @@ func (l *Link) Tick(cycle int, targetCycle int) error {
 	}
 
 	// ===== 2. Phase 2: Process via Handler (Core Logic) =====
-	if err := l.handler.Process(l, cycle, targetCycle, incoming); err != nil {
+	if err := l.linkType.Process(l, cycle, targetCycle, incoming); err != nil {
 		return fmt.Errorf("link %d->%d handler failed: %w", l.sourceID, l.targetID, err)
 	}
 

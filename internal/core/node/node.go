@@ -40,10 +40,6 @@ type Node interface {
 	DeleteData(key string)
 	UpdateData(modifier func(map[string]interface{}))
 	UpdateKeyData(key string, modifier func(interface{}) interface{})
-
-	// Tracer methods (for Chrome trace)
-	SetTracer(tracer *trace.TraceRecorder)
-	GetTracer() *trace.TraceRecorder
 }
 
 // Tickable is an interface for components that can be ticked.
@@ -100,6 +96,10 @@ type BaseNode struct {
 
 	inputs  []InputQueue
 	outputs []OutputQueue
+
+	// Port naming (optional feature for better readability)
+	inputPortNames  map[string]int // port name -> index
+	outputPortNames map[string]int // port name -> index
 
 	// Zero-allocation input buffers
 	// inputBuffer is the slice of slices passed to Process
@@ -310,6 +310,116 @@ func (n *BaseNode) OutputQueues() []OutputQueue {
 	return cp
 }
 
+// ===== Port Naming Methods =====
+
+// NameInputPort assigns a name to an input port at the given index.
+// Returns an error if the index is out of range or if the name is already in use.
+func (n *BaseNode) NameInputPort(index int, name string) error {
+	if index < 0 || index >= len(n.inputs) {
+		return fmt.Errorf("input port index %d out of range [0, %d)", index, len(n.inputs))
+	}
+	if name == "" {
+		return fmt.Errorf("port name cannot be empty")
+	}
+
+	// Initialize map if needed
+	if n.inputPortNames == nil {
+		n.inputPortNames = make(map[string]int)
+	}
+
+	// Check for duplicate name (禁止重复)
+	if existingIdx, exists := n.inputPortNames[name]; exists {
+		if existingIdx != index {
+			return fmt.Errorf("input port name %q already assigned to index %d", name, existingIdx)
+		}
+		// Same index, allow re-naming (idempotent)
+		return nil
+	}
+
+	n.inputPortNames[name] = index
+	return nil
+}
+
+// NameOutputPort assigns a name to an output port at the given index.
+// Returns an error if the index is out of range or if the name is already in use.
+func (n *BaseNode) NameOutputPort(index int, name string) error {
+	if index < 0 || index >= len(n.outputs) {
+		return fmt.Errorf("output port index %d out of range [0, %d)", index, len(n.outputs))
+	}
+	if name == "" {
+		return fmt.Errorf("port name cannot be empty")
+	}
+
+	// Initialize map if needed
+	if n.outputPortNames == nil {
+		n.outputPortNames = make(map[string]int)
+	}
+
+	// Check for duplicate name (禁止重复)
+	if existingIdx, exists := n.outputPortNames[name]; exists {
+		if existingIdx != index {
+			return fmt.Errorf("output port name %q already assigned to index %d", name, existingIdx)
+		}
+		// Same index, allow re-naming (idempotent)
+		return nil
+	}
+
+	n.outputPortNames[name] = index
+	return nil
+}
+
+// GetInputPortIndex returns the index of a named input port.
+// Returns (index, true) if found, (0, false) if not found.
+func (n *BaseNode) GetInputPortIndex(name string) (int, bool) {
+	if n.inputPortNames == nil {
+		return 0, false
+	}
+	idx, ok := n.inputPortNames[name]
+	return idx, ok
+}
+
+// GetOutputPortIndex returns the index of a named output port.
+// Returns (index, true) if found, (0, false) if not found.
+func (n *BaseNode) GetOutputPortIndex(name string) (int, bool) {
+	if n.outputPortNames == nil {
+		return 0, false
+	}
+	idx, ok := n.outputPortNames[name]
+	return idx, ok
+}
+
+// NameInputPorts assigns names to input ports in order.
+// Empty strings are skipped. Returns an error if too many names are provided.
+func (n *BaseNode) NameInputPorts(names ...string) error {
+	if len(names) > len(n.inputs) {
+		return fmt.Errorf("too many names: got %d, have %d input ports", len(names), len(n.inputs))
+	}
+	for i, name := range names {
+		if name != "" {
+			if err := n.NameInputPort(i, name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// NameOutputPorts assigns names to output ports in order.
+// Empty strings are skipped. Returns an error if too many names are provided.
+func (n *BaseNode) NameOutputPorts(names ...string) error {
+	if len(names) > len(n.outputs) {
+		return fmt.Errorf("too many names: got %d, have %d output ports", len(names), len(n.outputs))
+	}
+	for i, name := range names {
+		if name != "" {
+			if err := n.NameOutputPort(i, name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // GetOutputQueue safely retrieves an output queue by index.
 func (n *BaseNode) GetOutputQueue(index int) OutputQueue {
 	if index < 0 || index >= len(n.outputs) {
@@ -370,18 +480,12 @@ func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
 	receiveEnd := GetCPUCycles()
 	n.receiveCycles.Add(receiveEnd - receiveStart)
 
-	// Trace: 记录 Receive Phase
-	if n.tracer != nil {
-		packetCount := 0
-		for _, input := range n.inputBuffer {
-			packetCount += len(input)
-		}
-		n.tracer.RecordComplete("Receive", trace.CategoryNode, n.id, trace.TidReceive,
-			int64(receiveStart), int64(receiveEnd), map[string]interface{}{
-				"cycle":   cycle,
-				"packets": packetCount,
-			})
+	// Trace: 记录 Receive Phase（通过编译标签控制）
+	packetCount := 0
+	for _, input := range n.inputBuffer {
+		packetCount += len(input)
 	}
+	n.traceReceive(int64(receiveStart), int64(receiveEnd), cycle, packetCount)
 
 	// ===== Phase 2: Process (Handler) =====
 	processStart := GetCPUCycles()
@@ -400,13 +504,8 @@ func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
 	// 旧 profiling: 包含所有时间（待废弃）
 	n.processCycles.Add(processEnd - processStart)
 
-	// Trace: 记录 Process Phase
-	if n.tracer != nil {
-		n.tracer.RecordComplete("Process", trace.CategoryNode, n.id, trace.TidProcess,
-			int64(processStart), int64(processEnd), map[string]interface{}{
-				"cycle": cycle,
-			})
-	}
+	// Trace: 记录 Process Phase（通过编译标签控制）
+	n.traceProcess(int64(processStart), int64(processEnd), cycle)
 
 	// ===== Phase 3: Send (Output) =====
 	sendStart := GetCPUCycles()
@@ -419,19 +518,12 @@ func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
 	sendEnd := GetCPUCycles()
 	n.sendCycles.Add(sendEnd - sendStart)
 
-	// Trace: 记录 Send Phase
-	if n.tracer != nil {
-		// 计算发送的包数量
-		sentCount := 0
-		for _, output := range n.outputs {
-			sentCount += output.Length()
-		}
-		n.tracer.RecordComplete("Send", trace.CategoryNode, n.id, trace.TidSend,
-			int64(sendStart), int64(sendEnd), map[string]interface{}{
-				"cycle": cycle,
-				"sent":  sentCount,
-			})
+	// Trace: 记录 Send Phase（通过编译标签控制）
+	sentCount := 0
+	for _, output := range n.outputs {
+		sentCount += output.Length()
 	}
+	n.traceSend(int64(sendStart), int64(sendEnd), cycle, sentCount)
 
 	// ===== Update counters =====
 	n.totalProcessCycles.Add((processEnd - processStart) + (sendEnd - sendStart)) // 兼容旧代码

@@ -10,7 +10,6 @@ import (
 	"github.com/Readm/flow_sim/internal/champsim/dram"
 	"github.com/Readm/flow_sim/internal/champsim/trace"
 	compcache "github.com/Readm/flow_sim/internal/components/cache"
-	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -44,51 +43,22 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 	numL2s := numCPUs / cpusPerL2                // 32个L2
 	numRingNodes := numL3s + numMemCtrls         // Ring上共16个节点（8个L3 + 8个MemCtrl）
 
-	// Node IDs分配
-	// 0-63: CPUs (64个)
-	// 64-95: L2s (32个)
-	// 96-103: L3 Workers (8个，实际的L3 Cache节点)
-	// 104-111: MemCtrl Workers (8个，实际的Memory Controller节点)
-	// 112-119: DRAMs (8个)
-	// 200-215: Ring Routers (16个，交错排列L3和MemCtrl)
-	cpuNodeIDs := make([]int, numCPUs)
-	for i := 0; i < numCPUs; i++ {
-		cpuNodeIDs[i] = i
-	}
-
-	l2NodeIDs := make([]int, numL2s)
-	for i := 0; i < numL2s; i++ {
-		l2NodeIDs[i] = numCPUs + i
-	}
-
-	l3WorkerIDs := make([]int, numL3s)
-	for i := 0; i < numL3s; i++ {
-		l3WorkerIDs[i] = numCPUs + numL2s + i
-	}
-
-	memCtrlWorkerIDs := make([]int, numMemCtrls)
-	for i := 0; i < numMemCtrls; i++ {
-		memCtrlWorkerIDs[i] = numCPUs + numL2s + numL3s + i
-	}
-
-	dramNodeIDs := make([]int, numChannels)
-	for i := 0; i < numChannels; i++ {
-		dramNodeIDs[i] = numCPUs + numL2s + numL3s + numMemCtrls + i
-	}
-
-	// Ring Router IDs: 200-215 (交错排列L3和MemCtrl，对称设计)
-	// 200: L3_0, 201: MC_0, 202: L3_1, 203: MC_1, 204: L3_2, 205: MC_2, 206: L3_3, 207: MC_3,
-	// 208: L3_4, 209: MC_4, 210: L3_5, 211: MC_5, 212: L3_6, 213: MC_6, 214: L3_7, 215: MC_7
-	ringRouterIDs := make([]int, numRingNodes)
-	for i := 0; i < numRingNodes; i++ {
-		ringRouterIDs[i] = 200 + i
-	}
-
 	handlers := &SystemHandlers{}
 
+	// 用于存储 Node 对象的数组 (不再使用 ID 数组)
+	cpuNodes := make([]node.Node, numCPUs)
+	l2Nodes := make([]node.Node, numL2s)
+	l3WorkerNodes := make([]node.Node, numL3s)
+	memCtrlWorkerNodes := make([]node.Node, numMemCtrls)
+	dramNodes := make([]node.Node, numChannels)
+	ringRouterNodes := make([]node.Node, numRingNodes)
+
 	// Create CPU cores (每个CPU连接到对应的L2)
+	// Node ID 分配: 0-63 为 CPUs
 	var cpuNodeHandles []*network.NodeHandle
 	for i := 0; i < numCPUs; i++ {
+		cpuNodeID := i
+
 		traceReader, err := trace.NewSharedTraceReader(traceFile, uint8(i), trace.FormatStandard)
 		if err != nil {
 			return nil, nil, err
@@ -106,19 +76,22 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 		cpuOutputQueue := queue.NewOutputQueue(128, 1)
 		cpuInputQueue := queue.NewInputQueue(128, 1)
 
-		// 每4个CPU共享1个L2
-		myL2NodeID := l2NodeIDs[i/cpusPerL2]
+		// 每2个CPU共享1个L2, L2 ID 从 numCPUs 开始
+		myL2NodeID := numCPUs + i/cpusPerL2
 
 		cpuHandler := NewCPUNodeHandler(
-			cpuNodeIDs[i], myL2NodeID,
+			cpuNodeID, myL2NodeID,
 			o3cpu, l1dCache, memoryAdapter,
 			cpuOutputQueue,
 		)
 
-		cpuNode := node.NewWorkerNode(cpuNodeIDs[i])
+		cpuNode := node.NewWorkerNode(cpuNodeID)
 		cpuNode.SetProcessHook(cpuHandler.Process)
 		cpuNode.AddInputQueue(cpuInputQueue)
 		cpuNode.AddOutputQueue(cpuOutputQueue)
+
+		// 存储 Node 对象供后续连接使用
+		cpuNodes[i] = cpuNode
 
 		cpuNodeHandles = append(cpuNodeHandles, &network.NodeHandle{
 			Node:    cpuNode,
@@ -127,9 +100,12 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 		})
 	}
 
-	// Create L2 Caches (16个，每个服务4个CPU)
+	// Create L2 Caches (32个，每个服务2个CPU)
+	// Node ID 分配: numCPUs + 0 到 numCPUs + numL2s - 1 (64-95)
 	var l2NodeHandles []*network.NodeHandle
 	for l2Index := 0; l2Index < numL2s; l2Index++ {
+		l2NodeID := numCPUs + l2Index
+
 		l2Config := compcache.CacheConfig{
 			Name:        fmt.Sprintf("L2_%d", l2Index),
 			NumSets:     512,
@@ -141,7 +117,7 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 		}
 		l2Cache, _ := cache.NewSetAssociativeCache(l2Config)
 
-		// 每个L2有4个CPU的输入/输出 + 1个L3的输入/输出
+		// 每个L2有2个CPU的输入/输出 + 1个L3的输入/输出
 		l2OutputQueues := make([]*queue.OutputQueue, cpusPerL2+1)
 		l2InputQueues := make([]*queue.InputQueue, cpusPerL2+1)
 		for i := 0; i < cpusPerL2+1; i++ {
@@ -151,17 +127,20 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 
 		// 这个L2服务的CPU IDs
 		startCPU := l2Index * cpusPerL2
-		myCPUNodeIDs := cpuNodeIDs[startCPU : startCPU+cpusPerL2]
+		myCPUNodeIDs := make([]int, cpusPerL2)
+		for i := 0; i < cpusPerL2; i++ {
+			myCPUNodeIDs[i] = startCPU + i
+		}
 
-		// 这个L2连接的L3
-		myL3NodeID := l3WorkerIDs[l2Index/l2sPerL3]
+		// 这个L2连接的L3 (ID从 numCPUs+numL2s 开始)
+		myL3NodeID := numCPUs + numL2s + l2Index/l2sPerL3
 
 		l2Handler := NewL2CacheNodeHandler(
-			l2NodeIDs[l2Index], myCPUNodeIDs, myL3NodeID,
+			l2NodeID, myCPUNodeIDs, myL3NodeID,
 			l2Cache, l2OutputQueues,
 		)
 
-		l2Node := node.NewWorkerNode(l2NodeIDs[l2Index])
+		l2Node := node.NewWorkerNode(l2NodeID)
 		l2Node.SetProcessHook(l2Handler.Process)
 		for _, q := range l2InputQueues {
 			l2Node.AddInputQueue(q)
@@ -170,6 +149,9 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 			l2Node.AddOutputQueue(q)
 		}
 
+		// 存储 Node 对象供后续连接使用
+		l2Nodes[l2Index] = l2Node
+
 		l2NodeHandles = append(l2NodeHandles, &network.NodeHandle{
 			Node:    l2Node,
 			Inputs:  l2InputQueues,
@@ -177,9 +159,12 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 		})
 	}
 
-	// Create L3 Worker Nodes (4个，每个服务4个L2，通过Ring与MemCtrl通信)
+	// Create L3 Worker Nodes (8个，每个服务4个L2，通过Ring与MemCtrl通信)
+	// Node ID 分配: numCPUs + numL2s + 0 到 numCPUs + numL2s + numL3s - 1 (96-103)
 	var l3WorkerHandles []*network.NodeHandle
 	for l3Index := 0; l3Index < numL3s; l3Index++ {
+		l3WorkerID := numCPUs + numL2s + l3Index
+
 		l3Config := compcache.CacheConfig{
 			Name:        fmt.Sprintf("L3_%d", l3Index),
 			NumSets:     2048,
@@ -201,16 +186,20 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 
 		// 这个L3服务的L2 IDs
 		startL2 := l3Index * l2sPerL3
-		myL2NodeIDs := l2NodeIDs[startL2 : startL2+l2sPerL3]
+		myL2NodeIDs := make([]int, l2sPerL3)
+		for i := 0; i < l2sPerL3; i++ {
+			myL2NodeIDs[i] = numCPUs + startL2 + i
+		}
 
-		// 注意：L3现在通过Ring与MemCtrl通信，ringNodeID将在后面设置
-		// 这里暂时传入一个占位符ID，后续需要修改Handler以支持Ring路由
+		// Ring Router ID: 200 + l3Index*2 (偶数位置的 router)
+		ringRouterID := 200 + l3Index*2
+
 		l3Handler := NewL2CacheNodeHandler(
-			l3WorkerIDs[l3Index], myL2NodeIDs, ringRouterIDs[0], // 暂时用ring router 0
+			l3WorkerID, myL2NodeIDs, ringRouterID,
 			l3Cache, l3OutputQueues,
 		)
 
-		l3Worker := node.NewWorkerNode(l3WorkerIDs[l3Index])
+		l3Worker := node.NewWorkerNode(l3WorkerID)
 		l3Worker.SetProcessHook(l3Handler.Process)
 		for _, q := range l3InputQueues {
 			l3Worker.AddInputQueue(q)
@@ -218,6 +207,9 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 		for _, q := range l3OutputQueues {
 			l3Worker.AddOutputQueue(q)
 		}
+
+		// 存储 Node 对象供后续连接使用
+		l3WorkerNodes[l3Index] = l3Worker
 
 		l3WorkerHandles = append(l3WorkerHandles, &network.NodeHandle{
 			Node:    l3Worker,
@@ -227,8 +219,11 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 	}
 
 	// Create Memory Controller Worker Nodes (8个，每个对应1个DRAM，通过Ring与L3通信)
+	// Node ID 分配: numCPUs + numL2s + numL3s + 0 到 numCPUs + numL2s + numL3s + numMemCtrls - 1 (104-111)
 	var memCtrlWorkerHandles []*network.NodeHandle
 	for mcIndex := 0; mcIndex < numMemCtrls; mcIndex++ {
+		memCtrlWorkerID := numCPUs + numL2s + numL3s + mcIndex
+
 		// 每个MemCtrl Worker有1个Ring的输入/输出 + 1个DRAM的输入/输出
 		mcOutputQueues := make([]*queue.OutputQueue, 2)
 		mcInputQueues := make([]*queue.InputQueue, 2)
@@ -237,16 +232,22 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 			mcInputQueues[i] = queue.NewInputQueue(256, 1)
 		}
 
+		// Ring Router ID: 200 + mcIndex*2 + 1 (奇数位置的 router)
+		ringRouterID := 200 + mcIndex*2 + 1
+
+		// DRAM ID
+		dramNodeID := numCPUs + numL2s + numL3s + numMemCtrls + mcIndex
+
 		// 每个MemCtrl只连接到1个DRAM
 		mcHandler := NewMemoryControllerHandler(
-			memCtrlWorkerIDs[mcIndex],
-			[]int{ringRouterIDs[0]}, // 暂时用ring router 0作为上游
-			[]int{dramNodeIDs[mcIndex]},
+			memCtrlWorkerID,
+			[]int{ringRouterID},
+			[]int{dramNodeID},
 			mcOutputQueues,
 			MappingInterleaved,
 		)
 
-		mcWorker := node.NewWorkerNode(memCtrlWorkerIDs[mcIndex])
+		mcWorker := node.NewWorkerNode(memCtrlWorkerID)
 		mcWorker.SetProcessHook(mcHandler.Process)
 		for _, q := range mcInputQueues {
 			mcWorker.AddInputQueue(q)
@@ -254,6 +255,9 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 		for _, q := range mcOutputQueues {
 			mcWorker.AddOutputQueue(q)
 		}
+
+		// 存储 Node 对象供后续连接使用
+		memCtrlWorkerNodes[mcIndex] = mcWorker
 
 		memCtrlWorkerHandles = append(memCtrlWorkerHandles, &network.NodeHandle{
 			Node:    mcWorker,
@@ -263,21 +267,28 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 	}
 
 	// Create DRAM Channels (8个，每个连接到对应的MemCtrl Worker)
+	// Node ID 分配: numCPUs + numL2s + numL3s + numMemCtrls + 0 到 ... + numChannels - 1 (112-119)
 	var dramNodeHandles []*network.NodeHandle
 	for i := 0; i < numChannels; i++ {
+		dramNodeID := numCPUs + numL2s + numL3s + numMemCtrls + i
+		memCtrlWorkerID := numCPUs + numL2s + numL3s + i
+
 		dramChannel, _ := dram.NewDRAMChannel(dram.DefaultDRAMConfig())
 		dramOutputQueue := queue.NewOutputQueue(128, 1)
 		dramInputQueue := queue.NewInputQueue(128, 1)
 
 		dramHandler := NewDRAMNodeHandler(
-			dramNodeIDs[i], memCtrlWorkerIDs[i], // 每个DRAM连接到对应的MemCtrl
+			dramNodeID, memCtrlWorkerID, // 每个DRAM连接到对应的MemCtrl
 			dramChannel, dramOutputQueue,
 		)
 
-		dramNode := node.NewWorkerNode(dramNodeIDs[i])
+		dramNode := node.NewWorkerNode(dramNodeID)
 		dramNode.SetProcessHook(dramHandler.Process)
 		dramNode.AddInputQueue(dramInputQueue)
 		dramNode.AddOutputQueue(dramOutputQueue)
+
+		// 存储 Node 对象供后续连接使用
+		dramNodes[i] = dramNode
 
 		dramNodeHandles = append(dramNodeHandles, &network.NodeHandle{
 			Node:    dramNode,
@@ -288,20 +299,21 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 
 	// Create Ring Routers (16个，对称交错排列L3和MemCtrl)
 	// Ring顺序: L3_0(200), MC_0(201), L3_1(202), MC_1(203), ..., L3_7(214), MC_7(215)
+	// Node ID 分配: 200-215
 	var ringRouterHandles []*network.NodeHandle
 	for i := 0; i < numRingNodes; i++ {
-		routerID := ringRouterIDs[i]
+		routerID := 200 + i
 
 		// 确定这个router对应的worker ID（对称交错：偶数=L3，奇数=MC）
 		var workerID int
 		if i%2 == 0 {
 			// 偶数索引：L3 router
 			l3Index := i / 2
-			workerID = l3WorkerIDs[l3Index]
+			workerID = numCPUs + numL2s + l3Index
 		} else {
 			// 奇数索引：MemCtrl router
 			mcIndex := (i - 1) / 2
-			workerID = memCtrlWorkerIDs[mcIndex]
+			workerID = numCPUs + numL2s + numL3s + mcIndex
 		}
 
 		router := node.NewBufferlessRingRouter(routerID, workerID, routerBuffer)
@@ -314,6 +326,9 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 		router.AddInputQueue(localInQueue)
 		router.AddOutputQueue(ringOutQueue)
 		router.AddOutputQueue(localOutQueue)
+
+		// 存储 Node 对象供后续连接使用
+		ringRouterNodes[i] = router
 
 		ringRouterHandles = append(ringRouterHandles, &network.NodeHandle{
 			Node:    router,
@@ -359,77 +374,56 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 	for cpuIdx := 0; cpuIdx < numCPUs; cpuIdx++ {
 		l2Idx := cpuIdx / cpusPerL2
 		portInL2 := cpuIdx % cpusPerL2
-		net.Connect(cpuNodeIDs[cpuIdx], 0, l2NodeIDs[l2Idx], portInL2, 10, 1)
-		net.Connect(l2NodeIDs[l2Idx], portInL2, cpuNodeIDs[cpuIdx], 0, 10, 1)
+		net.ConnectNodes(cpuNodes[cpuIdx], 0, l2Nodes[l2Idx], portInL2, 10, 1)
+		net.ConnectNodes(l2Nodes[l2Idx], portInL2, cpuNodes[cpuIdx], 0, 10, 1)
 	}
 
 	// Connect topology: L2s <-> L3 Workers
 	for l2Idx := 0; l2Idx < numL2s; l2Idx++ {
 		l3Idx := l2Idx / l2sPerL3
 		portInL3 := l2Idx % l2sPerL3
-		net.Connect(l2NodeIDs[l2Idx], cpusPerL2, l3WorkerIDs[l3Idx], portInL3, 20, 1)
-		net.Connect(l3WorkerIDs[l3Idx], portInL3, l2NodeIDs[l2Idx], cpusPerL2, 20, 1)
+		net.ConnectNodes(l2Nodes[l2Idx], cpusPerL2, l3WorkerNodes[l3Idx], portInL3, 20, 1)
+		net.ConnectNodes(l3WorkerNodes[l3Idx], portInL3, l2Nodes[l2Idx], cpusPerL2, 20, 1)
 	}
 
 	// Connect topology: L3 Workers <-> Ring Routers (local connection，对称设计)
 	// L3_0 <-> Router200, L3_1 <-> Router202, ..., L3_7 <-> Router214
 	for l3Idx := 0; l3Idx < numL3s; l3Idx++ {
-		routerID := ringRouterIDs[l3Idx*2] // 偶数位置的router
-		net.ConnectWithHandler(l3WorkerIDs[l3Idx], l2sPerL3, routerID, 1, localLatency, 1,
-			link.NewBufferlessLinkHandler())
-		net.ConnectWithHandler(routerID, 1, l3WorkerIDs[l3Idx], l2sPerL3, localLatency, 1,
-			link.NewBufferlessLinkHandler())
+		routerIdx := l3Idx * 2 // 偶数位置的router
+		net.ConnectNodes(l3WorkerNodes[l3Idx], l2sPerL3, ringRouterNodes[routerIdx], 1, localLatency, 1,
+			network.WithBufferless())
+		net.ConnectNodes(ringRouterNodes[routerIdx], 1, l3WorkerNodes[l3Idx], l2sPerL3, localLatency, 1,
+			network.WithBufferless())
 	}
 
 	// Connect topology: MemCtrl Workers <-> Ring Routers (local connection，对称设计)
 	// MC_0 <-> Router201, MC_1 <-> Router203, ..., MC_7 <-> Router215
 	for mcIdx := 0; mcIdx < numMemCtrls; mcIdx++ {
-		routerID := ringRouterIDs[mcIdx*2+1] // 奇数位置的router
-		net.ConnectWithHandler(memCtrlWorkerIDs[mcIdx], 0, routerID, 1, localLatency, 1,
-			link.NewBufferlessLinkHandler())
-		net.ConnectWithHandler(routerID, 1, memCtrlWorkerIDs[mcIdx], 0, localLatency, 1,
-			link.NewBufferlessLinkHandler())
+		routerIdx := mcIdx*2 + 1 // 奇数位置的router
+		net.ConnectNodes(memCtrlWorkerNodes[mcIdx], 0, ringRouterNodes[routerIdx], 1, localLatency, 1,
+			network.WithBufferless())
+		net.ConnectNodes(ringRouterNodes[routerIdx], 1, memCtrlWorkerNodes[mcIdx], 0, localLatency, 1,
+			network.WithBufferless())
 	}
 
-	// Connect topology: Ring (使用 BufferlessLinkHandler)
+	// Connect topology: Ring (使用 BufferlessLinkType)
 	// Router[i] -> Router[(i+1) % 16]
 	for i := 0; i < numRingNodes; i++ {
 		nextRouter := (i + 1) % numRingNodes
-		net.ConnectWithHandler(ringRouterIDs[i], 0, ringRouterIDs[nextRouter], 0, ringLatency, 1,
-			link.NewBufferlessLinkHandler())
+		net.ConnectNodes(ringRouterNodes[i], 0, ringRouterNodes[nextRouter], 0, ringLatency, 1,
+			network.WithBufferless())
 	}
 
 	// Connect topology: MemCtrl Workers <-> DRAMs (一对一)
 	for mcIdx := 0; mcIdx < numMemCtrls; mcIdx++ {
-		net.Connect(memCtrlWorkerIDs[mcIdx], 1, dramNodeIDs[mcIdx], 0, 20, 1)
-		net.Connect(dramNodeIDs[mcIdx], 0, memCtrlWorkerIDs[mcIdx], 1, 20, 1)
+		net.ConnectNodes(memCtrlWorkerNodes[mcIdx], 1, dramNodes[mcIdx], 0, 20, 1)
+		net.ConnectNodes(dramNodes[mcIdx], 0, memCtrlWorkerNodes[mcIdx], 1, 20, 1)
 	}
 
-	// 预热 trace readers：提前加载第一个数据块，避免 cycle 0 的解压延迟
-	// 这样 cycle 0 的 CPU Process 时间才能反映真实的执行效率
-	for i, reader := range handlers.traceReaders {
-		if err := reader.Warmup(); err != nil {
-			return nil, nil, fmt.Errorf("failed to warmup trace reader %d: %w", i, err)
-		}
-	}
+	// 注意：不在这里调用 Warmup，因为需要在 benchmark 计时之外预热
+	// Warmup 会在 Benchmark_ChampSim_64CPU 的主循环中、计时开始前调用
 
 	return net, handlers, nil
-}
-
-// runChampSimBenchmark runs ChampSim simulation using AdvanceTo
-func runChampSimBenchmark(b *testing.B, numCPUs int, maxCycles uint64, traceFile string) *network.Network {
-	net, handlers, err := buildChampSimSystem(numCPUs, traceFile)
-	if err != nil {
-		b.Fatalf("Failed to build system: %v", err)
-	}
-	defer handlers.Cleanup()
-
-	// Run simulation using AdvanceTo
-	if err := net.AdvanceTo(int(maxCycles - 1)); err != nil {
-		b.Fatalf("Simulation failed: %v", err)
-	}
-
-	return net
 }
 
 // Benchmark_ChampSim_64CPU benchmarks 64-CPU ChampSim system with varying physical core counts
@@ -450,7 +444,7 @@ func runChampSimBenchmark(b *testing.B, numCPUs int, maxCycles uint64, traceFile
 //	go test -bench=Benchmark_ChampSim_64CPU -benchmem
 func Benchmark_ChampSim_64CPU(b *testing.B) {
 	const numSimCPUs = 64
-	const maxCycles = 2000
+	const maxCycles = 1000
 	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
 
 	// Check if trace file is available
@@ -500,10 +494,33 @@ func Benchmark_ChampSim_64CPU(b *testing.B) {
 
 			// Run benchmark and accumulate actual cycles
 			for iteration := 0; iteration < b.N; iteration++ {
+				// Build system and warmup OUTSIDE of timing
+				net, handlers, err := buildChampSimSystem(numSimCPUs, traceFile)
+				if err != nil {
+					b.Fatalf("Failed to build system: %v", err)
+				}
+
+				// Warmup trace readers (excluded from timing)
+				for i, reader := range handlers.traceReaders {
+					if err := reader.Warmup(); err != nil {
+						handlers.Cleanup()
+						b.Fatalf("Failed to warmup trace reader %d: %v", i, err)
+					}
+				}
+
+				// Start timing ONLY for simulation execution
 				iterStart := node.GetCPUCycles()
-				lastNet = runChampSimBenchmark(b, numSimCPUs, maxCycles, traceFile)
+				if err := net.AdvanceTo(int(maxCycles - 1)); err != nil {
+					handlers.Cleanup()
+					b.Fatalf("Simulation failed: %v", err)
+				}
 				iterEnd := node.GetCPUCycles()
+
 				totalCycles += (iterEnd - iterStart)
+				lastNet = net
+
+				// Cleanup after each iteration
+				handlers.Cleanup()
 			}
 
 			b.StopTimer()

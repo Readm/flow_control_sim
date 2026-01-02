@@ -6,13 +6,13 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// BufferedLinkHandler implements buffered flow control with backpressure.
+// BufferedLinkType implements buffered flow control with backpressure.
 //
 // Mechanism:
 // - Ring buffer (slots) stores packets during transit (latency cycles)
 // - Backpressure counter tracks accumulated delays when downstream is not ready
 // - Bandwidth limit enforces maximum packets per slot
-type BufferedLinkHandler struct {
+type BufferedLinkType struct {
 	// Ring buffer slots - one slot per latency cycle
 	// Each slot stores packets destined for that cycle
 	slots [][]ahead_port.PacketWithCycle
@@ -30,17 +30,17 @@ type BufferedLinkHandler struct {
 	pendingPackets []ahead_port.PacketWithCycle
 }
 
-// NewBufferedLinkHandler creates a BufferedLinkHandler.
-func NewBufferedLinkHandler(latency, bandwidth int) *BufferedLinkHandler {
+// NewBufferedLinkType creates a BufferedLinkType.
+func NewBufferedLinkType(latency, bandwidth int) *BufferedLinkType {
 	if latency <= 0 {
-		panic("latency must be positive for BufferedLinkHandler")
+		panic("latency must be positive for BufferedLinkType")
 	}
 	if bandwidth <= 0 {
 		panic("bandwidth must be positive")
 	}
 
 	slots := make([][]ahead_port.PacketWithCycle, latency)
-	return &BufferedLinkHandler{
+	return &BufferedLinkType{
 		slots:             slots,
 		latency:           latency,
 		bandwidth:         bandwidth,
@@ -49,8 +49,8 @@ func NewBufferedLinkHandler(latency, bandwidth int) *BufferedLinkHandler {
 	}
 }
 
-// Process implements the LinkHandler interface for BufferedLinkHandler.
-func (h *BufferedLinkHandler) Process(l *Link, cycle int, targetCycle int, incoming []packet.Packet) error {
+// Process implements the LinkHandler interface for BufferedLinkType.
+func (h *BufferedLinkType) Process(l *Link, cycle int, targetCycle int, incoming []packet.Packet) error {
 	// 1. Process pending packets (those that couldn't fit in the window or were delayed)
 	// These are stored in h.pendingPackets
 	currentPending := h.pendingPackets
@@ -130,7 +130,7 @@ func (h *BufferedLinkHandler) Process(l *Link, cycle int, targetCycle int, incom
 }
 
 // Reset resets the handler state.
-func (h *BufferedLinkHandler) Reset() {
+func (h *BufferedLinkType) Reset() {
 	h.totalBackpressure = 0
 	for i := range h.slots {
 		h.slots[i] = nil
@@ -139,14 +139,14 @@ func (h *BufferedLinkHandler) Reset() {
 
 // ReadyDepth returns the number of cycles to pre-mark as ready for bootstrapping.
 // For buffered links, we need to fill the pipeline (latency) plus one for cycle 0.
-func (h *BufferedLinkHandler) Init(l *Link) {
+func (h *BufferedLinkType) Init(l *Link) {
 	depth := h.latency + 1
 	for i := 0; i < depth; i++ {
 		l.UpdateUpstreamReady(i, true)
 	}
 }
 
-func (h *BufferedLinkHandler) CanAcceptPacket(cycle int, targetCycle int) bool {
+func (h *BufferedLinkType) CanAcceptPacket(cycle int, targetCycle int) bool {
 	if targetCycle-cycle >= h.latency {
 		return false
 	}
@@ -154,67 +154,73 @@ func (h *BufferedLinkHandler) CanAcceptPacket(cycle int, targetCycle int) bool {
 	return len(h.slots[targetSlotIndex]) < h.bandwidth
 }
 
-func (h *BufferedLinkHandler) CheckSpace(cycle int) bool {
+func (h *BufferedLinkType) CheckSpace(cycle int) bool {
 	targetSlotIndex := ((cycle-h.totalBackpressure)%h.latency + h.latency) % h.latency
 	return len(h.slots[targetSlotIndex]) < h.bandwidth
 }
 
-func (h *BufferedLinkHandler) AddToSlot(pkt ahead_port.PacketWithCycle, targetCycle int) {
+func (h *BufferedLinkType) AddToSlot(pkt ahead_port.PacketWithCycle, targetCycle int) {
 	targetSlotIndex := ((targetCycle-h.totalBackpressure)%h.latency + h.latency) % h.latency
 
 	// Sanity check
 	if len(h.slots[targetSlotIndex]) >= h.bandwidth {
-		panic("BufferedLinkHandler.AddToSlot: slot is full (bandwidth limit exceeded)")
+		panic("BufferedLinkType.AddToSlot: slot is full (bandwidth limit exceeded)")
 	}
 
 	h.slots[targetSlotIndex] = append(h.slots[targetSlotIndex], pkt)
 }
 
-func (h *BufferedLinkHandler) GetSlot(cycle int) []ahead_port.PacketWithCycle {
+func (h *BufferedLinkType) GetSlot(cycle int) []ahead_port.PacketWithCycle {
 	slotIndex := ((cycle-h.totalBackpressure)%h.latency + h.latency) % h.latency
 	return h.slots[slotIndex]
 }
 
-func (h *BufferedLinkHandler) ClearSlot(cycle int) {
+func (h *BufferedLinkType) ClearSlot(cycle int) {
 	slotIndex := ((cycle-h.totalBackpressure)%h.latency + h.latency) % h.latency
 	h.slots[slotIndex] = nil
 }
 
-func (h *BufferedLinkHandler) UpdateSlot(cycle int, packets []ahead_port.PacketWithCycle) {
+func (h *BufferedLinkType) UpdateSlot(cycle int, packets []ahead_port.PacketWithCycle) {
 	slotIndex := ((cycle-h.totalBackpressure)%h.latency + h.latency) % h.latency
 	h.slots[slotIndex] = packets
 }
 
-func (h *BufferedLinkHandler) GetLatency() int {
+func (h *BufferedLinkType) GetLatency() int {
 	return h.latency
 }
 
-func (h *BufferedLinkHandler) GetBandwidth() int {
+func (h *BufferedLinkType) GetBandwidth() int {
 	return h.bandwidth
 }
 
-func (h *BufferedLinkHandler) GetTotalBackpressure() int {
+func (h *BufferedLinkType) GetTotalBackpressure() int {
 	return h.totalBackpressure
 }
 
-func (h *BufferedLinkHandler) GetSlots() [][]ahead_port.PacketWithCycle {
+func (h *BufferedLinkType) GetSlots() [][]ahead_port.PacketWithCycle {
 	return h.slots
 }
 
-func (h *BufferedLinkHandler) IncrementBackpressure() {
+func (h *BufferedLinkType) IncrementBackpressure() {
 	h.totalBackpressure++
 }
 
-func (h *BufferedLinkHandler) CanSendPacket(cycle int, downstreamReady bool) bool {
+func (h *BufferedLinkType) CanSendPacket(cycle int, downstreamReady bool) bool {
 	return downstreamReady
 }
 
 // GetOccupancy returns the pending packet count per slot for buffered links.
-func (h *BufferedLinkHandler) GetOccupancy(currentCycle int) []int {
+func (h *BufferedLinkType) GetOccupancy(currentCycle int) []int {
 	slots := h.GetSlots()
 	occupancy := make([]int, len(slots))
 	for i, slot := range slots {
 		occupancy[i] = len(slot)
 	}
 	return occupancy
+}
+
+// NewBufferedLinkHandler is deprecated. Use NewBufferedLinkType instead.
+// Deprecated: Use NewBufferedLinkType.
+func NewBufferedLinkHandler(latency, bandwidth int) *BufferedLinkType {
+	return NewBufferedLinkType(latency, bandwidth)
 }

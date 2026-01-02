@@ -4,14 +4,14 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// LinkHandler defines the behavior for specific link types.
+// LinkType defines the behavior for specific link types.
 // It handles packet processing, flow control, and readiness signaling.
-// This mirrors the NodeHandler pattern used in nodes.
-type LinkHandler interface {
+// Different link types implement different buffering and flow control strategies.
+type LinkType interface {
 	// Process handles data for the current cycle.
 	// It is responsible for:
 	// 1. Sending packets to downstream (via l.toDownstream)
-	// 2. Buffering packets that cannot be sent (via l.pendingPackets or internal state)
+	// 2. Buffering packets that cannot be sent (via internal state)
 	// 3. Updating the ready state for upstream (via l.fromUpstream.UpdateReady)
 	//
 	// Parameters:
@@ -21,10 +21,10 @@ type LinkHandler interface {
 	//   incoming: packets received from upstream in this cycle
 	Process(l *Link, cycle int, targetCycle int, incoming []packet.Packet) error
 
-	// Reset resets the handler state.
+	// Reset resets the link type state.
 	Reset()
 
-	// Init initializes the handler after being connected to the network.
+	// Init initializes the link type after being connected to the network.
 	// It handles bootstrapping tasks like initial ready signaling.
 	// If initialReady is specified on the link, it should be honored.
 	Init(l *Link)
@@ -33,3 +33,8 @@ type LinkHandler interface {
 	// Index i corresponds to packets scheduled for (CurrentCycle + i).
 	GetOccupancy(currentCycle int) []int
 }
+
+// LinkHandler is a deprecated alias for LinkType.
+// Use LinkType instead.
+// Deprecated: Use LinkType.
+type LinkHandler = LinkType

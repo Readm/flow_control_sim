@@ -461,3 +461,158 @@ func TestNode_OutQueueOptimization(t *testing.T) {
 		}
 	})
 }
+
+// TestPortNaming_SinglePort tests naming individual ports
+func TestPortNaming_SinglePort(t *testing.T) {
+	t.Parallel()
+
+	n := NewTestNode(1)
+	iq1 := queue.NewInputQueue(8, 1)
+	iq2 := queue.NewInputQueue(8, 1)
+	oq1 := queue.NewOutputQueue(8, 1)
+	oq2 := queue.NewOutputQueue(8, 1)
+
+	n.AddInputQueue(iq1)
+	n.AddInputQueue(iq2)
+	n.AddOutputQueue(oq1)
+	n.AddOutputQueue(oq2)
+
+	// Name input ports
+	if err := n.NameInputPort(0, "from_cpu"); err != nil {
+		t.Fatalf("NameInputPort(0, 'from_cpu') failed: %v", err)
+	}
+	if err := n.NameInputPort(1, "from_l2"); err != nil {
+		t.Fatalf("NameInputPort(1, 'from_l2') failed: %v", err)
+	}
+
+	// Name output ports
+	if err := n.NameOutputPort(0, "to_cpu"); err != nil {
+		t.Fatalf("NameOutputPort(0, 'to_cpu') failed: %v", err)
+	}
+	if err := n.NameOutputPort(1, "to_l2"); err != nil {
+		t.Fatalf("NameOutputPort(1, 'to_l2') failed: %v", err)
+	}
+
+	// Verify lookups
+	if idx, ok := n.GetInputPortIndex("from_cpu"); !ok || idx != 0 {
+		t.Errorf("GetInputPortIndex('from_cpu') = %d, %v; want 0, true", idx, ok)
+	}
+	if idx, ok := n.GetInputPortIndex("from_l2"); !ok || idx != 1 {
+		t.Errorf("GetInputPortIndex('from_l2') = %d, %v; want 1, true", idx, ok)
+	}
+	if idx, ok := n.GetOutputPortIndex("to_cpu"); !ok || idx != 0 {
+		t.Errorf("GetOutputPortIndex('to_cpu') = %d, %v; want 0, true", idx, ok)
+	}
+	if idx, ok := n.GetOutputPortIndex("to_l2"); !ok || idx != 1 {
+		t.Errorf("GetOutputPortIndex('to_l2') = %d, %v; want 1, true", idx, ok)
+	}
+
+	// Lookup nonexistent name
+	if idx, ok := n.GetInputPortIndex("nonexistent"); ok {
+		t.Errorf("GetInputPortIndex('nonexistent') = %d, %v; want _, false", idx, ok)
+	}
+}
+
+// TestPortNaming_DuplicateDetection tests that duplicate port names are rejected
+func TestPortNaming_DuplicateDetection(t *testing.T) {
+	t.Parallel()
+
+	n := NewTestNode(2)
+	iq1 := queue.NewInputQueue(8, 1)
+	iq2 := queue.NewInputQueue(8, 1)
+	n.AddInputQueue(iq1)
+	n.AddInputQueue(iq2)
+
+	// Name port 0
+	if err := n.NameInputPort(0, "shared_name"); err != nil {
+		t.Fatalf("NameInputPort(0, 'shared_name') failed: %v", err)
+	}
+
+	// Try to name port 1 with the same name - should fail
+	err := n.NameInputPort(1, "shared_name")
+	if err == nil {
+		t.Fatal("NameInputPort(1, 'shared_name') should have failed with duplicate name error")
+	}
+	if err.Error() != `input port name "shared_name" already assigned to index 0` {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Idempotent: renaming same port with same name should succeed
+	if err := n.NameInputPort(0, "shared_name"); err != nil {
+		t.Errorf("NameInputPort(0, 'shared_name') (idempotent) failed: %v", err)
+	}
+}
+
+// TestPortNaming_BatchNaming tests NameInputPorts and NameOutputPorts
+func TestPortNaming_BatchNaming(t *testing.T) {
+	t.Parallel()
+
+	n := NewTestNode(3)
+	iq1 := queue.NewInputQueue(8, 1)
+	iq2 := queue.NewInputQueue(8, 1)
+	iq3 := queue.NewInputQueue(8, 1)
+	oq1 := queue.NewOutputQueue(8, 1)
+	oq2 := queue.NewOutputQueue(8, 1)
+
+	n.AddInputQueue(iq1)
+	n.AddInputQueue(iq2)
+	n.AddInputQueue(iq3)
+	n.AddOutputQueue(oq1)
+	n.AddOutputQueue(oq2)
+
+	// Batch name inputs (skip port 1 with empty string)
+	if err := n.NameInputPorts("port0", "", "port2"); err != nil {
+		t.Fatalf("NameInputPorts failed: %v", err)
+	}
+
+	// Verify
+	if idx, ok := n.GetInputPortIndex("port0"); !ok || idx != 0 {
+		t.Errorf("GetInputPortIndex('port0') = %d, %v; want 0, true", idx, ok)
+	}
+	if _, ok := n.GetInputPortIndex(""); ok {
+		t.Error("GetInputPortIndex('') should return false")
+	}
+	if idx, ok := n.GetInputPortIndex("port2"); !ok || idx != 2 {
+		t.Errorf("GetInputPortIndex('port2') = %d, %v; want 2, true", idx, ok)
+	}
+
+	// Batch name outputs
+	if err := n.NameOutputPorts("out0", "out1"); err != nil {
+		t.Fatalf("NameOutputPorts failed: %v", err)
+	}
+
+	// Verify
+	if idx, ok := n.GetOutputPortIndex("out0"); !ok || idx != 0 {
+		t.Errorf("GetOutputPortIndex('out0') = %d, %v; want 0, true", idx, ok)
+	}
+	if idx, ok := n.GetOutputPortIndex("out1"); !ok || idx != 1 {
+		t.Errorf("GetOutputPortIndex('out1') = %d, %v; want 1, true", idx, ok)
+	}
+}
+
+// TestPortNaming_ErrorCases tests various error conditions
+func TestPortNaming_ErrorCases(t *testing.T) {
+	t.Parallel()
+
+	n := NewTestNode(4)
+	iq := queue.NewInputQueue(8, 1)
+	n.AddInputQueue(iq)
+
+	// Out of range index
+	err := n.NameInputPort(5, "invalid")
+	if err == nil {
+		t.Fatal("NameInputPort with out-of-range index should fail")
+	}
+
+	// Empty name
+	err = n.NameInputPort(0, "")
+	if err == nil {
+		t.Fatal("NameInputPort with empty name should fail")
+	}
+
+	// Too many names in batch
+	err = n.NameInputPorts("a", "b", "c")
+	if err == nil {
+		t.Fatal("NameInputPorts with too many names should fail")
+	}
+}

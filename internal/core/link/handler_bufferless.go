@@ -6,26 +6,26 @@ import (
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
-// BufferlessLinkHandler implements an always-ready flow control strategy without physical buffering.
+// BufferlessLinkType implements an always-ready flow control strategy without physical buffering.
 // It attempts to send packets immediately. If downstream is busy, packets are kept in l.pendingPackets.
-// BufferlessLinkHandler implements an always-ready flow control strategy without physical buffering.
+// BufferlessLinkType implements an always-ready flow control strategy without physical buffering.
 // It attempts to send packets immediately. If downstream is busy, packets are kept in pending map.
-type BufferlessLinkHandler struct {
+type BufferlessLinkType struct {
 	// pending stores packets that failed to send, indexed by their target retry cycle.
 	// Key: Target Cycle, Value: List of packets
 	pending map[int][]ahead_port.PacketWithCycle
 }
 
-// NewBufferlessLinkHandler creates a BufferlessLinkHandler.
-// NewBufferlessLinkHandler creates a BufferlessLinkHandler.
-func NewBufferlessLinkHandler() *BufferlessLinkHandler {
-	return &BufferlessLinkHandler{
+// NewBufferlessLinkType creates a BufferlessLinkType.
+// NewBufferlessLinkType creates a BufferlessLinkType.
+func NewBufferlessLinkType() *BufferlessLinkType {
+	return &BufferlessLinkType{
 		pending: make(map[int][]ahead_port.PacketWithCycle),
 	}
 }
 
-// Process implements the LinkHandler interface for BufferlessLinkHandler.
-func (h *BufferlessLinkHandler) Process(l *Link, cycle int, targetCycle int, incoming []packet.Packet) error {
+// Process implements the LinkHandler interface for BufferlessLinkType.
+func (h *BufferlessLinkType) Process(l *Link, cycle int, targetCycle int, incoming []packet.Packet) error {
 	// 1. Process pending packets scheduled for this cycle
 	if pendingPkts, ok := h.pending[cycle]; ok && len(pendingPkts) > 0 {
 		// Clear pending for this cycle, we will retry them
@@ -71,7 +71,7 @@ func (h *BufferlessLinkHandler) Process(l *Link, cycle int, targetCycle int, inc
 	return nil
 }
 
-func (h *BufferlessLinkHandler) addToPending(cycle int, pkt packet.Packet) {
+func (h *BufferlessLinkType) addToPending(cycle int, pkt packet.Packet) {
 	if h.pending == nil {
 		h.pending = make(map[int][]ahead_port.PacketWithCycle)
 	}
@@ -82,7 +82,7 @@ func (h *BufferlessLinkHandler) addToPending(cycle int, pkt packet.Packet) {
 }
 
 // GetOccupancy returns the pending packets distribution relative to current cycle (handled by Link).
-func (h *BufferlessLinkHandler) GetOccupancy(currentCycle int) []int {
+func (h *BufferlessLinkType) GetOccupancy(currentCycle int) []int {
 	if len(h.pending) == 0 {
 		return nil
 	}
@@ -117,18 +117,18 @@ func (h *BufferlessLinkHandler) GetOccupancy(currentCycle int) []int {
 }
 
 // Reset resets the handler state.
-func (h *BufferlessLinkHandler) Reset() {
+func (h *BufferlessLinkType) Reset() {
 	h.pending = make(map[int][]ahead_port.PacketWithCycle)
 }
 
 // ReadyDepth returns the number of cycles to pre-mark as ready for bootstrapping.
 // Bufferless links are always ready, but need at least cycle 0 to start.
-func (h *BufferlessLinkHandler) Init(l *Link) {
+func (h *BufferlessLinkType) Init(l *Link) {
 	// Signal cycle 0 as ready to start the clock
 	l.UpdateUpstreamReady(0, true)
 }
 
-func (h *BufferlessLinkHandler) sendPacket(l *Link, targetCycle int, pkt packet.Packet) bool {
+func (h *BufferlessLinkType) sendPacket(l *Link, targetCycle int, pkt packet.Packet) bool {
 	if l.toDownstream == nil {
 		return true
 	}
@@ -137,4 +137,10 @@ func (h *BufferlessLinkHandler) sendPacket(l *Link, targetCycle int, pkt packet.
 		Packet: pkt,
 	}
 	return l.toDownstream.TrySend(targetCycle, pwc)
+}
+
+// NewBufferlessLinkHandler is deprecated. Use NewBufferlessLinkType instead.
+// Deprecated: Use NewBufferlessLinkType.
+func NewBufferlessLinkHandler() *BufferlessLinkType {
+	return NewBufferlessLinkType()
 }

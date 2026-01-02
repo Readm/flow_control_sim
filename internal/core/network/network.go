@@ -120,14 +120,17 @@ func (n *Network) CurrentCycle() int {
 	return n.currentCycle
 }
 
-// SetTracer 设置 trace recorder 并将其传播到所有节点
+// SetTracer 设置 trace recorder 并将其传播到所有支持 trace 的节点
 // 必须在 Finalize/Advance 之前调用
+// 使用类型断言，只为实现 trace.Traceable 接口的节点设置 tracer
 func (n *Network) SetTracer(tracer *trace.TraceRecorder) {
 	n.tracer = tracer
 
-	// 将 tracer 传播到所有已添加的节点
+	// 使用类型断言，只为支持 trace 的节点设置 tracer
 	for _, handle := range n.nodes {
-		handle.Node.SetTracer(tracer)
+		if traceable, ok := handle.Node.(trace.Traceable); ok {
+			traceable.SetTracer(tracer)
+		}
 	}
 }
 
@@ -153,9 +156,11 @@ func (n *Network) AddNode(handle *NodeHandle) error {
 
 	n.nodes[id] = handle
 
-	// 如果已经设置了 tracer，自动传播到新添加的节点
+	// 如果已经设置了 tracer，自动传播到新添加的节点（使用类型断言）
 	if n.tracer != nil {
-		handle.Node.SetTracer(n.tracer)
+		if traceable, ok := handle.Node.(trace.Traceable); ok {
+			traceable.SetTracer(n.tracer)
+		}
 	}
 
 	return nil
@@ -165,14 +170,121 @@ func (n *Network) AddNode(handle *NodeHandle) error {
 type ConnectOption func(*connectOptions)
 
 type connectOptions struct {
-	handler link.LinkHandler
+	linkType link.LinkType
 }
 
-// WithHandler specifies a custom link handler for the connection.
-func WithHandler(handler link.LinkHandler) ConnectOption {
+// WithLinkType specifies a custom link type for the connection.
+func WithLinkType(linkType link.LinkType) ConnectOption {
 	return func(o *connectOptions) {
-		o.handler = handler
+		o.linkType = linkType
 	}
+}
+
+// WithBufferless creates a connection using BufferlessLinkType.
+// This is a convenience wrapper for WithLinkType(link.NewBufferlessLinkType()).
+func WithBufferless() ConnectOption {
+	return func(o *connectOptions) {
+		o.linkType = link.NewBufferlessLinkType()
+	}
+}
+
+// WithHandler is deprecated. Use WithLinkType instead.
+// Deprecated: Use WithLinkType.
+func WithHandler(handler link.LinkHandler) ConnectOption {
+	return WithLinkType(handler)
+}
+
+// portToIndex converts a port specification (int or string) to an index.
+// Supports both port indices (int) and port names (string).
+// Returns an error if the port type is invalid or the port name is not found.
+func portToIndex(n node.Node, port interface{}, isInput bool) (int, error) {
+	switch p := port.(type) {
+	case int:
+		// Direct index (backward compatible)
+		return p, nil
+	case string:
+		// Port name lookup
+		var idx int
+		var ok bool
+
+		// Use type assertion to check if node supports port naming
+		type portNamer interface {
+			GetInputPortIndex(name string) (int, bool)
+			GetOutputPortIndex(name string) (int, bool)
+		}
+
+		namer, supportsNaming := n.(portNamer)
+		if !supportsNaming {
+			return 0, fmt.Errorf("node %d does not support port naming", n.ID())
+		}
+
+		if isInput {
+			idx, ok = namer.GetInputPortIndex(p)
+		} else {
+			idx, ok = namer.GetOutputPortIndex(p)
+		}
+
+		if !ok {
+			portType := "output"
+			if isInput {
+				portType = "input"
+			}
+			return 0, fmt.Errorf("node %d: %s port name %q not found", n.ID(), portType, p)
+		}
+		return idx, nil
+	default:
+		return 0, fmt.Errorf("invalid port type: %T (expected int or string)", port)
+	}
+}
+
+// ConnectNodes connects two nodes using Node objects instead of IDs.
+// This is the recommended way to connect nodes as it's more type-safe and convenient.
+// The node IDs are automatically obtained via source.ID() and target.ID().
+//
+// Port parameters can be either:
+//   - int: port index (e.g., 0, 1, 2)
+//   - string: port name (e.g., "to_l2", "from_cpu0")
+//
+// Port naming must be set up beforehand using node.NameInputPort() or node.NameOutputPort().
+func (n *Network) ConnectNodes(
+	source node.Node, sourcePort interface{},
+	target node.Node, targetPort interface{},
+	latency int, bandwidth int,
+	opts ...ConnectOption,
+) (*link.Link, error) {
+	if source == nil || target == nil {
+		return nil, fmt.Errorf("source and target nodes must not be nil")
+	}
+
+	// Convert port specifications to indices
+	sourcePortIdx, err := portToIndex(source, sourcePort, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid source port: %w", err)
+	}
+
+	targetPortIdx, err := portToIndex(target, targetPort, true)
+	if err != nil {
+		return nil, fmt.Errorf("invalid target port: %w", err)
+	}
+
+	return n.Connect(
+		source.ID(), sourcePortIdx,
+		target.ID(), targetPortIdx,
+		latency, bandwidth,
+		opts...,
+	)
+}
+
+// ConnectNodesWithHandler is deprecated. Use ConnectNodes with WithLinkType or WithBufferless instead.
+// Deprecated: Use ConnectNodes(src, srcPort, dst, dstPort, latency, bandwidth, WithBufferless()).
+func (n *Network) ConnectNodesWithHandler(
+	source node.Node, sourcePort int,
+	target node.Node, targetPort int,
+	latency int, bandwidth int,
+	handler link.LinkHandler,
+) (*link.Link, error) {
+	return n.ConnectNodes(source, sourcePort, target, targetPort,
+		latency, bandwidth, WithLinkType(handler))
 }
 
 // Connect wires a source output queue to a target input queue with a Link.
@@ -184,7 +296,7 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 
 	// Default options
 	options := connectOptions{
-		handler: nil,
+		linkType: nil,
 	}
 	for _, opt := range opts {
 		opt(&options)
@@ -214,8 +326,8 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 
 	// Create Link
 	var linkInstance *link.Link
-	if options.handler != nil {
-		linkInstance = link.NewLinkWithHandler(sourceID, targetID, latency, bandwidth, options.handler)
+	if options.linkType != nil {
+		linkInstance = link.NewLinkWithType(sourceID, targetID, latency, bandwidth, options.linkType)
 	} else {
 		linkInstance = link.NewLink(sourceID, targetID, latency, bandwidth)
 	}

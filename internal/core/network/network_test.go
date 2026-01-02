@@ -376,3 +376,112 @@ func formatTimeline(events []componentCycle) string {
 	}
 	return b.String()
 }
+
+// TestConnectNodes_PortNaming tests ConnectNodes with named ports
+func TestConnectNodes_PortNaming(t *testing.T) {
+	t.Parallel()
+
+	net := New()
+
+	// Create source node with named output ports
+	source := node.NewWorkerNode(1)
+	oq1 := queue.NewOutputQueue(8, 1)
+	oq2 := queue.NewOutputQueue(8, 1)
+	source.AddOutputQueue(oq1)
+	source.AddOutputQueue(oq2)
+	source.NameOutputPorts("to_l1", "to_l2")
+
+	// Create target node with named input ports
+	target := node.NewWorkerNode(2)
+	iq1 := queue.NewInputQueue(8, 1)
+	iq2 := queue.NewInputQueue(8, 1)
+	target.AddInputQueue(iq1)
+	target.AddInputQueue(iq2)
+	target.NameInputPorts("from_cpu", "from_mem")
+
+	net.AddNode(newNodeHandle(source, []*queue.InputQueue{}, []*queue.OutputQueue{oq1, oq2}))
+	net.AddNode(newNodeHandle(target, []*queue.InputQueue{iq1, iq2}, []*queue.OutputQueue{}))
+
+	// Test 1: Connect using port names (strings)
+	link1, err := net.ConnectNodes(source, "to_l1", target, "from_cpu", 1, 1)
+	if err != nil {
+		t.Fatalf("ConnectNodes with port names failed: %v", err)
+	}
+	if link1 == nil {
+		t.Fatal("Expected non-nil link")
+	}
+
+	// Test 2: Connect using port indices (int) - backward compatibility
+	link2, err := net.ConnectNodes(source, 1, target, 1, 1, 1)
+	if err != nil {
+		t.Fatalf("ConnectNodes with port indices failed: %v", err)
+	}
+	if link2 == nil {
+		t.Fatal("Expected non-nil link")
+	}
+
+	// Test 3: Mixed - int for source, string for target
+	source2 := node.NewWorkerNode(3)
+	oq3 := queue.NewOutputQueue(8, 1)
+	source2.AddOutputQueue(oq3)
+	net.AddNode(newNodeHandle(source2, []*queue.InputQueue{}, []*queue.OutputQueue{oq3}))
+
+	link3, err := net.ConnectNodes(source2, 0, target, "from_mem", 1, 1)
+	if err != nil {
+		t.Fatalf("ConnectNodes with mixed port types failed: %v", err)
+	}
+	if link3 == nil {
+		t.Fatal("Expected non-nil link")
+	}
+}
+
+// TestConnectNodes_PortNamingErrors tests error handling for port naming
+func TestConnectNodes_PortNamingErrors(t *testing.T) {
+	t.Parallel()
+
+	net := New()
+
+	source := node.NewWorkerNode(1)
+	oq := queue.NewOutputQueue(8, 1)
+	source.AddOutputQueue(oq)
+	source.NameOutputPort(0, "valid_port")
+
+	target := node.NewWorkerNode(2)
+	iq := queue.NewInputQueue(8, 1)
+	target.AddInputQueue(iq)
+
+	net.AddNode(newNodeHandle(source, []*queue.InputQueue{}, []*queue.OutputQueue{oq}))
+	net.AddNode(newNodeHandle(target, []*queue.InputQueue{iq}, []*queue.OutputQueue{}))
+
+	// Test 1: Invalid port type (not int or string)
+	_, err := net.ConnectNodes(source, 3.14, target, 0, 1, 1)
+	if err == nil {
+		t.Fatal("Expected error for invalid port type (float)")
+	}
+	if !strings.Contains(err.Error(), "invalid port type") {
+		t.Errorf("Expected 'invalid port type' error, got: %v", err)
+	}
+
+	// Test 2: Port name not found
+	_, err = net.ConnectNodes(source, "nonexistent", target, 0, 1, 1)
+	if err == nil {
+		t.Fatal("Expected error for nonexistent port name")
+	}
+	if !strings.Contains(err.Error(), "port name") && !strings.Contains(err.Error(), "not found") {
+		t.Errorf("Expected 'port name not found' error, got: %v", err)
+	}
+
+	// Test 3: Out of range port index
+	_, err = net.ConnectNodes(source, 999, target, 0, 1, 1)
+	if err == nil {
+		t.Fatal("Expected error for out-of-range port index")
+	}
+}
+
+func newNodeHandle(n node.Node, inputs []*queue.InputQueue, outputs []*queue.OutputQueue) *NodeHandle {
+	return &NodeHandle{
+		Node:    n,
+		Inputs:  inputs,
+		Outputs: outputs,
+	}
+}
