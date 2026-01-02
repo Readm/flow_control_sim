@@ -1,46 +1,46 @@
 # CHI Continuous Transactions - TODO
 
-## 已完成 ✅
+## 已完成 
 
 ### Phase 1: 统一 Transaction 框架
-- ✅ 移除旧的兼容接口（NewTxnContext、NodeCtx）
-- ✅ 实现 NodeAccessor 抽象
-- ✅ 实现 TxnManager 迁移支持
-- ✅ 添加 MigrationResult、MigrationPayload 类型
-- ✅ 实现 TxnContext.MigrateTo() 方法
+-  移除旧的兼容接口（NewTxnContext、NodeCtx）
+-  实现 NodeAccessor 抽象
+-  实现 TxnManager 迁移支持
+-  添加 MigrationResult、MigrationPayload 类型
+-  实现 TxnContext.MigrateTo() 方法
 
 ### Phase 2: 连续式 CHI Transactions 实现
-- ✅ ReadSharedContinuous - 连续式 ReadShared Transaction
+-  ReadSharedContinuous - 连续式 ReadShared Transaction
   - 使用 Decoder 解码地址获取 Home Node
   - 迁移到 HN 检查 Directory 和发送 Snoop
   - 迁移回 RN 更新 Cache
-- ✅ ReadUniqueContinuous - 连续式 ReadUnique Transaction
+-  ReadUniqueContinuous - 连续式 ReadUnique Transaction
   - Decoder 驱动的地址解码
   - 迁移到 HN 发送 invalidating snoops
   - 获取 Exclusive 权限
-- ✅ WriteUniqueContinuous - 连续式 WriteUnique Transaction
+-  WriteUniqueContinuous - 连续式 WriteUnique Transaction
   - Decoder 驱动的地址解码
   - 迁移到 HN 处理写操作
   - Invalidate 所有 sharers
 
 ### Phase 3: 测试实现 (100% 完成)
-- ✅ TestDecoderDrivenMigration - 验证 Decoder 使用（通过）
-- ✅ TestReadSharedContinuous - 完整流程测试（通过）
+-  TestDecoderDrivenMigration - 验证 Decoder 使用（通过）
+-  TestReadSharedContinuous - 完整流程测试（通过）
   - 修复：Directory 状态期望从 Shared 改为 Exclusive（1 sharer 的正确行为）
-- ✅ TestReadUniqueContinuous - Exclusive 访问测试（通过）
-- ✅ TestWriteUniqueContinuous - 写操作测试（通过）
+-  TestReadUniqueContinuous - Exclusive 访问测试（通过）
+-  TestWriteUniqueContinuous - 写操作测试（通过）
 
 ## 待完成 ⏳
 
 ### 测试调试
-- ✅ ~~调试 TestReadSharedContinuous~~ (已完成)
+-  ~~调试 TestReadSharedContinuous~~ (已完成)
   - 问题原因：AddSharer() 自动根据 sharer 数量设置状态
     - 1 sharer → Exclusive (正确)
     - 2+ sharers → Shared
   - 解决方案：修改测试期望为 Exclusive
 
-- ✅ ~~验证 TestReadUniqueContinuous~~ (已完成)
-- ✅ ~~验证 TestWriteUniqueContinuous~~ (已完成)
+-  ~~验证 TestReadUniqueContinuous~~ (已完成)
+-  ~~验证 TestWriteUniqueContinuous~~ (已完成)
 
 ### 功能增强
 - [ ] 实现 Snoop Handler
@@ -69,10 +69,10 @@
   - ReadUniqueContinuous 详细文档
   - WriteUniqueContinuous 详细文档
 
-## 已知问题 🐛
+## 已知问题 
 
 ### 测试相关
-1. ✅ ~~**Directory 状态不一致**~~ (已解决)
+1.  ~~**Directory 状态不一致**~~ (已解决)
    - 问题：预期 "Shared"，实际 "Exclusive"
    - 原因：AddSharer() 根据 sharer 数量自动设置状态
    - 解决：修改测试期望，1 sharer → Exclusive 是正确行为
@@ -91,7 +91,7 @@
    - 迁移时 channel 复用，但 goroutine 跨节点
    - 需要确保 channel 不被提前关闭
 
-## 未来工作 🚀
+## 未来工作 
 
 ### 协议扩展
 - [ ] 实现 MakeReadUnique Transaction

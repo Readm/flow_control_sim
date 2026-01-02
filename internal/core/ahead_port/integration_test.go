@@ -130,11 +130,11 @@ func TestConnect_TypeSafety(t *testing.T) {
 	// This test verifies that the type system prevents misuse.
 	// The following would cause compile errors:
 
-	// ❌ upstream.toDownstream.Receive(0)     // InPort doesn't have Receive
-	// ❌ upstream.toDownstream.UpdateReady()  // InPort doesn't have UpdateReady
+	//  upstream.toDownstream.Receive(0)     // InPort doesn't have Receive
+	//  upstream.toDownstream.UpdateReady()  // InPort doesn't have UpdateReady
 
-	// ❌ downstream.fromUpstream.Send()       // OutPort doesn't have Send
-	// ❌ downstream.fromUpstream.MarkDone()   // OutPort doesn't have MarkDone
+	//  downstream.fromUpstream.Send()       // OutPort doesn't have Send
+	//  downstream.fromUpstream.MarkDone()   // OutPort doesn't have MarkDone
 
 	// This test just verifies the code compiles correctly.
 	// The actual type safety is enforced at compile time.

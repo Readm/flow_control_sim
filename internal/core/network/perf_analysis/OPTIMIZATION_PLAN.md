@@ -252,10 +252,10 @@ Batch process multiple packets using SIMD instructions.
 ## Success Metrics
 
 ### Target Performance
-- **8 nodes**: <2x baseline (currently 1.4x) ✅ Already good
-- **16 nodes**: <2x baseline (currently 2.5x) 🎯 Need improvement
-- **32 nodes**: <3x baseline (currently 5x) 🎯 Need improvement
-- **64 nodes**: <4x baseline (currently 9x) 🎯 Need improvement
+- **8 nodes**: <2x baseline (currently 1.4x)  Already good
+- **16 nodes**: <2x baseline (currently 2.5x)  Need improvement
+- **32 nodes**: <3x baseline (currently 5x)  Need improvement
+- **64 nodes**: <4x baseline (currently 9x)  Need improvement
 
 ### Validation
 After each optimization:

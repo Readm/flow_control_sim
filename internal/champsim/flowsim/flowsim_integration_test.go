@@ -212,40 +212,40 @@ func Test_FlowSim_CPU_DRAM_Integration(t *testing.T) {
 
 	// 验证CPU运行正常
 	if cpuStats.TotalInstructions == 0 {
-		t.Error("❌ CPU没有退休任何指令")
+		t.Error(" CPU没有退休任何指令")
 	} else {
-		t.Logf("✅ CPU运行正常: %d instructions", cpuStats.TotalInstructions)
+		t.Logf(" CPU运行正常: %d instructions", cpuStats.TotalInstructions)
 	}
 
 	// 验证Cache运行正常
 	if cacheStats.Accesses == 0 {
-		t.Error("❌ Cache没有任何访问")
+		t.Error(" Cache没有任何访问")
 	} else {
-		t.Logf("✅ Cache运行正常: %d accesses", cacheStats.Accesses)
+		t.Logf(" Cache运行正常: %d accesses", cacheStats.Accesses)
 	}
 
 	// 验证DRAM运行正常
 	if dramStats.RQAccesses == 0 && cacheStats.Misses > 0 {
-		t.Error("❌ Cache有miss但DRAM没有接收到请求")
+		t.Error(" Cache有miss但DRAM没有接收到请求")
 	} else if dramStats.RQAccesses > 0 {
-		t.Logf("✅ DRAM运行正常: %d requests", dramStats.RQAccesses)
+		t.Logf(" DRAM运行正常: %d requests", dramStats.RQAccesses)
 	}
 
 	// 验证数据一致性
 	if cacheStats.Misses > 0 && dramStats.RQAccesses == 0 {
-		t.Error("❌ 数据不一致: Cache有miss但DRAM没有请求")
+		t.Error(" 数据不一致: Cache有miss但DRAM没有请求")
 	} else {
-		t.Logf("✅ Cache与DRAM联动正常: %d misses → %d DRAM requests",
+		t.Logf(" Cache与DRAM联动正常: %d misses → %d DRAM requests",
 			cacheStats.Misses, dramStats.RQAccesses)
 	}
 
 	// 验证IPC
 	ipc := float64(cpuStats.TotalInstructions) / float64(maxCycles)
 	if ipc < 0.1 || ipc > 4.0 {
-		t.Errorf("❌ IPC异常: %.2f (期望 0.1-4.0)", ipc)
+		t.Errorf(" IPC异常: %.2f (期望 0.1-4.0)", ipc)
 	} else {
-		t.Logf("✅ IPC正常: %.2f", ipc)
+		t.Logf(" IPC正常: %.2f", ipc)
 	}
 
-	t.Log("\n🎉 FlowSim CPU+DRAM 集成测试完成！")
+	t.Log("\n FlowSim CPU+DRAM 集成测试完成！")
 }

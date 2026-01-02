@@ -129,12 +129,12 @@ func BuildCoherenceTree(
 
 	if err != nil {
 		// 自动推断失败，返回详细错误信息
-		return nil, fmt.Errorf("⚠️ 自动推断一致性树失败: %v\n请使用 CoherenceTreeBuilder 显式指定一致性树", err)
+		return nil, fmt.Errorf(" 自动推断一致性树失败: %v\n请使用 CoherenceTreeBuilder 显式指定一致性树", err)
 	}
 
 	if len(result.Warnings) > 0 {
 		// 有警告但成功
-		fmt.Printf("⚠️ 一致性树构建完成，但有以下警告:\n")
+		fmt.Printf(" 一致性树构建完成，但有以下警告:\n")
 		for _, warning := range result.Warnings {
 			fmt.Printf("  - %s\n", warning)
 		}

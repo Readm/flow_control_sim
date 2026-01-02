@@ -6,11 +6,11 @@
 
 ## 功能特性
 
-- ✅ **Chrome 兼容**: 生成标准的 Chrome trace JSON 格式，可直接在 `chrome://tracing` 中查看
-- ✅ **细粒度追踪**: 每个 Node 的 3 个阶段（Receive/Process/Send）都单独记录
-- ✅ **编译时控制**: 使用 build tag (`-tags trace`) 启用，否则零开销
-- ✅ **灵活配置**: 支持采样、过滤、时间阈值等多种配置
-- ✅ **元数据支持**: 可添加进程名、线程名等元数据
+-  **Chrome 兼容**: 生成标准的 Chrome trace JSON 格式，可直接在 `chrome://tracing` 中查看
+-  **细粒度追踪**: 每个 Node 的 3 个阶段（Receive/Process/Send）都单独记录
+-  **编译时控制**: 使用 build tag (`-tags trace`) 启用，否则零开销
+-  **灵活配置**: 支持采样、过滤、时间阈值等多种配置
+-  **元数据支持**: 可添加进程名、线程名等元数据
 
 ## 快速开始
 

@@ -148,43 +148,43 @@ func Test_CPU_Cache_DRAM_Integration(t *testing.T) {
 
 	// 验证CPU有指令退休
 	if cpuStats.TotalInstructions == 0 {
-		t.Error("❌ 没有指令退休")
+		t.Error(" 没有指令退休")
 	} else {
-		t.Logf("✅ CPU运行正常: %d instructions", cpuStats.TotalInstructions)
+		t.Logf(" CPU运行正常: %d instructions", cpuStats.TotalInstructions)
 	}
 
 	// 验证Cache有访问
 	if cacheStats.Accesses == 0 {
-		t.Error("❌ Cache没有访问")
+		t.Error(" Cache没有访问")
 	} else {
-		t.Logf("✅ Cache运行正常: %d accesses", cacheStats.Accesses)
+		t.Logf(" Cache运行正常: %d accesses", cacheStats.Accesses)
 	}
 
 	// 验证DRAM有访问
 	if dramStats.RQAccesses == 0 {
-		t.Log("⚠️  DRAM没有访问（可能Cache命中率100%）")
+		t.Log("  DRAM没有访问（可能Cache命中率100%）")
 	} else {
-		t.Logf("✅ DRAM运行正常: %d requests", dramStats.RQAccesses)
+		t.Logf(" DRAM运行正常: %d requests", dramStats.RQAccesses)
 	}
 
 	// 验证数据一致性: Cache Miss应该导致DRAM请求
 	// 注意：由于DRAM延迟，某些miss可能还在队列中
 	if cacheStats.Misses > 0 && dramStats.RQAccesses == 0 {
-		t.Error("❌ 数据不一致: Cache有miss但DRAM无请求")
+		t.Error(" 数据不一致: Cache有miss但DRAM无请求")
 	} else if cacheStats.Misses > 0 {
-		t.Logf("✅ Cache与DRAM联动正常: %d misses → %d DRAM requests",
+		t.Logf(" Cache与DRAM联动正常: %d misses → %d DRAM requests",
 			cacheStats.Misses, dramStats.RQAccesses)
 	}
 
 	// 验证IPC在合理范围
 	ipc := float64(cpuStats.TotalInstructions) / float64(maxCycles)
 	if ipc < 0.1 || ipc > 4.0 {
-		t.Errorf("❌ IPC异常: %.2f (期望 0.1-4.0)", ipc)
+		t.Errorf(" IPC异常: %.2f (期望 0.1-4.0)", ipc)
 	} else {
-		t.Logf("✅ IPC正常: %.2f", ipc)
+		t.Logf(" IPC正常: %.2f", ipc)
 	}
 
-	t.Logf("\n🎉 CPU+Cache+DRAM 端到端集成测试完成！")
+	t.Logf("\n CPU+Cache+DRAM 端到端集成测试完成！")
 }
 
 // Test_CPU_Cache_DRAM_Performance 性能对比测试
@@ -273,8 +273,8 @@ func Test_CPU_Cache_DRAM_Performance(t *testing.T) {
 	// 由于DRAM延迟，完整模式的IPC可能稍低
 	// 但不应该差异太大（Cache应该能吸收大部分延迟）
 	if ipc2 < ipc1*0.5 {
-		t.Logf("⚠️  IPC下降较多，可能需要优化")
+		t.Logf("  IPC下降较多，可能需要优化")
 	} else {
-		t.Logf("✅ 性能表现正常")
+		t.Logf(" 性能表现正常")
 	}
 }

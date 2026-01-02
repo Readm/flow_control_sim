@@ -1,6 +1,7 @@
 package cpu
 
 import (
+	"os"
 	"testing"
 
 	"github.com/Readm/flow_sim/internal/champsim/trace"
@@ -9,19 +10,28 @@ import (
 // Test_Standalone_真实Trace完整验证 使用真实 trace 验证所有 CPU 功能
 //
 // 验证项：
-// ✅ 寄存器重命名 (Register Renaming)
-// ✅ 依赖跟踪 (Dependency Tracking)
-// ✅ 乱序执行 (Out-of-Order Execution)
-// ✅ 按序退休 (In-Order Retirement)
-// ✅ Store-to-Load Forwarding
-// ✅ Complete 阶段（标记寄存器有效）
-// ✅ Backend RAT 更新
+// [Done] 寄存器重命名 (Register Renaming)
+// [Done] 依赖跟踪 (Dependency Tracking)
+// [Done] 乱序执行 (Out-of-Order Execution)
+// [Done] 按序退休 (In-Order Retirement)
+// [Done] Store-to-Load Forwarding
+// [Done] Complete 阶段（标记寄存器有效）
+// [Done] Backend RAT 更新
 func Test_Standalone_真实Trace完整验证(t *testing.T) {
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	traceReader, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	defer traceReader.Close()
 
@@ -63,43 +73,43 @@ func Test_Standalone_真实Trace完整验证(t *testing.T) {
 
 	// 验证基本正确性
 	if stats.TotalInstructions == 0 {
-		t.Error("❌ 没有指令退休")
+		t.Error("没有指令退休")
 	} else {
-		t.Logf("✅ 指令退休功能正常")
+		t.Logf("指令退休功能正常")
 	}
 
 	if stats.TotalBranches == 0 {
-		t.Error("❌ 没有处理分支指令")
+		t.Error("没有处理分支指令")
 	} else {
-		t.Logf("✅ 分支指令处理正常")
+		t.Logf("分支指令处理正常")
 	}
 
 	if lsqStats.TotalLoads == 0 {
-		t.Error("❌ 没有处理 Load 操作")
+		t.Error("没有处理 Load 操作")
 	} else {
-		t.Logf("✅ Load 操作处理正常")
+		t.Logf("Load 操作处理正常")
 	}
 
 	if lsqStats.ForwardedLoads > 0 {
-		t.Logf("✅ Store-to-Load Forwarding 功能正常")
+		t.Logf("Store-to-Load Forwarding 功能正常")
 	}
 
 	// 验证 IPC 在合理范围内
 	ipc := float64(stats.TotalInstructions) / float64(maxCycles)
 	if ipc < 0.5 || ipc > 4.0 {
-		t.Errorf("❌ IPC 超出合理范围: %.2f (期望 0.5-4.0)", ipc)
+		t.Errorf("IPC 超出合理范围: %.2f (期望 0.5-4.0)", ipc)
 	} else {
-		t.Logf("✅ IPC 在合理范围内: %.2f", ipc)
+		t.Logf("IPC 在合理范围内: %.2f", ipc)
 	}
 
 	// 验证寄存器分配器工作正常
 	if cpu.regAlloc.AllocatedCount() > cpu.regAlloc.TotalCount() {
-		t.Error("❌ 寄存器分配器异常：已分配数量超过总数")
+		t.Error("寄存器分配器异常：已分配数量超过总数")
 	} else {
-		t.Logf("✅ RegisterAllocator 工作正常")
+		t.Logf("RegisterAllocator 工作正常")
 	}
 
-	t.Logf("\n🎉 所有功能验证通过！CPU 1:1 复刻 ChampSim 完成！")
+	t.Logf("\n所有功能验证通过！CPU 1:1 复刻 ChampSim 完成！")
 }
 
 // Test_Standalone_长时间运行稳定性 测试长时间运行的稳定性
@@ -108,11 +118,20 @@ func Test_Standalone_长时间运行稳定性(t *testing.T) {
 		t.Skip("Skipping long run test in short mode")
 	}
 
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	traceReader, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	defer traceReader.Close()
 
@@ -157,17 +176,26 @@ func Test_Standalone_长时间运行稳定性(t *testing.T) {
 	if stats.TotalInstructions < 5000 {
 		t.Errorf("长时间运行指令数过少: %d (期望 > 5000)", stats.TotalInstructions)
 	} else {
-		t.Logf("✅ 长时间运行稳定性验证通过")
+		t.Logf("长时间运行稳定性验证通过")
 	}
 }
 
 // Benchmark_Standalone_CPU性能 benchmark CPU 性能
 func Benchmark_Standalone_CPU性能(b *testing.B) {
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	traceReader, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		b.Skipf("Skipping benchmark, trace file not available: %v", err)
+		b.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	defer traceReader.Close()
 

@@ -154,7 +154,7 @@ func TestBufferlessRing_SinglePacket_v2(t *testing.T) {
 		t.Errorf("Payload mismatch: expected %q, got %q", testPacket.Payload, receivedPackets[0].Payload)
 	}
 
-	t.Log("✅ Test passed: 2-hop packet delivered successfully")
+	t.Log(" Test passed: 2-hop packet delivered successfully")
 }
 
 // TestBufferlessRing_Concurrent_v2 tests multiple packets in the ring simultaneously.
@@ -239,7 +239,7 @@ func TestBufferlessRing_Concurrent_v2(t *testing.T) {
 	if receivedCount != len(pkts) {
 		t.Fatalf("Expected %d packets, got %d", len(pkts), receivedCount)
 	}
-	t.Logf("✅ All %d concurrent packets delivered", receivedCount)
+	t.Logf(" All %d concurrent packets delivered", receivedCount)
 }
 
 // TestBufferlessRing_Basic_v2 tests basic network construction
@@ -281,7 +281,7 @@ func TestBufferlessRing_Basic_v2(t *testing.T) {
 		t.Logf("Router %d: workerID=%d, capacity=%d", routerID, workerID, routerBuffer)
 	}
 
-	t.Log("✅ Basic construction successful")
+	t.Log(" Basic construction successful")
 }
 
 // TestBufferlessRing_TwoHops_v2 tests packet delivery across 2 hops (Worker0 → Worker2).
@@ -406,5 +406,5 @@ func TestBufferlessRing_TwoHops_v2(t *testing.T) {
 			receivedPackets[0].SourceID, receivedPackets[0].TargetID)
 	}
 
-	t.Log("✅ Test passed: 2-hop packet delivered successfully")
+	t.Log(" Test passed: 2-hop packet delivered successfully")
 }

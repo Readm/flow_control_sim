@@ -35,25 +35,25 @@ go test -bench=BenchmarkBufferlessRing \
     -mutexprofile="$OUTPUT_DIR/mutex.prof" \
     . 2>&1 | tee "$OUTPUT_DIR/benchmark.txt"
 
-echo -e "${GREEN}✓ Benchmarks complete${NC}"
+echo -e "${GREEN} Benchmarks complete${NC}"
 echo ""
 
 # Step 2: Generate CPU profile analysis
 echo -e "${BLUE}[2/5] Analyzing CPU profile...${NC}"
 go tool pprof -text -nodecount=20 "$OUTPUT_DIR/cpu.prof" > "$OUTPUT_DIR/cpu_analysis.txt" 2>/dev/null || true
-echo -e "${GREEN}✓ CPU profile analyzed${NC}"
+echo -e "${GREEN} CPU profile analyzed${NC}"
 echo ""
 
 # Step 3: Generate mutex profile analysis
 echo -e "${BLUE}[3/5] Analyzing mutex profile...${NC}"
 go tool pprof -text -nodecount=20 "$OUTPUT_DIR/mutex.prof" > "$OUTPUT_DIR/mutex_analysis.txt" 2>/dev/null || true
-echo -e "${GREEN}✓ Mutex profile analyzed${NC}"
+echo -e "${GREEN} Mutex profile analyzed${NC}"
 echo ""
 
 # Step 4: Generate memory profile analysis
 echo -e "${BLUE}[4/5] Analyzing memory profile...${NC}"
 go tool pprof -text -nodecount=20 -alloc_space "$OUTPUT_DIR/mem.prof" > "$OUTPUT_DIR/mem_analysis.txt" 2>/dev/null || true
-echo -e "${GREEN}✓ Memory profile analyzed${NC}"
+echo -e "${GREEN} Memory profile analyzed${NC}"
 echo ""
 
 # Step 5: Generate summary report
@@ -168,7 +168,7 @@ go tool pprof output/mem.prof
 
 NOTES
 
-echo -e "${GREEN}✓ Report generated${NC}"
+echo -e "${GREEN} Report generated${NC}"
 echo ""
 
 # Print summary
@@ -177,11 +177,11 @@ echo "║                    Analysis Complete                           ║"
 echo "╚════════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Generated files:"
-echo "  📊 $OUTPUT_DIR/benchmark.txt       - Raw benchmark results"
-echo "  📈 $OUTPUT_DIR/REPORT.md           - Summary report"
-echo "  🔥 $OUTPUT_DIR/cpu.prof            - CPU profile"
-echo "  🔒 $OUTPUT_DIR/mutex.prof          - Mutex profile"
-echo "  💾 $OUTPUT_DIR/mem.prof            - Memory profile"
+echo "   $OUTPUT_DIR/benchmark.txt       - Raw benchmark results"
+echo "   $OUTPUT_DIR/REPORT.md           - Summary report"
+echo "   $OUTPUT_DIR/cpu.prof            - CPU profile"
+echo "   $OUTPUT_DIR/mutex.prof          - Mutex profile"
+echo "   $OUTPUT_DIR/mem.prof            - Memory profile"
 echo ""
 echo "Quick view:"
 echo -e "  ${YELLOW}cat $OUTPUT_DIR/REPORT.md${NC}"

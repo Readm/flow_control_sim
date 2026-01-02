@@ -160,7 +160,7 @@ def generate_report(output_dir):
 """
         for nodes, time_ms in results:
             slowdown = time_ms / baseline_time
-            status = "✅" if slowdown < 2 else ("⚠️" if slowdown < 5 else "❌")
+            status = "" if slowdown < 2 else ("" if slowdown < 5 else "")
             report += f"| {nodes} | {time_ms:.2f} | {slowdown:.2f}x | {status} |\n"
 
     report += "\n## Performance Bottlenecks\n\n"
@@ -243,11 +243,11 @@ def main():
     if results and HAVE_MATPLOTLIB:
         print("Generating charts...")
         if generate_charts(results, output_dir):
-            print("✓ Charts generated")
+            print(" Charts generated")
     elif not HAVE_MATPLOTLIB:
         print("Skipping charts (matplotlib not available)")
 
-    print("✓ Report complete")
+    print(" Report complete")
 
 
 if __name__ == '__main__':

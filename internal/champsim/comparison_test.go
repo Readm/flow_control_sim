@@ -1,6 +1,7 @@
 package champsim
 
 import (
+	"os"
 	"testing"
 
 	"github.com/Readm/flow_sim/internal/champsim/cache"
@@ -18,7 +19,16 @@ import (
 // Test_Comparison_RealTrace_DirectVsFlowSim 对比直接集成和 flow_sim 集成
 // 使用相同的 trace 文件，确保结果可比
 func Test_Comparison_RealTrace_DirectVsFlowSim(t *testing.T) {
-	traceFile := "../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		largeTrace := "../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../testdata/traces/small.champsimtrace"
+		}
+	}
 	maxCycles := 10000 // 运行 10000 个周期
 
 	t.Logf("\n========== 使用实际 Trace 对比两种集成方案 ==========")
@@ -58,17 +68,17 @@ func Test_Comparison_RealTrace_DirectVsFlowSim(t *testing.T) {
 
 	t.Log("\n========== 分析 ==========")
 	if absFloat(ipcDiff) < 1.0 {
-		t.Logf("✅ IPC 差异极小 (%.2f%%)，两种方案性能一致", ipcDiff)
+		t.Logf(" IPC 差异极小 (%.2f%%)，两种方案性能一致", ipcDiff)
 	} else if absFloat(ipcDiff) < 5.0 {
-		t.Logf("⚠️  IPC 有轻微差异 (%.2f%%)，可能是框架开销", ipcDiff)
+		t.Logf("  IPC 有轻微差异 (%.2f%%)，可能是框架开销", ipcDiff)
 	} else {
-		t.Logf("❌ IPC 差异较大 (%.2f%%)，需要进一步调查", ipcDiff)
+		t.Logf(" IPC 差异较大 (%.2f%%)，需要进一步调查", ipcDiff)
 	}
 
 	if absFloat(instrDiff) < 1.0 {
-		t.Logf("✅ 退休指令数一致，功能正确性验证通过")
+		t.Logf(" 退休指令数一致，功能正确性验证通过")
 	} else {
-		t.Logf("⚠️  退休指令数有差异 (%.2f%%)，可能存在行为不一致", instrDiff)
+		t.Logf("  退休指令数有差异 (%.2f%%)，可能存在行为不一致", instrDiff)
 	}
 }
 

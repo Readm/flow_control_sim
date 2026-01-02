@@ -82,10 +82,10 @@ func Test_DRAM_Callback_Basic(t *testing.T) {
 
 	// 如果MSHR为空，说明HandleFill被调用了
 	if mshrSize == 0 {
-		t.Log("✅ MSHR is empty - HandleFill was called")
+		t.Log(" MSHR is empty - HandleFill was called")
 		callbackCalled = true
 	} else {
-		t.Errorf("❌ MSHR still has %d entries - HandleFill was NOT called", mshrSize)
+		t.Errorf(" MSHR still has %d entries - HandleFill was NOT called", mshrSize)
 	}
 
 	// 验证第二次访问应该hit
@@ -93,10 +93,10 @@ func Test_DRAM_Callback_Basic(t *testing.T) {
 	t.Logf("Second access: hit=%v", hit2)
 
 	if !callbackCalled {
-		t.Error("❌ Callback was not called")
+		t.Error(" Callback was not called")
 	} else if !hit2 {
-		t.Error("❌ Second access should hit, but missed")
+		t.Error(" Second access should hit, but missed")
 	} else {
-		t.Log("✅ Test passed: Callback was called and data was filled")
+		t.Log(" Test passed: Callback was called and data was filled")
 	}
 }

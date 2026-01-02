@@ -380,26 +380,26 @@ func (net *Network) UpdateNetworkState(cycle uint64) {
 
 ## 4. 优势
 
-### ✅ 模块化
+###  模块化
 - Address Mapper, Routing Algorithm, Topology 独立实现
 - 每个组件可以单独测试和替换
 
-### ✅ 可扩展
+###  可扩展
 - 支持任意拓扑（Mesh, Ring, Tree, Custom）
 - 支持任意路由算法（静态、动态、自适应）
 - 支持任意地址映射策略
 
-### ✅ 自动化
+###  自动化
 - TopologyBuilder 自动构建整个网络
 - 声明式配置文件
 - 用户只需指定拓扑类型和参数
 
-### ✅ 动态路由
+###  动态路由
 - NetworkState 跟踪网络状态
 - 路由算法可以访问实时状态
 - 支持自适应路由和负载均衡
 
-### ✅ 每节点独立
+###  每节点独立
 - 每个节点有自己的 Decoder 实例
 - 但共享 AddressMapper 和 NetworkState
 

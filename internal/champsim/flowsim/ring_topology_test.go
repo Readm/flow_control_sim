@@ -54,7 +54,7 @@ func TestRingTopologyNodeIDs(t *testing.T) {
 		t.Errorf("DRAM ID 范围错误: [%d, %d]", nodeIDs.DRAMIDs[0], nodeIDs.DRAMIDs[7])
 	}
 
-	t.Log("✅ Ring 拓扑节点 ID 分配正确")
+	t.Log(" Ring 拓扑节点 ID 分配正确")
 }
 
 // 测试 Ring 拓扑映射关系
@@ -116,7 +116,7 @@ func TestRingTopologyMappings(t *testing.T) {
 		t.Errorf("HA 79 应该连接 DRAM 87，实际 %d", haToDRAM[79])
 	}
 
-	t.Log("✅ Ring 拓扑映射关系正确")
+	t.Log(" Ring 拓扑映射关系正确")
 }
 
 // 测试 Ring 邻居关系
@@ -142,7 +142,7 @@ func TestRingNeighbors(t *testing.T) {
 		t.Errorf("HA 75 的邻居应该是 (74, 76)，实际 (%d, %d)", left, right)
 	}
 
-	t.Log("✅ Ring 邻居关系正确")
+	t.Log(" Ring 邻居关系正确")
 }
 
 // 测试 Ring 拓扑一致性树构建
@@ -222,7 +222,7 @@ func TestBuildRingCoherenceTree(t *testing.T) {
 		t.Errorf("一致性树验证失败: %v", err)
 	}
 
-	t.Log("✅ Ring 拓扑一致性树构建正确")
+	t.Log(" Ring 拓扑一致性树构建正确")
 }
 
 // 测试跨 Domain 路由
@@ -284,5 +284,5 @@ func TestRingCrossDomainRouting(t *testing.T) {
 
 	t.Logf("完整一致性路径: %v", path)
 
-	t.Log("✅ Ring 拓扑跨 Domain 路由正确")
+	t.Log(" Ring 拓扑跨 Domain 路由正确")
 }

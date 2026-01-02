@@ -72,7 +72,7 @@ func TestChampSimCoherenceTree_L2Directory(t *testing.T) {
 		t.Errorf("CPU 0 的一致性请求应该发送到 L2 (%d)，实际是 %d", l2NodeID, nextHop)
 	}
 
-	t.Log("✅ 测试通过：ChampSim 拓扑 (Directory 在 L2)")
+	t.Log(" 测试通过：ChampSim 拓扑 (Directory 在 L2)")
 }
 
 // 测试 ChampSim 拓扑的一致性树构建（Directory 在 HA）
@@ -143,7 +143,7 @@ func TestChampSimCoherenceTree_HADirectory(t *testing.T) {
 		t.Errorf("CPU 0 的一致性请求应该发送到 HA (%d)，实际是 %d", haNodeID, nextHop)
 	}
 
-	t.Log("✅ 测试通过：ChampSim 拓扑 (Directory 在 HA)")
+	t.Log(" 测试通过：ChampSim 拓扑 (Directory 在 HA)")
 }
 
 // 测试地址映射到 DRAM
@@ -195,7 +195,7 @@ func TestChampSimCoherenceTree_AddressMapping(t *testing.T) {
 		t.Logf("地址 0x%04X → Home Node %d (L2)", addr, homeNodeID)
 	}
 
-	t.Log("✅ 测试通过：地址映射")
+	t.Log(" 测试通过：地址映射")
 }
 
 // 测试多个 CPU 的路由
@@ -238,8 +238,8 @@ func TestChampSimCoherenceTree_MultiCPURouting(t *testing.T) {
 			t.Errorf("CPU %d 的一致性请求应该发送到 L2 (%d)，实际是 %d", cpuID, l2NodeID, nextHop)
 		}
 
-		t.Logf("CPU %d → L2 (%d) ✓", cpuID, nextHop)
+		t.Logf("CPU %d → L2 (%d) ", cpuID, nextHop)
 	}
 
-	t.Log("✅ 测试通过：多 CPU 路由")
+	t.Log(" 测试通过：多 CPU 路由")
 }

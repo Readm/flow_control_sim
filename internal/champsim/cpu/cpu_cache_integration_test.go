@@ -1,6 +1,7 @@
 package cpu
 
 import (
+	"os"
 	"testing"
 
 	"github.com/Readm/flow_sim/internal/champsim/cache"
@@ -10,11 +11,20 @@ import (
 
 // Test_CPUCache_Integration 测试CPU+Cache集成
 func Test_CPUCache_Integration(t *testing.T) {
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	traceReader, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	defer traceReader.Close()
 
@@ -71,46 +81,55 @@ func Test_CPUCache_Integration(t *testing.T) {
 
 	// 验证基本正确性
 	if cpuStats.TotalInstructions == 0 {
-		t.Error("❌ 没有指令退休")
+		t.Error("没有指令退休")
 	} else {
-		t.Logf("✅ 指令退休功能正常")
+		t.Logf("指令退休功能正常")
 	}
 
 	// 验证Cache有访问
 	if cacheStats.Accesses == 0 {
-		t.Error("❌ Cache没有被访问")
+		t.Error("Cache没有被访问")
 	} else {
-		t.Logf("✅ Cache正常工作")
+		t.Logf("Cache正常工作")
 	}
 
 	// 验证Cache有命中
 	if cacheStats.Hits == 0 {
-		t.Logf("⚠️  没有Cache命中（全是cold miss）")
+		t.Logf("没有Cache命中（全是cold miss）")
 	} else {
-		t.Logf("✅ Cache有命中: %.2f%%", cacheStats.HitRate()*100)
+		t.Logf("Cache有命中: %.2f%%", cacheStats.HitRate()*100)
 	}
 
 	// 验证IPC在合理范围内
 	ipc := float64(cpuStats.TotalInstructions) / float64(maxCycles)
 	if ipc < 0.5 || ipc > 4.0 {
-		t.Errorf("❌ IPC超出合理范围: %.2f (期望 0.5-4.0)", ipc)
+		t.Errorf("IPC超出合理范围: %.2f (期望 0.5-4.0)", ipc)
 	} else {
-		t.Logf("✅ IPC在合理范围内: %.2f", ipc)
+		t.Logf("IPC在合理范围内: %.2f", ipc)
 	}
 
-	t.Logf("\n🎉 CPU+Cache 集成测试通过！")
+	t.Logf("\nCPU+Cache 集成测试通过！")
 }
 
 // Test_CPUCache_比较无Cache性能 比较有Cache和无Cache的性能差异
 func Test_CPUCache_比较无Cache性能(t *testing.T) {
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	const maxCycles = 1000
 
 	// ========== 无Cache测试 ==========
 	traceReader1, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	defer traceReader1.Close()
 
@@ -128,7 +147,7 @@ func Test_CPUCache_比较无Cache性能(t *testing.T) {
 	// ========== 有Cache测试 ==========
 	traceReader2, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	defer traceReader2.Close()
 
@@ -178,9 +197,9 @@ func Test_CPUCache_比较无Cache性能(t *testing.T) {
 
 	// 验证两者IPC相近（因为都是standalone模式）
 	if ipcWithCache < ipcNoCache*0.9 || ipcWithCache > ipcNoCache*1.1 {
-		t.Logf("⚠️  IPC差异较大：%.2f vs %.2f (standalone模式下应该相近)", ipcWithCache, ipcNoCache)
+		t.Logf("IPC差异较大：%.2f vs %.2f (standalone模式下应该相近)", ipcWithCache, ipcNoCache)
 	} else {
-		t.Logf("✅ IPC相近（符合standalone模式预期）")
+		t.Logf("IPC相近（符合standalone模式预期）")
 	}
 }
 
@@ -190,11 +209,20 @@ func Test_CPUCache_长时间运行(t *testing.T) {
 		t.Skip("Skipping long run test in short mode")
 	}
 
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	traceReader, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	defer traceReader.Close()
 
@@ -252,6 +280,6 @@ func Test_CPUCache_长时间运行(t *testing.T) {
 	if stats.TotalInstructions < 5000 {
 		t.Errorf("长时间运行指令数过少: %d (期望 > 5000)", stats.TotalInstructions)
 	} else {
-		t.Logf("✅ 长时间运行稳定性验证通过")
+		t.Logf("长时间运行稳定性验证通过")
 	}
 }

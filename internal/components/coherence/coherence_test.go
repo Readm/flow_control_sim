@@ -14,8 +14,8 @@ func TestCoherenceTree_SingleLayer_L3Directory(t *testing.T) {
 			0: {NodeID: 0, Capability: NodeCapability{Role: RoleCompute, CanInitiate: true}},
 			1: {NodeID: 1, Capability: NodeCapability{Role: RoleCompute, CanInitiate: true}},
 			2: {NodeID: 2, Capability: NodeCapability{Role: RoleCache, CacheLevel: 2, HasDirectory: false}},
-			3: {NodeID: 3, Capability: NodeCapability{Role: RoleCache, CacheLevel: 3, HasDirectory: true}},  // ✅ L3 有 Directory
-			4: {NodeID: 4, Capability: NodeCapability{Role: RoleMemoryCtrl, HasDirectory: false}},          // ❌ HA 没有 Directory
+			3: {NodeID: 3, Capability: NodeCapability{Role: RoleCache, CacheLevel: 3, HasDirectory: true}},  //  L3 有 Directory
+			4: {NodeID: 4, Capability: NodeCapability{Role: RoleMemoryCtrl, HasDirectory: false}},          //  HA 没有 Directory
 			5: {NodeID: 5, Capability: NodeCapability{Role: RoleMemory}},
 		},
 		Connections: map[int][]int{
@@ -68,7 +68,7 @@ func TestCoherenceTree_SingleLayer_L3Directory(t *testing.T) {
 		t.Errorf("CPU 0 的下一跳应该是 L3 (3)，实际是 %d", nextHop)
 	}
 
-	t.Log("✅ 测试通过：单层 Directory (L3)")
+	t.Log(" 测试通过：单层 Directory (L3)")
 }
 
 // 测试配置 2: 单层 Directory（只在 HA）
@@ -80,8 +80,8 @@ func TestCoherenceTree_SingleLayer_HADirectory(t *testing.T) {
 			0: {NodeID: 0, Capability: NodeCapability{Role: RoleCompute, CanInitiate: true}},
 			1: {NodeID: 1, Capability: NodeCapability{Role: RoleCompute, CanInitiate: true}},
 			2: {NodeID: 2, Capability: NodeCapability{Role: RoleCache, CacheLevel: 2, HasDirectory: false}},
-			3: {NodeID: 3, Capability: NodeCapability{Role: RoleCache, CacheLevel: 3, HasDirectory: false}},  // ❌ L3 没有 Directory
-			4: {NodeID: 4, Capability: NodeCapability{Role: RoleMemoryCtrl, HasDirectory: true}},            // ✅ HA 有 Directory
+			3: {NodeID: 3, Capability: NodeCapability{Role: RoleCache, CacheLevel: 3, HasDirectory: false}},  //  L3 没有 Directory
+			4: {NodeID: 4, Capability: NodeCapability{Role: RoleMemoryCtrl, HasDirectory: true}},            //  HA 有 Directory
 			5: {NodeID: 5, Capability: NodeCapability{Role: RoleMemory}},
 		},
 		Connections: map[int][]int{
@@ -132,7 +132,7 @@ func TestCoherenceTree_SingleLayer_HADirectory(t *testing.T) {
 		t.Errorf("CPU 0 的下一跳应该是 HA (4)，实际是 %d", nextHop)
 	}
 
-	t.Log("✅ 测试通过：单层 Directory (HA)")
+	t.Log(" 测试通过：单层 Directory (HA)")
 }
 
 // 测试配置 3: 两层 Directory（L3 + HA）
@@ -144,8 +144,8 @@ func TestCoherenceTree_TwoLayer_L3AndHA(t *testing.T) {
 			0: {NodeID: 0, Capability: NodeCapability{Role: RoleCompute, CanInitiate: true}},
 			1: {NodeID: 1, Capability: NodeCapability{Role: RoleCompute, CanInitiate: true}},
 			2: {NodeID: 2, Capability: NodeCapability{Role: RoleCache, CacheLevel: 2, HasDirectory: false}},
-			3: {NodeID: 3, Capability: NodeCapability{Role: RoleCache, CacheLevel: 3, HasDirectory: true}},  // ✅ L3 有 Directory
-			4: {NodeID: 4, Capability: NodeCapability{Role: RoleMemoryCtrl, HasDirectory: true}},           // ✅ HA 有 Directory
+			3: {NodeID: 3, Capability: NodeCapability{Role: RoleCache, CacheLevel: 3, HasDirectory: true}},  //  L3 有 Directory
+			4: {NodeID: 4, Capability: NodeCapability{Role: RoleMemoryCtrl, HasDirectory: true}},           //  HA 有 Directory
 			5: {NodeID: 5, Capability: NodeCapability{Role: RoleMemory}},
 		},
 		Connections: map[int][]int{
@@ -218,7 +218,7 @@ func TestCoherenceTree_TwoLayer_L3AndHA(t *testing.T) {
 		t.Errorf("路径长度不匹配，期望 %d，实际 %d。路径: %v", len(expectedPath), len(path), path)
 	}
 
-	t.Log("✅ 测试通过：两层 Directory (L3 + HA)")
+	t.Log(" 测试通过：两层 Directory (L3 + HA)")
 }
 
 // 测试配置 4: 多个 L3 Slice（分布式 Directory）
@@ -235,8 +235,8 @@ func TestCoherenceTree_MultipleL3Slices(t *testing.T) {
 			4: {NodeID: 4, Capability: NodeCapability{Role: RoleCache, CacheLevel: 2, HasDirectory: false}},
 			5: {NodeID: 5, Capability: NodeCapability{Role: RoleCache, CacheLevel: 2, HasDirectory: false}},
 
-			6: {NodeID: 6, Capability: NodeCapability{Role: RoleCache, CacheLevel: 3, HasDirectory: true}},  // ✅ L3[0]
-			7: {NodeID: 7, Capability: NodeCapability{Role: RoleCache, CacheLevel: 3, HasDirectory: true}},  // ✅ L3[1]
+			6: {NodeID: 6, Capability: NodeCapability{Role: RoleCache, CacheLevel: 3, HasDirectory: true}},  //  L3[0]
+			7: {NodeID: 7, Capability: NodeCapability{Role: RoleCache, CacheLevel: 3, HasDirectory: true}},  //  L3[1]
 
 			8: {NodeID: 8, Capability: NodeCapability{Role: RoleMemoryCtrl, HasDirectory: false}},
 			9: {NodeID: 9, Capability: NodeCapability{Role: RoleMemory}},
@@ -283,7 +283,7 @@ func TestCoherenceTree_MultipleL3Slices(t *testing.T) {
 	t.Logf("地址 0x0000 → Home Node %d", homeNode0)
 	t.Logf("地址 0x0040 → Home Node %d", homeNode1)
 
-	t.Log("✅ 测试通过：多个 L3 Slice")
+	t.Log(" 测试通过：多个 L3 Slice")
 }
 
 // 测试配置 5: 无 Directory 节点（应该失败）
@@ -293,8 +293,8 @@ func TestCoherenceTree_NoDirectory_ShouldFail(t *testing.T) {
 	topology := &Topology{
 		Nodes: map[int]*NodeDescriptor{
 			0: {NodeID: 0, Capability: NodeCapability{Role: RoleCompute, CanInitiate: true}},
-			1: {NodeID: 1, Capability: NodeCapability{Role: RoleCache, CacheLevel: 2, HasDirectory: false}}, // ❌ 没有 Directory
-			2: {NodeID: 2, Capability: NodeCapability{Role: RoleMemoryCtrl, HasDirectory: false}},           // ❌ 没有 Directory
+			1: {NodeID: 1, Capability: NodeCapability{Role: RoleCache, CacheLevel: 2, HasDirectory: false}}, //  没有 Directory
+			2: {NodeID: 2, Capability: NodeCapability{Role: RoleMemoryCtrl, HasDirectory: false}},           //  没有 Directory
 			3: {NodeID: 3, Capability: NodeCapability{Role: RoleMemory}},
 		},
 		Connections: map[int][]int{
@@ -309,14 +309,14 @@ func TestCoherenceTree_NoDirectory_ShouldFail(t *testing.T) {
 
 	tree, err := BuildCoherenceTree(topology, config, nil)
 	if err == nil {
-		t.Error("❌ 应该失败（没有 Directory 节点），但成功了")
+		t.Error(" 应该失败（没有 Directory 节点），但成功了")
 	}
 
 	if tree != nil {
-		t.Error("❌ 应该返回 nil tree，但返回了非 nil")
+		t.Error(" 应该返回 nil tree，但返回了非 nil")
 	}
 
-	t.Logf("✅ 正确失败，错误信息: %v", err)
+	t.Logf(" 正确失败，错误信息: %v", err)
 }
 
 // 测试配置 6: 用户显式指定（复杂拓扑）
@@ -367,7 +367,7 @@ func TestCoherenceTree_ExplicitBuilder(t *testing.T) {
 		t.Errorf("L3[0] 应该管理 2 个节点，实际管理 %d 个", len(l3_0.Domain))
 	}
 
-	t.Log("✅ 测试通过：用户显式指定")
+	t.Log(" 测试通过：用户显式指定")
 }
 
 // 测试配置 7: 地址映射粒度验证
@@ -402,7 +402,7 @@ func TestAddressMappingConfig_Validation(t *testing.T) {
 		}
 	}
 
-	t.Log("✅ 测试通过：地址映射配置验证")
+	t.Log(" 测试通过：地址映射配置验证")
 }
 
 // 测试配置 8: 路由路径验证
@@ -485,5 +485,5 @@ func TestCoherenceRouter_PathValidation(t *testing.T) {
 	}
 
 	t.Logf("路径: %v", path)
-	t.Log("✅ 测试通过：跨 Domain 路由路径正确")
+	t.Log(" 测试通过：跨 Domain 路由路径正确")
 }

@@ -26,19 +26,19 @@ echo "[1/5] Running benchmarks..."
 cd "$NETWORK_DIR"
 go test -bench=BenchmarkNetworkScaling -run=^$ -benchtime=3x \
     > "$OUTPUT_DIR/benchmark.txt" 2>&1
-echo "✓ Benchmarks complete"
+echo " Benchmarks complete"
 
 # Step 2: Generate CPU profile
 echo "[2/5] Generating CPU profile..."
 go test -bench=BenchmarkNetworkScaling/Nodes_32 -run=^$ -benchtime=5x \
     -cpuprofile="$OUTPUT_DIR/cpu.prof" > /dev/null 2>&1
-echo "✓ CPU profile generated"
+echo " CPU profile generated"
 
 # Step 3: Generate mutex profile
 echo "[3/5] Generating mutex profile..."
 go test -bench=BenchmarkNetworkScaling/Nodes_64 -run=^$ -benchtime=10x \
     -mutexprofile="$OUTPUT_DIR/mutex.prof" > /dev/null 2>&1 || true
-echo "✓ Mutex profile generated"
+echo " Mutex profile generated"
 
 # Step 4: Analyze profiles
 echo "[4/5] Analyzing profiles..."
@@ -55,12 +55,12 @@ else
     echo "No mutex profile generated" > "$OUTPUT_DIR/mutex_top.txt"
 fi
 
-echo "✓ Profile analysis complete"
+echo " Profile analysis complete"
 
 # Step 5: Generate report and charts
 echo "[5/5] Generating report..."
 python3 "$SCRIPT_DIR/generate_report.py" "$OUTPUT_DIR"
-echo "✓ Report generated"
+echo " Report generated"
 
 echo ""
 echo "================================================================================"

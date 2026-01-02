@@ -39,8 +39,8 @@ func TestGenerateChampSimTrace(t *testing.T) {
 	oldMaxProcs := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(oldMaxProcs)
 
-	t.Logf("🎬 生成 ChampSim 64-CPU Chrome Trace...")
-	t.Logf("📊 配置: %d CPUs, %d cycles, 1 physical core", numSimCPUs, maxCycles)
+	t.Logf(" 生成 ChampSim 64-CPU Chrome Trace...")
+	t.Logf(" 配置: %d CPUs, %d cycles, 1 physical core", numSimCPUs, maxCycles)
 
 	// 1. 创建 tracer
 	// 追踪所有 RingRouter 节点 (200-215)
@@ -66,7 +66,7 @@ func TestGenerateChampSimTrace(t *testing.T) {
 	}
 	tracer := trace.NewTraceRecorder(config)
 
-	t.Logf("📝 Node filter: %v", nodeFilter)
+	t.Logf(" Node filter: %v", nodeFilter)
 
 	// 2. 构建系统
 	net, handlers, err := buildChampSimSystem(numSimCPUs, traceFile)
@@ -76,20 +76,20 @@ func TestGenerateChampSimTrace(t *testing.T) {
 	defer handlers.Cleanup()
 
 	// 3. 预热 trace readers（不包含在 trace 时间内）
-	t.Logf("🔥 预热 trace readers...")
+	t.Logf(" 预热 trace readers...")
 	for i, reader := range handlers.traceReaders {
 		if err := reader.Warmup(); err != nil {
 			t.Fatalf("Failed to warmup trace reader %d: %v", i, err)
 		}
 	}
-	t.Logf("✅ Warmup 完成")
+	t.Logf(" Warmup 完成")
 
 	// 4. 设置 tracer（在 Warmup 之后，确保 trace 不包含预热时间）
 	net.SetTracer(tracer)
-	t.Logf("✅ Tracer 已设置，追踪 %d 个节点", len(nodeFilter))
+	t.Logf(" Tracer 已设置，追踪 %d 个节点", len(nodeFilter))
 
 	// 5. 运行仿真
-	t.Logf("🚀 开始仿真 %d cycles...", maxCycles)
+	t.Logf(" 开始仿真 %d cycles...", maxCycles)
 	if err := net.AdvanceTo(maxCycles); err != nil {
 		t.Fatalf("Simulation failed: %v", err)
 	}
@@ -141,18 +141,18 @@ func TestGenerateChampSimTrace(t *testing.T) {
 
 	// 6. 报告结果
 	eventCount := tracer.EventCount()
-	t.Logf("✅ Trace 生成成功!")
-	t.Logf("📊 生成了 %d 个事件", eventCount)
-	t.Logf("📁 文件位置: %s", outputFile)
-	t.Logf("🌐 查看方式: 在 Chrome 中打开 chrome://tracing")
-	t.Logf("📖 操作指南:")
+	t.Logf(" Trace 生成成功!")
+	t.Logf(" 生成了 %d 个事件", eventCount)
+	t.Logf(" 文件位置: %s", outputFile)
+	t.Logf(" 查看方式: 在 Chrome 中打开 chrome://tracing")
+	t.Logf(" 操作指南:")
 	t.Logf("   1. 打开 Chrome 浏览器")
 	t.Logf("   2. 访问 chrome://tracing")
 	t.Logf("   3. 点击 'Load' 按钮")
 	t.Logf("   4. 选择 %s", outputFile)
 	t.Logf("   5. 使用 WASD 导航，鼠标点击查看详情")
 	t.Logf("")
-	t.Logf("🔍 重点关注:")
+	t.Logf(" 重点关注:")
 	t.Logf("   - RingRouter 的 Receive 阶段是否长时间阻塞")
 	t.Logf("   - Process 阶段的执行时间分布")
 	t.Logf("   - Send 阶段是否被下游背压阻塞")
@@ -213,7 +213,7 @@ func TestGenerateFullSystemTrace(t *testing.T) {
 		t.Fatalf("Failed to export trace: %v", err)
 	}
 
-	t.Logf("✅ 完整系统 Trace 生成成功!")
-	t.Logf("📊 生成了 %d 个事件", tracer.EventCount())
-	t.Logf("📁 文件位置: %s (gzip 压缩)", outputFile)
+	t.Logf(" 完整系统 Trace 生成成功!")
+	t.Logf(" 生成了 %d 个事件", tracer.EventCount())
+	t.Logf(" 文件位置: %s (gzip 压缩)", outputFile)
 }

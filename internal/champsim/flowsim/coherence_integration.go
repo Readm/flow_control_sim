@@ -123,7 +123,7 @@ func BuildChampSimCoherenceTreeWithHADirectory(
 		Capability: coherence.NodeCapability{
 			Role:         coherence.RoleCache,
 			CacheLevel:   2,
-			HasDirectory: false, // ❌ L2 没有 Directory
+			HasDirectory: false, //  L2 没有 Directory
 		},
 	}
 	topology.Connections[l2NodeID] = append(topology.Connections[l2NodeID], haNodeID)
@@ -134,7 +134,7 @@ func BuildChampSimCoherenceTreeWithHADirectory(
 		NodeID: haNodeID,
 		Capability: coherence.NodeCapability{
 			Role:         coherence.RoleMemoryCtrl,
-			HasDirectory: true, // ✅ HA 有 Directory
+			HasDirectory: true, //  HA 有 Directory
 		},
 	}
 	for _, dramID := range dramNodeIDs {

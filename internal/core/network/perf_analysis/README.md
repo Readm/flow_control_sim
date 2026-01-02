@@ -68,9 +68,9 @@ open output/performance.png
 
 ### Good vs Bad Performance
 
-- ✅ **Good**: Efficiency > 70%, Slowdown < 2x
-- ⚠️ **Warning**: Efficiency 50-70%, Slowdown 2-5x
-- ❌ **Poor**: Efficiency < 50%, Slowdown > 5x
+-  **Good**: Efficiency > 70%, Slowdown < 2x
+-  **Warning**: Efficiency 50-70%, Slowdown 2-5x
+-  **Poor**: Efficiency < 50%, Slowdown > 5x
 
 ### Typical Bottlenecks
 
@@ -124,15 +124,15 @@ Shows lock contention. Look for:
 ```bash
 $ ./run_analysis.sh
 [1/5] Running benchmarks...
-✓ Benchmarks complete
+ Benchmarks complete
 [2/5] Generating CPU profile...
-✓ CPU profile generated
+ CPU profile generated
 [3/5] Generating mutex profile...
-✓ Mutex profile generated
+ Mutex profile generated
 [4/5] Analyzing profiles...
-✓ Profile analysis complete
+ Profile analysis complete
 [5/5] Generating report...
-✓ Report generated
+ Report generated
 
 Generated files:
   - output/benchmark.txt      : Benchmark results

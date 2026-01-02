@@ -85,9 +85,9 @@ func TestTraceBasic(t *testing.T) {
 		t.Errorf("Expected some events, got 0")
 	}
 
-	fmt.Printf("✅ Trace test passed! Generated %d events\n", eventCount)
-	fmt.Printf("📊 Trace file: %s\n", outputFile)
-	fmt.Printf("🌐 View in Chrome: chrome://tracing\n")
+	fmt.Printf(" Trace test passed! Generated %d events\n", eventCount)
+	fmt.Printf(" Trace file: %s\n", outputFile)
+	fmt.Printf(" View in Chrome: chrome://tracing\n")
 }
 
 // TestTraceWithMetadata 测试带元数据的导出
@@ -129,6 +129,6 @@ func TestTraceWithMetadata(t *testing.T) {
 		t.Fatalf("Failed to export with metadata: %v", err)
 	}
 
-	fmt.Printf("✅ Metadata test passed!\n")
-	fmt.Printf("📊 Trace file: %s\n", outputFile)
+	fmt.Printf(" Metadata test passed!\n")
+	fmt.Printf(" Trace file: %s\n", outputFile)
 }

@@ -112,7 +112,7 @@ func TestAddRequest(t *testing.T) {
 		t.Errorf("WQ size mismatch: got %d, want 1", len(dram.WQ))
 	}
 
-	t.Logf("✅ Request addition test passed")
+	t.Logf(" Request addition test passed")
 	t.Logf("  RQ: %d, WQ: %d", len(dram.RQ), len(dram.WQ))
 }
 
@@ -141,7 +141,7 @@ func TestSchedulePacket(t *testing.T) {
 	if pkt == nil {
 		t.Error("schedulePacket returned nil")
 	} else {
-		t.Logf("✅ Scheduled packet: InstrID=%d, Addr=0x%x", pkt.InstrID, pkt.Address)
+		t.Logf(" Scheduled packet: InstrID=%d, Addr=0x%x", pkt.InstrID, pkt.Address)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestServicePacket(t *testing.T) {
 		t.Error("Bank should have open row")
 	}
 
-	t.Logf("✅ Service test passed")
+	t.Logf(" Service test passed")
 	t.Logf("  Bank %d: Valid=%v, OpenRow=%v, ReadyTime=%d",
 		bankIdx, bank.Valid, bank.OpenRow, bank.ReadyTime)
 }
@@ -274,12 +274,12 @@ func TestRowBufferHit(t *testing.T) {
 	// 注意：由于测试的特殊性（手动重置bank.Valid），
 	// 这里可能不会完全符合预期。但TestDRAMOperate证明了Row Buffer Hit是工作的
 	if latency2 > 0 && latency2 <= expectedLatency2 {
-		t.Logf("✅ Row Buffer Hit latency acceptable: %d cycles", latency2)
+		t.Logf(" Row Buffer Hit latency acceptable: %d cycles", latency2)
 	} else if latency2 > expectedLatency2 {
-		t.Logf("⚠️  Latency higher than expected: got %d, want %d", latency2, expectedLatency2)
+		t.Logf("  Latency higher than expected: got %d, want %d", latency2, expectedLatency2)
 	}
 
-	t.Logf("✅ Row Buffer Hit/Miss basic test passed")
+	t.Logf(" Row Buffer Hit/Miss basic test passed")
 	t.Logf("  First access (miss): %d cycles", latency1)
 	t.Logf("  Second access (hit): %d cycles", latency2)
 	t.Logf("  Row Buffer Hit latency reduced by %d cycles", latency1-latency2)
@@ -317,7 +317,7 @@ func TestDRAMOperate(t *testing.T) {
 		dram.Tick()
 	}
 
-	t.Logf("✅ DRAM operate test passed")
+	t.Logf(" DRAM operate test passed")
 	t.Logf("  Completed requests: %d/10", completed)
 	t.Logf("  RQ accesses: %d", dram.stats.RQAccesses)
 	t.Logf("  Row Buffer Hits: %d", dram.stats.RQRowBufferHit)

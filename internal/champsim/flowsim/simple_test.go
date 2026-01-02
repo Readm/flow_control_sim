@@ -109,7 +109,7 @@ func Test_Simple_FlowSim_Ping(t *testing.T) {
 	if receivedCount != 1 {
 		t.Errorf("Expected to receive 1 packet, got %d", receivedCount)
 	} else {
-		t.Log("✅ Simple ping test passed!")
+		t.Log(" Simple ping test passed!")
 	}
 }
 
@@ -217,7 +217,7 @@ func Test_PortNaming_Example(t *testing.T) {
 	}
 
 	if receivedA == 1 && receivedB == 1 {
-		t.Log("✅ Port naming example test passed!")
+		t.Log(" Port naming example test passed!")
 		t.Log("   端口命名让连接更清晰：")
 		t.Log("   - 使用名称: ConnectNodes(sender, \"to_receiver_a\", ...)")
 		t.Log("   - 使用索引: ConnectNodes(sender, 0, ...) // 需要记住 0 是哪个端口")

@@ -31,15 +31,15 @@ CHI (Coherence Hub Interface) 是 ARM AMBA 5 规范的一部分，用于实现�
 ### 1.2 设计目标
 
 **核心目标**:
-- ✅ **可读性**: Transaction 逻辑用同步代码编写（Yield/Resume 模式）
-- ✅ **正确性**: 所有状态修改在 Node.Tick 中串行化
-- ✅ **解耦性**: 框架保持协议无关，CHI 零耦合
-- ✅ **可测试性**: 完整的单元测试和集成测试覆盖
+-  **可读性**: Transaction 逻辑用同步代码编写（Yield/Resume 模式）
+-  **正确性**: 所有状态修改在 Node.Tick 中串行化
+-  **解耦性**: 框架保持协议无关，CHI 零耦合
+-  **可测试性**: 完整的单元测试和集成测试覆盖
 
 **非目标**:
-- ❌ 不实现完整的 CHI 规范（仅实现核心子集）
-- ❌ 不追求极致性能（以可读性为先）
-- ❌ 不支持实时硬件仿真
+-  不实现完整的 CHI 规范（仅实现核心子集）
+-  不追求极致性能（以可读性为先）
+-  不支持实时硬件仿真
 
 ### 1.3 架构概览
 
@@ -226,9 +226,9 @@ func (n *CoherenceNode) Tick(ctx context.Context, cycle uint64, linkDelay time.D
 ```
 
 **保证**:
-- ✅ 所有 cache/directory 状态修改都在 Tick 中执行
-- ✅ 无并发竞争，无需复杂的锁
-- ✅ Transaction goroutine 只负责控制流，不直接修改状态
+-  所有 cache/directory 状态修改都在 Tick 中执行
+-  无并发竞争，无需复杂的锁
+-  Transaction goroutine 只负责控制流，不直接修改状态
 
 ### 2.4 消息路由与恢复
 
@@ -822,10 +822,10 @@ func SnpSharedFwdHandler(
 **文件**: `internal/core/node/node_test.go`
 
 **覆盖场景**:
-- ✅ 基本存储/检索/删除
-- ✅ 多种数据类型（string, int, bool, slice, map, struct）
-- ✅ 并发安全性（隔离性）
-- ✅ 删除不存在键的安全性
+-  基本存储/检索/删除
+-  多种数据类型（string, int, bool, slice, map, struct）
+-  并发安全性（隔离性）
+-  删除不存在键的安全性
 
 **示例**:
 ```go
@@ -852,14 +852,14 @@ func TestNodeDataMap(t *testing.T) {
 **文件**: `internal/components/cache/cache_test.go`
 
 **覆盖场景**:
-- ✅ HandleSnoop: 各状态的 snoop 响应
+-  HandleSnoop: 各状态的 snoop 响应
   - M/E/O 提供数据并降级到 S
   - S/I 不提供数据
   - 非存在行返回无数据
-- ✅ CanForward: 各状态的转发能力
+-  CanForward: 各状态的转发能力
   - M/E/O 可以转发
   - S/I 不能转发
-- ✅ Owned 状态: MOESI 协议支持
+-  Owned 状态: MOESI 协议支持
 
 **示例**:
 ```go
@@ -888,21 +888,21 @@ func TestFullyAssociativeCache_HandleSnoop(t *testing.T) {
 **文件**: `internal/components/directory/directory_test.go`
 
 **覆盖场景**:
-- ✅ MustWaitForWriteback: Modified 需要写回
-- ✅ HasPendingRequest: 当前实现文档化
-- ✅ 状态转换表测试
-- ✅ Modified 状态完整场景
+-  MustWaitForWriteback: Modified 需要写回
+-  HasPendingRequest: 当前实现文档化
+-  状态转换表测试
+-  Modified 状态完整场景
 
 #### 5.1.4 Decoder 接口测试
 
 **文件**: `internal/components/decoder/decoder_test.go`
 
 **覆盖场景**:
-- ✅ 接口契约
-- ✅ 基础字段（Addr, TargetID）
-- ✅ 标准属性（IsMemory, IsCacheable, HomeNodeID）
-- ✅ 多地址解码
-- ✅ 自定义属性扩展
+-  接口契约
+-  基础字段（Addr, TargetID）
+-  标准属性（IsMemory, IsCacheable, HomeNodeID）
+-  多地址解码
+-  自定义属性扩展
 
 ### 5.2 CHI Transaction 测试 (TODO)
 
@@ -1037,7 +1037,7 @@ func TestMultiCoreCoherence(t *testing.T) {
 
 ## 6. 实现检查清单
 
-### 6.1 框架扩展 ✅
+### 6.1 框架扩展 
 
 - [x] Node.data map 实现
   - [x] SetData/GetData/HasData/DeleteData/GetAllData
@@ -1060,7 +1060,7 @@ func TestMultiCoreCoherence(t *testing.T) {
   - [x] 标准属性常量
   - [x] 单元测试覆盖
 
-### 6.2 CHI 组件 ✅
+### 6.2 CHI 组件 
 
 - [x] constants.go - CHI 操作码
   - [x] REQ/RSP/DAT/SNP 通道操作码
@@ -1088,9 +1088,9 @@ func TestMultiCoreCoherence(t *testing.T) {
   - [x] 设计说明
   - [x] 使用示例
 
-### 6.3 测试 ✅ (框架) / ⏳ (CHI)
+### 6.3 测试  (框架) / ⏳ (CHI)
 
-**框架测试** ✅:
+**框架测试** :
 - [x] Node.data: 3 个测试（基础、类型、删除）
 - [x] Cache: 3 个测试（HandleSnoop、CanForward、Owned）
 - [x] Directory: 4 个测试（Writeback、Pending、转换、场景）
@@ -1104,13 +1104,13 @@ func TestMultiCoreCoherence(t *testing.T) {
 - [ ] 超时重试
 - [ ] 晚到消息
 
-### 6.4 文档 ✅
+### 6.4 文档 
 
 - [x] 综合设计文档 (本文档)
 - [x] interfaces.go 架构说明
 - [x] 测试覆盖文档
 
-### 6.5 编译与验证 ✅
+### 6.5 编译与验证 
 
 - [x] 所有包编译通过
 - [x] 所有框架测试通过

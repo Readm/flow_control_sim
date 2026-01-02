@@ -103,7 +103,7 @@ func (a *TopologyAnalyzer) inferCoherenceTree(result *AnalysisResult) (*Coherenc
 
 	// 如果没有 Directory 节点，无法构建一致性树
 	if len(result.DirectoryNodes) == 0 {
-		return nil, warnings, fmt.Errorf("⚠️ 没有找到任何 Directory 节点，无法构建一致性树")
+		return nil, warnings, fmt.Errorf(" 没有找到任何 Directory 节点，无法构建一致性树")
 	}
 
 	tree := &CoherenceTree{
@@ -123,7 +123,7 @@ func (a *TopologyAnalyzer) inferCoherenceTree(result *AnalysisResult) (*Coherenc
 	// Step 2: 推断层次关系
 	if err := a.inferHierarchy(tree, result); err != nil {
 		warnings = append(warnings, err.Error())
-		return nil, warnings, fmt.Errorf("⚠️ 无法自动推断一致性层次: %v", err)
+		return nil, warnings, fmt.Errorf(" 无法自动推断一致性层次: %v", err)
 	}
 
 	// Step 3: 为每个 Directory 分配 Domain

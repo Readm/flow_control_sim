@@ -107,19 +107,19 @@ go tool pprof -alloc_space output/mem.prof
 
 ## Performance Targets
 
-### Good Performance ✅
+### Good Performance 
 - **Single-core**: > 50k cycles/sec
 - **Multi-core**: > 20k cycles/sec (varies with node count)
 - **Delivery rate**: > 95%
 - **Parallel efficiency**: > 70%
 
-### Warning Signs ⚠️
+### Warning Signs 
 - **Single-core**: < 30k cycles/sec
 - **Multi-core**: < 10k cycles/sec
 - **Delivery rate**: < 90%
 - **High mutex contention**: > 10% of total time
 
-### Performance Issues ❌
+### Performance Issues 
 - **Throughput**: < 10k cycles/sec
 - **Delivery rate**: < 80%
 - **Excessive allocations**: High GC overhead
@@ -201,9 +201,9 @@ go test -bench='Scaling/Nodes_4' ../
 ```bash
 $ ./run_bufferless_analysis.sh
 [1/5] Running benchmarks...
-✓ Benchmarks complete
+ Benchmarks complete
 [2/5] Analyzing CPU profile...
-✓ CPU profile analyzed
+ CPU profile analyzed
 ...
 
 $ cat output/REPORT.md
