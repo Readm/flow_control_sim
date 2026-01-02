@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"os"
 	"testing"
 
 	"github.com/Readm/flow_sim/internal/champsim/cache"
@@ -15,11 +16,20 @@ import (
 //
 // 测试完整的 CPU → L1D Cache → DRAM 流程
 func Test_CPU_Cache_DRAM_Integration(t *testing.T) {
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE_PERLBENCH")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	traceReader, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE_PERLBENCH=%s)", err, traceFile)
 	}
 	defer traceReader.Close()
 
@@ -185,16 +195,23 @@ func Test_CPU_Cache_DRAM_Performance(t *testing.T) {
 		t.Skip("Skipping performance test in short mode")
 	}
 
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
-
 	const maxCycles = 10000
+	traceFile := os.Getenv("CHAMPSIM_TRACE_PERLBENCH")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	// ========== 测试1: Standalone模式（baseline） ==========
 	t.Log("\n========== Baseline: Standalone模式 ==========")
 
 	traceReader1, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE_PERLBENCH=%s)", err, traceFile)
 	}
 	defer traceReader1.Close()
 
@@ -219,7 +236,7 @@ func Test_CPU_Cache_DRAM_Performance(t *testing.T) {
 
 	traceReader2, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE_PERLBENCH=%s)", err, traceFile)
 	}
 	defer traceReader2.Close()
 

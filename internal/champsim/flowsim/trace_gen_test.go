@@ -4,6 +4,7 @@ package flowsim
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"testing"
 
@@ -16,12 +17,21 @@ import (
 func TestGenerateChampSimTrace(t *testing.T) {
 	const numSimCPUs = 64
 	const maxCycles = 1000 // 运行 1000 cycles 用于性能分析
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile = os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	// Check if trace file is available
 	testReader, err := champsimtrace.NewTraceReader(traceFile, 0, champsimtrace.FormatStandard)
 	if err != nil {
-		t.Skipf("Trace file not available: %v (run from repo root or provide trace)", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	testReader.Close()
 
@@ -40,7 +50,7 @@ func TestGenerateChampSimTrace(t *testing.T) {
 	}
 
 	// 也追踪几个 L3 和 MemCtrl
-	l3IDs := []int{96, 97, 98, 99} // 前 4 个 L3
+	l3IDs := []int{96, 97, 98, 99}          // 前 4 个 L3
 	memCtrlIDs := []int{104, 105, 106, 107} // 前 4 个 MemCtrl
 
 	nodeFilter := append(ringRouterIDs, l3IDs...)
@@ -49,9 +59,9 @@ func TestGenerateChampSimTrace(t *testing.T) {
 	config := trace.TracerConfig{
 		Enabled:        true,
 		MaxCycles:      maxCycles,
-		SampleRate:     1, // 每个 cycle 都记录
-		MinDuration:    0, // 记录所有事件
-		NodeFilter:     nil, // 记录所有节点！
+		SampleRate:     1,      // 每个 cycle 都记录
+		MinDuration:    0,      // 记录所有事件
+		NodeFilter:     nil,    // 记录所有节点！
 		BlockThreshold: 100000, // 阻塞超过 100us 才记录
 	}
 	tracer := trace.NewTraceRecorder(config)
@@ -155,11 +165,20 @@ func TestGenerateFullSystemTrace(t *testing.T) {
 
 	const numSimCPUs = 64
 	const maxCycles = 50 // 更少的 cycles
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	testReader, err := champsimtrace.NewTraceReader(traceFile, 0, champsimtrace.FormatStandard)
 	if err != nil {
-		t.Skipf("Trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	testReader.Close()
 

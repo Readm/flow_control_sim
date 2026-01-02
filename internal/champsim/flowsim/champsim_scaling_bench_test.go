@@ -2,6 +2,7 @@ package flowsim
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"testing"
 
@@ -40,8 +41,8 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 	const localLatency = 3  // Local链路延迟（测试：1→3 增加流水线深度）
 	const routerBuffer = 16 // Ring路由器缓冲区大小
 
-	numL2s := numCPUs / cpusPerL2                // 32个L2
-	numRingNodes := numL3s + numMemCtrls         // Ring上共16个节点（8个L3 + 8个MemCtrl）
+	numL2s := numCPUs / cpusPerL2        // 32个L2
+	numRingNodes := numL3s + numMemCtrls // Ring上共16个节点（8个L3 + 8个MemCtrl）
 
 	handlers := &SystemHandlers{}
 
@@ -445,12 +446,23 @@ func buildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 func Benchmark_ChampSim_64CPU(b *testing.B) {
 	const numSimCPUs = 64
 	const maxCycles = 1000
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		// Check if large trace exists locally (not in git)
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			// Fallback to the small trace snippet provided for CI
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	// Check if trace file is available
 	testReader, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		b.Skipf("Trace file not available: %v (run from repo root or provide trace)", err)
+		b.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	testReader.Close()
 
@@ -467,8 +479,8 @@ func Benchmark_ChampSim_64CPU(b *testing.B) {
 
 	const cpusPerL2 = 2
 	const l2sPerL3 = 4
-	numL2s := numSimCPUs / cpusPerL2                   // 32
-	const numL3s = 8                                   // 8 (对称设计)
+	numL2s := numSimCPUs / cpusPerL2 // 32
+	const numL3s = 8                 // 8 (对称设计)
 	const numMemCtrls = 8
 	const numDRAMs = 8
 	const numRingRouters = 16

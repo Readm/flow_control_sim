@@ -90,4 +90,6 @@ ring_simulator
 # Third-party dependencies
 ThirdParty/
 *.champsimtrace
+!testdata/traces/small.champsimtrace
+!testdata/traces/small_mcf.champsimtrace
 *.xz

@@ -1,6 +1,7 @@
 package flowsim
 
 import (
+	"os"
 	"testing"
 
 	"github.com/Readm/flow_sim/internal/champsim/cache"
@@ -18,10 +19,20 @@ func Test_FlowSim_CPU_DRAM_Integration(t *testing.T) {
 	// ========== 1. 创建ChampSim组件 ==========
 
 	// 创建trace reader
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
+
 	traceReader, err := trace.NewTraceReader(traceFile, 0, trace.FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE=%s)", err, traceFile)
 	}
 	defer traceReader.Close()
 

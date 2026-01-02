@@ -2,17 +2,26 @@ package trace
 
 import (
 	"fmt"
+	"os"
 	"testing"
 )
 
 // TestRealTraceReader_Perlbench 测试读取真实的 perlbench trace
 func TestRealTraceReader_Perlbench(t *testing.T) {
-	// 跳过测试如果 trace 文件不存在
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE_PERLBENCH")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	reader, err := NewTraceReader(traceFile, 0, FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE_PERLBENCH=%s)", err, traceFile)
 	}
 	defer reader.Close()
 
@@ -82,11 +91,20 @@ func TestRealTraceReader_Perlbench(t *testing.T) {
 
 // TestRealTraceReader_MCF 测试读取真实的 mcf trace
 func TestRealTraceReader_MCF(t *testing.T) {
-	traceFile := "../../../testdata/traces/429.mcf-22B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE_MCF")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/429.mcf-22B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small_mcf.champsimtrace"
+		}
+	}
 
 	reader, err := NewTraceReader(traceFile, 0, FormatStandard)
 	if err != nil {
-		t.Skipf("Skipping test, trace file not available: %v", err)
+		t.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE_MCF=%s)", err, traceFile)
 	}
 	defer reader.Close()
 
@@ -141,11 +159,20 @@ func TestTraceReaderBinaryLayout(t *testing.T) {
 
 // BenchmarkRealTraceReader 基准测试真实 trace 读取性能
 func BenchmarkRealTraceReader(b *testing.B) {
-	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+	// Use environment variable if provided, otherwise fallback to repo's small trace
+	traceFile := os.Getenv("CHAMPSIM_TRACE_PERLBENCH")
+	if traceFile == "" {
+		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
+		if _, err := os.Stat(largeTrace); err == nil {
+			traceFile = largeTrace
+		} else {
+			traceFile = "../../../testdata/traces/small.champsimtrace"
+		}
+	}
 
 	reader, err := NewTraceReader(traceFile, 0, FormatStandard)
 	if err != nil {
-		b.Skipf("Skipping benchmark, trace file not available: %v", err)
+		b.Fatalf("Trace file not available: %v (CHAMPSIM_TRACE_PERLBENCH=%s)", err, traceFile)
 	}
 	defer reader.Close()
 
