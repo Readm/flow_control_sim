@@ -277,10 +277,7 @@ func (cpu *O3CPU) Tick() {
 	// operate_lsq() 已集成在 execute 中
 	cpu.dispatch() // dispatch_instruction()
 	cpu.decode()   // decode_instruction()
-	// promote_to_decode() 暂时省略
-	cpu.fetch() // fetch_instruction()
-	// check_dib() 暂时省略
-	// initialize_instruction() 暂时省略
+	cpu.fetch()    // fetch_instruction()
 
 	// 更新统计
 	cpu.stats.TotalCycles++

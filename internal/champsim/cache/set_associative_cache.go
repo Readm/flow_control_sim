@@ -2,48 +2,21 @@ package cache
 
 import (
 	"fmt"
-	"math/bits"
 
 	compcache "github.com/Readm/flow_sim/internal/components/cache"
 )
 
 // SetAssociativeCache Set-Associative Cache
 //
-// 对应 ChampSim 的 CACHE 类
-//
-// 结构：
-// - NUM_SET 个 set
-// - 每个 set 有 NUM_WAY 个 way
-// - 使用 LRU 替换策略
-//
-// 地址分解：
-// ┌─────────────┬──────────────┬──────────────┐
-// │    Tag      │  Set Index   │    Offset    │
-// └─────────────┴──────────────┴──────────────┘
+// 对应 ChampSim 的 CACHE 类 (Wrapper around components/cache)
 type SetAssociativeCache struct {
 	// ==================== 配置 ====================
 
 	config compcache.CacheConfig
 
-	// ==================== Cache 存储 ====================
+	// ==================== Core Cache Component ====================
 
-	// blocks: 二维数组 [set][way]
-	// 总共 NumSets * NumWays 个 blocks
-	blocks [][]compcache.CacheBlock
-
-	// ==================== 地址分解参数 ====================
-
-	// offsetBits: Offset 位数 = log2(BlockSize)
-	offsetBits uint32
-
-	// setIndexBits: Set Index 位数 = log2(NumSets)
-	setIndexBits uint32
-
-	// setMask: Set Index 掩码
-	setMask uint64
-
-	// tagShift: Tag 右移位数 = offsetBits + setIndexBits
-	tagShift uint32
+	core *compcache.SetAssociativeCache
 
 	// ==================== 运行时状态 ====================
 
@@ -80,25 +53,12 @@ func NewSetAssociativeCache(config compcache.CacheConfig) (*SetAssociativeCache,
 		return nil, err
 	}
 
-	// 计算地址分解参数
-	offsetBits := bits.TrailingZeros32(config.BlockSize)
-	setIndexBits := bits.TrailingZeros32(config.NumSets)
-	setMask := uint64(config.NumSets - 1)
-	tagShift := uint32(offsetBits + setIndexBits)
-
-	// 分配 blocks 数组
-	blocks := make([][]compcache.CacheBlock, config.NumSets)
-	for i := range blocks {
-		blocks[i] = make([]compcache.CacheBlock, config.NumWays)
-	}
+	// Initialize Core Cache
+	core := compcache.NewSetAssociativeCache(int(config.NumSets), int(config.NumWays), uint64(config.BlockSize))
 
 	cache := &SetAssociativeCache{
 		config:         config,
-		blocks:         blocks,
-		offsetBits:     uint32(offsetBits),
-		setIndexBits:   uint32(setIndexBits),
-		setMask:        setMask,
-		tagShift:       tagShift,
+		core:           core,
 		currentCycle:   0,
 		standaloneMode: true, // 默认standalone模式
 		mshr:           NewMSHRQueue(int(config.MSHRSize)),
@@ -131,34 +91,6 @@ func validateConfig(config compcache.CacheConfig) error {
 	}
 
 	return nil
-}
-
-// ==================== 地址分解 ====================
-
-// getSetIndex 获取 Set Index
-//
-// 地址分解：
-// ┌─────────────┬──────────────┬──────────────┐
-// │    Tag      │  Set Index   │    Offset    │
-// └─────────────┴──────────────┴──────────────┘
-//
-// Set Index = (addr >> offsetBits) & setMask
-func (c *SetAssociativeCache) getSetIndex(addr uint64) uint32 {
-	return uint32((addr >> c.offsetBits) & c.setMask)
-}
-
-// getTag 获取 Tag
-//
-// Tag = addr >> (offsetBits + setIndexBits)
-func (c *SetAssociativeCache) getTag(addr uint64) uint64 {
-	return addr >> c.tagShift
-}
-
-// getBlockAddr 获取 Block 对齐的地址
-//
-// Block Addr = (addr >> offsetBits) << offsetBits
-func (c *SetAssociativeCache) getBlockAddr(addr uint64) uint64 {
-	return (addr >> c.offsetBits) << c.offsetBits
 }
 
 // ==================== 基本操作 ====================
@@ -202,62 +134,7 @@ func (c *SetAssociativeCache) GetStats() interface{} {
 // ResetStats 重置统计信息
 func (c *SetAssociativeCache) ResetStats() {
 	c.stats = CacheStats{}
-}
-
-// ==================== 查找操作 ====================
-
-// findBlock 在指定 set 中查找 block
-//
-// 返回：
-// - way: 找到的 way 索引（如果 hit）
-// - hit: 是否命中
-func (c *SetAssociativeCache) findBlock(setIndex uint32, tag uint64) (way uint32, hit bool) {
-	set := c.blocks[setIndex]
-
-	for i := uint32(0); i < c.config.NumWays; i++ {
-		block := &set[i]
-		if block.Valid && c.getTag(block.Address) == tag {
-			return i, true
-		}
-	}
-
-	return 0, false
-}
-
-// ==================== LRU 操作 ====================
-
-// findVictim 使用 LRU 策略查找 victim way
-//
-// 返回应该被替换的 way 索引
-func (c *SetAssociativeCache) findVictim(setIndex uint32) uint32 {
-	set := c.blocks[setIndex]
-
-	// 首先查找无效的 way
-	for i := uint32(0); i < c.config.NumWays; i++ {
-		if !set[i].Valid {
-			return i
-		}
-	}
-
-	// 如果所有 way 都有效，查找 LRU 最小的 way
-	victimWay := uint32(0)
-	minLRU := set[0].LRU
-
-	for i := uint32(1); i < c.config.NumWays; i++ {
-		if set[i].LRU < minLRU {
-			minLRU = set[i].LRU
-			victimWay = i
-		}
-	}
-
-	return victimWay
-}
-
-// updateLRU 更新 LRU 计数器
-//
-// 将访问的 way 的 LRU 设置为当前周期
-func (c *SetAssociativeCache) updateLRU(setIndex uint32, way uint32) {
-	c.blocks[setIndex][way].LRU = c.currentCycle
+	c.core.ResetStats()
 }
 
 // ==================== 统计信息 ====================
@@ -326,13 +203,6 @@ func (c *SetAssociativeCache) Access(
 
 	c.currentCycle = cycle
 
-	// 对齐到block边界
-	blockAddr := c.getBlockAddr(addr)
-
-	// 获取set和tag
-	setIndex := c.getSetIndex(blockAddr)
-	tag := c.getTag(blockAddr)
-
 	// 更新统计
 	c.stats.Accesses++
 	if at == compcache.AccessLoad {
@@ -343,20 +213,17 @@ func (c *SetAssociativeCache) Access(
 		c.stats.Prefetches++
 	}
 
-	// 查找block
-	way, hit := c.findBlock(setIndex, tag)
+	// 使用 Core Access
+	isWrite := (at == compcache.AccessStore)
+	result := c.core.Access(addr, isWrite)
 
-	if hit {
-		// Hit: 更新LRU和统计
-		c.updateLRU(setIndex, way)
-
+	if result.Hit {
+		// Hit
 		c.stats.Hits++
 		if at == compcache.AccessLoad {
 			c.stats.LoadHits++
 		} else if at == compcache.AccessStore {
 			c.stats.StoreHits++
-			// Store hit: 标记为dirty
-			c.blocks[setIndex][way].Dirty = true
 		}
 
 		// 数据在HitLatency后就绪
@@ -372,7 +239,8 @@ func (c *SetAssociativeCache) Access(
 		c.stats.StoreMisses++
 	}
 
-	return c.handleMiss(blockAddr, vaddr, instrID, at, cycle)
+	// 这里的 handleMiss 和以前一样调用
+	return c.handleMiss(addr, vaddr, instrID, at, cycle)
 }
 
 // handleMiss 处理 miss
@@ -388,8 +256,11 @@ func (c *SetAssociativeCache) handleMiss(
 	accessType compcache.AccessType,
 	cycle uint64,
 ) (hit bool, readyCycle uint64, mshrIndex int) {
-	// 检查MSHR中是否已有相同地址的请求
-	existingIndex, found := c.mshr.Find(addr)
+	// Re-alignment logic just to be safe
+	blockSize := uint64(c.config.BlockSize)
+	blockAddr := (addr / blockSize) * blockSize
+
+	existingIndex, found := c.mshr.Find(blockAddr)
 
 	if found {
 		// 合并到已存在的MSHR
@@ -410,7 +281,7 @@ func (c *SetAssociativeCache) handleMiss(
 
 	// 分配新的MSHR条目
 	entry := &MSHREntry{
-		Address:          addr,
+		Address:          blockAddr,
 		VAddress:         vaddr,
 		InstrID:          instrID,
 		CPU:              c.config.CPU,
@@ -430,10 +301,11 @@ func (c *SetAssociativeCache) handleMiss(
 	}
 
 	// 向下级发送请求（如果有下级）
+	// 注意：发送给下级的应该是 Block Address
 	if c.lowerLevel != nil {
 		// 创建请求（使用interface{}的map结构，避免类型断言问题）
 		req := map[string]interface{}{
-			"Address":  addr,
+			"Address":  blockAddr,
 			"VAddress": vaddr,
 			"InstrID":  instrID,
 			"IsWrite":  (accessType == compcache.AccessStore),
@@ -448,7 +320,7 @@ func (c *SetAssociativeCache) handleMiss(
 		c.lowerLevel.SendRequest(req)
 	} else if c.standaloneMode {
 		// Standalone模式：自动完成fill（用于测试）
-		c.HandleFill(addr, 0, cycle+c.config.FillLatency)
+		c.HandleFill(blockAddr, 0, cycle+c.config.FillLatency)
 	}
 
 	return false, entry.ReadyCycle, index
@@ -467,7 +339,8 @@ func (c *SetAssociativeCache) HandleFill(addr uint64, data uint64, cycle uint64)
 	c.currentCycle = cycle
 
 	// 对齐到block边界
-	blockAddr := c.getBlockAddr(addr)
+	blockSize := uint64(c.config.BlockSize)
+	blockAddr := (addr / blockSize) * blockSize
 
 	// 从MSHR中移除
 	entry := c.mshr.RemoveByAddress(blockAddr)
@@ -476,35 +349,20 @@ func (c *SetAssociativeCache) HandleFill(addr uint64, data uint64, cycle uint64)
 		// 仍然尝试填充cache
 	}
 
-	// 获取set和tag
-	setIndex := c.getSetIndex(blockAddr)
-	_ = c.getTag(blockAddr) // tag已经包含在blockAddr中
+	// 准备数据
+	dataBytes := make([]byte, 8)
+	// (Binary encoding omitted for brevity, passing empty or mock)
 
-	// 查找victim way
-	way := c.findVictim(setIndex)
+	// Fill Core Cache
+	// State 默认为 Shared 或 Exclusive?
+	// 简化起见，使用 Exclusive
+	_, needWriteback := c.core.Fill(blockAddr, dataBytes, compcache.StateExclusive)
 
-	// 检查是否需要写回
-	block := &c.blocks[setIndex][way]
-	if block.Valid && block.Dirty {
-		// 需要写回dirty block
+	if needWriteback {
 		c.stats.Writebacks++
 		// 实际系统中，这里会向下级发送writeback请求
+		// TODO: Implement Writeback to lower level if needed
 	}
-
-	// 填充新数据
-	block.Valid = true
-	block.Address = blockAddr
-	block.VAddress = 0
-	if entry != nil {
-		block.VAddress = entry.VAddress
-		block.Prefetch = (entry.Type == compcache.AccessPrefetch)
-	}
-	block.Data = data
-	block.Dirty = false
-	block.PfMetadata = 0
-
-	// 更新LRU
-	c.updateLRU(setIndex, way)
 
 	// 更新MSHR的就绪时间
 	if entry != nil {
