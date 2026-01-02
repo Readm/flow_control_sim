@@ -12,10 +12,10 @@ import (
 )
 
 // TestGenerateChampSimTrace 生成 ChampSim 64-CPU 的 Chrome trace
-// 只运行前 100 个 cycles，生成可视化的 trace 文件
+// 运行 1000 个 cycles，生成可视化的 trace 文件
 func TestGenerateChampSimTrace(t *testing.T) {
 	const numSimCPUs = 64
-	const maxCycles = 100 // 运行 100 cycles 用于可视化分析
+	const maxCycles = 1000 // 运行 1000 cycles 用于性能分析
 	traceFile := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
 
 	// Check if trace file is available
@@ -65,11 +65,20 @@ func TestGenerateChampSimTrace(t *testing.T) {
 	}
 	defer handlers.Cleanup()
 
-	// 3. 设置 tracer
+	// 3. 预热 trace readers（不包含在 trace 时间内）
+	t.Logf("🔥 预热 trace readers...")
+	for i, reader := range handlers.traceReaders {
+		if err := reader.Warmup(); err != nil {
+			t.Fatalf("Failed to warmup trace reader %d: %v", i, err)
+		}
+	}
+	t.Logf("✅ Warmup 完成")
+
+	// 4. 设置 tracer（在 Warmup 之后，确保 trace 不包含预热时间）
 	net.SetTracer(tracer)
 	t.Logf("✅ Tracer 已设置，追踪 %d 个节点", len(nodeFilter))
 
-	// 4. 运行仿真
+	// 5. 运行仿真
 	t.Logf("🚀 开始仿真 %d cycles...", maxCycles)
 	if err := net.AdvanceTo(maxCycles); err != nil {
 		t.Fatalf("Simulation failed: %v", err)

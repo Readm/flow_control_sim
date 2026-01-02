@@ -239,8 +239,8 @@ func runFlowSimIntegration(t *testing.T, traceFile string, maxCycles int) Simula
 	})
 
 	// 连接节点
-	net.Connect(cpuNodeID, 0, dramNodeID, 0, 1, 1) // CPU -> DRAM
-	net.Connect(dramNodeID, 0, cpuNodeID, 0, 1, 1) // DRAM -> CPU
+	net.ConnectNodes(cpuNode, 0, dramNode, 0, 1, 1) // CPU -> DRAM
+	net.ConnectNodes(dramNode, 0, cpuNode, 0, 1, 1) // DRAM -> CPU
 
 	// 运行仿真
 	if err := net.AdvanceTo(maxCycles - 1); err != nil {

@@ -127,9 +127,9 @@ func Test_FlowSim_CPU_DRAM_Integration(t *testing.T) {
 	net.AddNode(dramNodeHandle)
 
 	// 连接: CPU(output 0) -> DRAM(input 0)
-	linkCPUtoDRAM, err := net.Connect(
-		cpuNodeID, 0, // CPU node, output 0
-		dramNodeID, 0, // DRAM node, input 0
+	linkCPUtoDRAM, err := net.ConnectNodes(
+		cpuNode, 0, // CPU node, output 0
+		dramNode, 0, // DRAM node, input 0
 		1, // latency = 1 cycle
 		1, // bandwidth = 1 packet/cycle
 	)
@@ -139,9 +139,9 @@ func Test_FlowSim_CPU_DRAM_Integration(t *testing.T) {
 	t.Logf("Created link CPU->DRAM: %v", linkCPUtoDRAM)
 
 	// 连接: DRAM(output 0) -> CPU(input 0)
-	linkDRAMtoCPU, err := net.Connect(
-		dramNodeID, 0, // DRAM node, output 0
-		cpuNodeID, 0, // CPU node, input 0
+	linkDRAMtoCPU, err := net.ConnectNodes(
+		dramNode, 0, // DRAM node, output 0
+		cpuNode, 0, // CPU node, input 0
 		1, // latency = 1 cycle
 		1, // bandwidth = 1 packet/cycle
 	)
