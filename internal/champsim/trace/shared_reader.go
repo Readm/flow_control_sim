@@ -1,9 +1,13 @@
 package trace
 
 import (
+	"compress/gzip"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,9 +41,9 @@ var (
 
 // TraceBlock 表示一个2MB的trace数据块（只读，可共享）
 type TraceBlock struct {
-	blockID      uint64                         // 块ID（第几个2MB块）
-	startOffset  uint64                         // 起始指令ID
-	instructions []*instruction.OOOModelInstr   // 只读指令数据
+	blockID      uint64                       // 块ID（第几个2MB块）
+	startOffset  uint64                       // 起始指令ID
+	instructions []*instruction.OOOModelInstr // 只读指令数据
 }
 
 // SharedTracePool 全局trace池
@@ -66,7 +70,7 @@ type SharedTraceData struct {
 
 	// 自适应预取
 	prefetchDist atomic.Uint64 // 预取距离（领先maxBlockID多少个块）
-	stopPrefetch chan struct{}  // 停止预取信号
+	stopPrefetch chan struct{} // 停止预取信号
 
 	// Reader管理
 	readers   []*SharedTraceReader
@@ -75,21 +79,21 @@ type SharedTraceData struct {
 
 // SharedTraceReader 每个CPU的trace读取器
 type SharedTraceReader struct {
-	cpuID        uint8
-	shared       *SharedTraceData
+	cpuID  uint8
+	shared *SharedTraceData
 
 	// 完全本地的变量（无共享，无原子操作）
-	readPosition     uint64 // 当前读取位置（全局指令ID）
-	instrCounter     uint64 // 指令ID计数器
+	readPosition      uint64 // 当前读取位置（全局指令ID）
+	instrCounter      uint64 // 指令ID计数器
 	lastReportedBlock uint64 // 上次报告的块ID
 
 	// 本地缓存（指向共享的只读数据）
-	cachedBlocks       []*TraceBlock // 当前可用的块
-	currentBlock       *TraceBlock   // 当前正在读取的块（优化热路径）
-	currentBlockIndex  int           // 当前块在数组中的索引
-	currentInstrIndex  int           // 当前块内的指令索引
-	cachedStartOffset  uint64        // 缓存的起始偏移
-	cachedEndOffset    uint64        // 缓存的结束偏移
+	cachedBlocks      []*TraceBlock // 当前可用的块
+	currentBlock      *TraceBlock   // 当前正在读取的块（优化热路径）
+	currentBlockIndex int           // 当前块在数组中的索引
+	currentInstrIndex int           // 当前块内的指令索引
+	cachedStartOffset uint64        // 缓存的起始偏移
+	cachedEndOffset   uint64        // 缓存的结束偏移
 }
 
 // GetOrCreateSharedTrace 获取或创建共享trace
@@ -160,9 +164,42 @@ func (p *SharedTracePool) ReleaseSharedTrace(filename string, reader *SharedTrac
 	return nil
 }
 
-// openTraceFile 打开trace文件
+// openTraceFile 打开trace文件，支持 .xz, .gz 和未压缩格式
 func openTraceFile(filename string, format TraceFormat) (io.ReadCloser, error) {
-	return openXZFile(filename)
+	// 打开文件
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open trace file: %w", err)
+	}
+
+	// 根据扩展名检测压缩格式
+	ext := strings.ToLower(filepath.Ext(filename))
+
+	switch ext {
+	case ".xz":
+		// 使用 xz 命令解压
+		reader, err := openXZFile(filename)
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+		// 关闭原始文件，使用解压后的 reader
+		f.Close()
+		return reader, nil
+
+	case ".gz":
+		// 使用 gzip 库解压
+		gzReader, err := gzip.NewReader(f)
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		return gzReader, nil
+
+	default:
+		// 未压缩文件
+		return f, nil
+	}
 }
 
 // RegisterReader 注册reader
