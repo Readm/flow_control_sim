@@ -12,8 +12,8 @@ func TestCreateLinkHandler_Buffered(t *testing.T) {
 		t.Fatal("CreateLinkHandler returned nil")
 	}
 
-	// Type assertion to verify it's BufferedLinkHandler
-	buffered, ok := fc.(*BufferedLinkHandler)
+	// Type assertion to verify it's BufferedLinkType
+	buffered, ok := fc.(*BufferedLinkType)
 	if !ok {
 		t.Fatal("Expected BufferedLinkHandler, got different type")
 	}
@@ -35,8 +35,8 @@ func TestCreateLinkHandler_Bufferless(t *testing.T) {
 		t.Fatal("CreateLinkHandler returned nil")
 	}
 
-	// Type assertion to verify it's BufferlessLinkHandler
-	_, ok := fc.(*BufferlessLinkHandler)
+	// Type assertion to verify it's BufferlessLinkType
+	_, ok := fc.(*BufferlessLinkType)
 	if !ok {
 		t.Fatal("Expected BufferlessLinkHandler, got different type")
 	}

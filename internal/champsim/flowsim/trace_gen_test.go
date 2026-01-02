@@ -18,7 +18,7 @@ func TestGenerateChampSimTrace(t *testing.T) {
 	const numSimCPUs = 64
 	const maxCycles = 1000 // 运行 1000 cycles 用于性能分析
 	// Use environment variable if provided, otherwise fallback to repo's small trace
-	traceFile = os.Getenv("CHAMPSIM_TRACE")
+	traceFile := os.Getenv("CHAMPSIM_TRACE")
 	if traceFile == "" {
 		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
 		if _, err := os.Stat(largeTrace); err == nil {

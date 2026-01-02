@@ -52,8 +52,8 @@ func TestNode_ExportState(t *testing.T) {
 	if len(ns.Outputs) != 1 {
 		t.Errorf("Expected 1 output, got %d", len(ns.Outputs))
 	}
-	if ns.Inputs[0].Type != "Input" {
-		t.Errorf("Expected Input queue type, got %s", ns.Inputs[0].Type)
+	if ns.Inputs[0].Type != "InputQueue" {
+		t.Errorf("Expected InputQueue queue type, got %s", ns.Inputs[0].Type)
 	}
 	if ns.Inputs[0].Capacity != 16 {
 		t.Errorf("Expected Input capacity 16, got %d", ns.Inputs[0].Capacity)
