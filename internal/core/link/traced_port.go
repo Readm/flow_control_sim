@@ -1,5 +1,3 @@
-//go:build trace
-
 package link
 
 import (
@@ -50,24 +48,15 @@ func (t *TracedInPort) IsReady(cycle int) bool {
 	}
 
 	// 2. Do Blocking Call
-	start := trace.GetCPUCycles()
+	start := float64(trace.GetCPUCycles())
 	ready := t.original.IsReady(cycle)
-	end := trace.GetCPUCycles()
+	end := float64(trace.GetCPUCycles())
 
 	// 3. Record Wait Event (Exclusive)
 	// Only record if significant duration (>0.5us)
 	if end-start > 0.5 {
-		if t.link != nil && t.link.tracer != nil {
-			ev := trace.NewCompleteEvent(
-				"WaitReady", "sync", "bad",
-				t.link.ID(), 1, // Same TID/PID to appear on same track (Unified)
-				start, end,
-				map[string]interface{}{
-					"cycle": cycle,
-				},
-			)
-			// Direct access to localTraceBuffer since we are in same package
-			t.link.localTraceBuffer = append(t.link.localTraceBuffer, ev)
+		if t.link != nil {
+			t.link.RecordWait(start, end, cycle)
 		}
 	}
 

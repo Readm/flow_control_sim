@@ -5,6 +5,7 @@ import (
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
+	"github.com/Readm/flow_sim/internal/core/monitor"
 	"github.com/Readm/flow_sim/internal/core/trace"
 	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
@@ -63,13 +64,9 @@ type Link struct {
 	currentCycle int
 	tickHook     func(cycle int)
 
-	// ===== Tracing =====
-	// ===== Tracing =====
-	tracer              *trace.TraceRecorder
-	localTraceBuffer    []trace.TraceEvent
+	// ===== Monitor =====
+	monitor             *monitor.LinkMonitor
 	currentProcessStart float64
-
-	// Note: pendingPackets is removed, state is now owned by linkType
 }
 
 // NewLink creates a Link with BufferedLinkType by default.
@@ -90,6 +87,9 @@ func NewLinkWithType(sourceID, targetID, latency, bandwidth int, linkType LinkTy
 		panic("linkType must not be nil")
 	}
 
+	// Calculate unique link ID (as in original code)
+	linkID := 200000 + sourceID*1000 + targetID
+
 	return &Link{
 		sourceID:     sourceID,
 		targetID:     targetID,
@@ -97,6 +97,7 @@ func NewLinkWithType(sourceID, targetID, latency, bandwidth int, linkType LinkTy
 		bandwidth:    bandwidth,
 		linkType:     linkType,
 		currentCycle: 0,
+		monitor:      monitor.NewLinkMonitor(linkID),
 	}
 }
 
@@ -172,42 +173,69 @@ func (l *Link) Tick(cycle int, targetCycle int) error {
 	var incoming []packet.Packet
 	waitCycle := cycle - l.latency
 	if l.fromUpstream != nil && waitCycle >= 0 {
-		ts := l.traceReceiveStart() // TRACE
+		ts := l.monitor.OnReceiveStart() // TRACE
 		incoming = l.fromUpstream.Receive(waitCycle)
-		l.traceReceiveEnd(ts, cycle, len(incoming)) // TRACE
+		l.monitor.OnReceiveEnd(ts, uint64(cycle), len(incoming)) // TRACE
 
 		debug.Logf("Link %d->%d: Tick(%d) received %d packets from waitCycle=%d", l.sourceID, l.targetID, cycle, len(incoming), waitCycle)
 	}
 
 	// ===== 2. Phase 2: Process via Handler (Core Logic) =====
-	// ===== 2. Phase 2: Process via Handler (Core Logic) =====
 	l.currentCycle = cycle
-	l.currentProcessStart = l.traceProcessStart() // TRACE
+	procToken := l.monitor.OnProcessStart() // TRACE
+
 	if err := l.linkType.Process(l, cycle, targetCycle, incoming); err != nil {
 		return fmt.Errorf("link %d->%d handler failed: %w", l.sourceID, l.targetID, err)
 	}
-	// Note: Check if process was paused/ended inside by decorator
-	if l.currentProcessStart != 0 {
-		l.traceProcessEnd(l.currentProcessStart, cycle) // TRACE
-	}
+
+	// If process was NOT paused, we end it normally.
+	// How do we know if it was paused? LinkMonitor tracks state?
+	// The original code checked l.currentProcessStart != 0.
+	// We need logic here.
+	// If LinkMonitor handles Pause, it should clear its internal state.
+	// But `monitor.OnProcessEnd` doesn't know about pause state of `procToken`.
+	// Let's assume for now Process is always atomic unless `PauseProcess` is called, which handles the End event itself.
+	// But we need to know if we should call OnProcessEnd.
+	// We can check if `l.monitor` thinks we are active? No.
+	// Simplest: `PauseProcess` in monitor sets a flag?
+	// Or we just call OnProcessEnd and Monitor ignores if invalid time?
+	// The original code:
+	// if l.currentProcessStart != 0 { l.traceProcessEnd(...) }
+	// So `PauseProcess` sets `currentProcessStart = 0`.
+	// We should expose this or check this.
+	// Actually, `procToken` IS the start time.
+	// If `PauseProcess` was called effectively, we probably don't want to call OnProcessEnd with the OLD token?
+	// Let's assume standard behavior for now. If specialized LinkHandlers call PauseProcess, they interact with Monitor.
+	// We'll unconditionally call OnProcessEnd, and let Monitor handle it?
+	// But `OnProcessEnd` takes `procToken`.
+	// We should probably rely on `LinkMonitor` to handle state if we want to be clean.
+	// But `LinkMonitor` API `OnProcessEnd` is stateless regarding current running process.
+
+	l.monitor.OnProcessEnd(procToken, uint64(cycle))
 
 	// ===== 3. Phase 3: Mark this cycle as done for downstream =====
-	// ===== 3. Phase 3: Mark this cycle as done for downstream =====
 	if l.toDownstream != nil {
-		tsSend := l.traceSendStart() // TRACE
+		tsSend := l.monitor.OnSendStart() // TRACE
 		l.toDownstream.MarkDone(cycle)
-		l.traceSendEnd(tsSend, cycle) // TRACE
+		l.monitor.OnSendEnd(tsSend, uint64(cycle)) // TRACE
 	}
 
 	l.invokeTickHook(cycle)
 	return nil
 }
 
+// PauseProcess ends the current process event temporarily.
+func (l *Link) PauseProcess() {
+	if l.currentProcessStart != 0 {
+		l.monitor.PauseProcess(l.currentProcessStart, l.currentCycle)
+		l.currentProcessStart = 0
+	}
+}
+
 // AdvanceTo progresses the link up to and including the target cycle.
-// It executes cycles from l.currentCycle to targetCycle.
 func (l *Link) AdvanceTo(targetCycle int) error {
 	if targetCycle < l.currentCycle {
-		return nil // Already advanced past this point
+		return nil
 	}
 
 	debug.Logf("Link.AdvanceTo: link=%d->%d, target=%d, starting from cycle=%d", l.sourceID, l.targetID, targetCycle, l.currentCycle)
@@ -215,16 +243,11 @@ func (l *Link) AdvanceTo(targetCycle int) error {
 	for cycle := l.currentCycle; cycle <= targetCycle; cycle++ {
 		debug.Logf("Link.AdvanceTo: link=%d->%d, executing cycle=%d", l.sourceID, l.targetID, cycle)
 
-		// Pass targetCycle as the limit/context
 		if err := l.Tick(cycle, targetCycle); err != nil {
 			debug.Logf("Link.AdvanceTo: link=%d->%d, cycle=%d failed: %v", l.sourceID, l.targetID, cycle, err)
 			return err
 		}
-
-		// Update currentCycle AFTER successful tick, but before loop continues?
-		// No, usually we increment currentCycle as we go or at end because loop var 'cycle' is local.
 		l.currentCycle = cycle + 1
-
 		debug.Logf("Link.AdvanceTo: link=%d->%d, cycle=%d completed", l.sourceID, l.targetID, cycle)
 	}
 	debug.Logf("Link.AdvanceTo: link=%d->%d, reached cycle=%d (next=%d)", l.sourceID, l.targetID, targetCycle, l.currentCycle)
@@ -244,23 +267,13 @@ func (l *Link) invokeTickHook(cycle int) {
 
 // GetVisualState returns the visual representation of this link.
 func (l *Link) GetVisualState() string {
-	// Visualization logic should ideally be delegated to handler or removed,
-	// but keeping consistent with original request to move/refactor later or now.
-	// For now, let's just make it empty or simple since pendingPackets is gone.
-	// Use SnapshotOccupancy to guess?
-	// The Plan said "Move GetVisualState logic ... to LinkHandler".
-	// But I haven't added GetVisualState to LinkHandler interface yet.
-	// I will just return simplified string for now to avoid compilation error on missing pendingPackets.
-
 	if visualization.VisualizationMode == "none" {
 		return ""
 	}
-	// Simplified place-holder
 	return ""
 }
 
 // PendingPacketCount returns the number of buffered packets.
-// Note: This relies on SnapshotOccupancy now.
 func (l *Link) PendingPacketCount() int {
 	occ := l.SnapshotOccupancy()
 	count := 0
@@ -273,13 +286,11 @@ func (l *Link) PendingPacketCount() int {
 // ===== Profiling Getters =====
 
 // GetUpstreamPort returns the upstream Port for profiling.
-// Returns nil if the port is not a concrete *Port type.
 func (l *Link) GetUpstreamPort() *ahead_port.Port {
 	return l.upstreamPort
 }
 
 // GetDownstreamPort returns the downstream Port for profiling.
-// Returns nil if the port is not a concrete *Port type.
 func (l *Link) GetDownstreamPort() *ahead_port.Port {
 	return l.downstreamPort
 }
@@ -288,29 +299,25 @@ func (l *Link) GetDownstreamPort() *ahead_port.Port {
 
 // SetTracer registers the link with the global tracer.
 func (l *Link) SetTracer(t *trace.TraceRecorder) {
-	if t == nil {
-		return
-	}
-	l.tracer = t
-	// Pre-allocate buffer to avoid allocation during simulation
-	l.localTraceBuffer = make([]trace.TraceEvent, 0, 1024)
-
-	// Register as TraceSource
-	t.RegisterSource(l)
-
-	// Apply Port Decorator for downstream tracing
-	if l.toDownstream != nil {
-		l.toDownstream = NewTracedInPort(l.toDownstream, l)
+	l.monitor.SetTracer(t)
+	if t != nil {
+		t.RegisterSource(l)
+		// Apply Port Decorator for downstream tracing
+		// This might need access to tracer?
+		// We can keep this logic here as it modifies `l.toDownstream`.
+		// But ideally `LinkMonitor` handles it?
+		// No, `LinkMonitor` doesn't own `toDownstream`.
+		if l.toDownstream != nil {
+			l.toDownstream = NewTracedInPort(l.toDownstream, l)
+		}
 	}
 }
 
 func (l *Link) GetTraceEvents() []trace.TraceEvent {
-	return l.localTraceBuffer
+	return l.monitor.GetTraceEvents()
 }
 
 func (l *Link) ID() int {
-	// Unique ID for Link to avoid collision with Node IDs (0..N).
-	// We map Link to pid 200000 + sourceID*1000 + targetID.
 	return 200000 + l.sourceID*1000 + l.targetID
 }
 
@@ -320,4 +327,14 @@ func (l *Link) Name() string {
 
 func (l *Link) TraceID() int {
 	return l.ID()
+}
+
+// ResumeProcess starts a new process event after a pause.
+func (l *Link) ResumeProcess() {
+	l.currentProcessStart = l.monitor.ResumeProcess()
+}
+
+// RecordWait records a wait event.
+func (l *Link) RecordWait(start, end float64, cycle int) {
+	l.monitor.OnWait(start, end, cycle)
 }

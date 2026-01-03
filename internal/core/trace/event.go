@@ -1,5 +1,3 @@
-//go:build trace
-
 package trace
 
 // TraceEvent 表示一个 Chrome trace 事件

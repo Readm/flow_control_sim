@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Readm/flow_sim/internal/core/monitor"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/core/trace"
@@ -483,7 +484,7 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 			// Reset timer before actual benchmark
 			b.ResetTimer()
 
-			startTotalCycles := node.GetCPUCycles()
+			startTotalCycles := monitor.GetCPUCycles()
 
 			// Run benchmark
 			for i := 0; i < b.N; i++ {
@@ -492,7 +493,7 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 				}
 			}
 
-			endTotalCycles := node.GetCPUCycles()
+			endTotalCycles := monitor.GetCPUCycles()
 
 			// Stop timer for validation and metrics
 			b.StopTimer()
@@ -773,7 +774,7 @@ func BenchmarkBidirectionalRingCoreScaling(b *testing.B) {
 			}
 
 			b.ResetTimer()
-			startTotalCycles := node.GetCPUCycles()
+			startTotalCycles := monitor.GetCPUCycles()
 
 			for i := 0; i < b.N; i++ {
 				if err := net.AdvanceTo(net.CurrentCycle() + advanceCycles); err != nil {
@@ -781,7 +782,7 @@ func BenchmarkBidirectionalRingCoreScaling(b *testing.B) {
 				}
 			}
 
-			endTotalCycles := node.GetCPUCycles()
+			endTotalCycles := monitor.GetCPUCycles()
 			b.StopTimer()
 
 			// Validation logic

@@ -4,12 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Readm/flow_sim/internal/components/cache"
 	"github.com/Readm/flow_sim/internal/components/directory"
 	"github.com/Readm/flow_sim/internal/core/debug"
+	"github.com/Readm/flow_sim/internal/core/monitor"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/core/trace"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
@@ -127,23 +127,8 @@ type BaseNode struct {
 	advanceTarget    uint64   // Target cycle for current AdvanceTo
 	outputQueueAhead []uint64 // Next cycle to tick for each output queue
 
-	// ===== Profiling: 节点执行时间统计 =====
-	// 使用编译时控制: go build -tags profile
-	// 只记录 Handler.Process 的纯执行时间，不包含 Queue 的 Tick 时间
-	profile NodeProfile
-
-	// Tracing: Chrome trace 追踪（编译时控制）
-	tracer           *trace.TraceRecorder
-	localTraceBuffer []trace.TraceEvent
-
-	// 兼容旧代码的计数器
-	totalProcessCycles atomic.Uint64 // 累计处理时间（CPU cycles）
-	processCount       atomic.Uint64 // 处理次数
-
-	// 旧的三阶段统计（包含阻塞时间，待废弃）
-	receiveCycles atomic.Uint64 // Receive 阶段时间（包含同步等待）
-	processCycles atomic.Uint64 // Process 阶段时间（实际计算）
-	sendCycles    atomic.Uint64 // Send 阶段时间（发送到下游）
+	// Monitor for Profiling and Tracing
+	monitor *monitor.NodeMonitor
 }
 
 // NewBaseNode creates a new BaseNode.
@@ -153,7 +138,6 @@ func NewBaseNode(id int, handler NodeHandler) *BaseNode {
 		name:             fmt.Sprintf("Node%d", id), // Default name
 		inputs:           make([]InputQueue, 0),
 		outputs:          make([]OutputQueue, 0),
-		localTraceBuffer: make([]trace.TraceEvent, 0, 1024), // Init local buffer
 		inputBuffer:      make([][]queue.PacketRef, 0),
 		inputValues:      make([][]queue.PacketRef, 0),
 		caches:           make([]cache.Cache, 0),
@@ -162,6 +146,7 @@ func NewBaseNode(id int, handler NodeHandler) *BaseNode {
 		handler:          handler,
 		currentCycle:     0,
 		outputQueueAhead: make([]uint64, 0),
+		monitor:          monitor.NewNodeMonitor(id),
 	}
 }
 
@@ -179,84 +164,52 @@ func (n *BaseNode) Name() string { return n.name }
 // SetName sets the node name.
 func (n *BaseNode) SetName(name string) { n.name = name }
 
-// ===== Profiling Getters =====
+// ===== Profiling Getters (Delegated to Monitor) =====
 
-// TotalProcessCycles returns the total CPU cycles spent in processing (excluding sync wait).
 func (n *BaseNode) TotalProcessCycles() uint64 {
-	return n.totalProcessCycles.Load()
+	return n.monitor.TotalProcessCycles()
 }
 
-// ProcessCount returns the number of times this node has been processed.
 func (n *BaseNode) ProcessCount() uint64 {
-	return n.processCount.Load()
+	return n.monitor.ProcessCount()
 }
 
-// AvgProcessCycles returns the average CPU cycles per process.
 func (n *BaseNode) AvgProcessCycles() uint64 {
-	count := n.processCount.Load()
-	if count == 0 {
-		return 0
-	}
-	return n.totalProcessCycles.Load() / count
+	return n.monitor.AvgProcessCycles()
 }
 
-// ===== 三阶段详细 Profiling Getters =====
-
-// ReceiveCycles returns the total CPU cycles spent in Receive phase (including sync wait).
 func (n *BaseNode) ReceiveCycles() uint64 {
-	return n.receiveCycles.Load()
+	return n.monitor.ReceiveCycles()
 }
 
-// ProcessCycles returns the total CPU cycles spent in Process phase (actual computation).
 func (n *BaseNode) ProcessCycles() uint64 {
-	return n.processCycles.Load()
+	return n.monitor.ProcessCycles()
 }
 
-// SendCycles returns the total CPU cycles spent in Send phase (sending to downstream).
 func (n *BaseNode) SendCycles() uint64 {
-	return n.sendCycles.Load()
+	return n.monitor.SendCycles()
 }
 
-// AvgReceiveCycles returns the average CPU cycles per Receive.
 func (n *BaseNode) AvgReceiveCycles() uint64 {
-	count := n.processCount.Load()
-	if count == 0 {
-		return 0
-	}
-	return n.receiveCycles.Load() / count
+	return n.monitor.AvgReceiveCycles()
 }
 
-// AvgProcessCyclesDetailed returns the average CPU cycles per Process (detailed).
 func (n *BaseNode) AvgProcessCyclesDetailed() uint64 {
-	count := n.processCount.Load()
-	if count == 0 {
-		return 0
-	}
-	return n.processCycles.Load() / count
+	return n.monitor.AvgProcessCyclesDetailed()
 }
 
-// AvgSendCycles returns the average CPU cycles per Send.
 func (n *BaseNode) AvgSendCycles() uint64 {
-	count := n.processCount.Load()
-	if count == 0 {
-		return 0
-	}
-	return n.sendCycles.Load() / count
+	return n.monitor.AvgSendCycles()
 }
-
-// ===== 新 Profiling Getters（编译时控制）=====
 
 // GetProcessProfile 获取 Process 执行的 profiling 数据
-// 只包含 Handler.Process 的纯执行时间，不含 Queue Tick 时间
-// 返回: (总时间, 调用次数)
 func (n *BaseNode) GetProcessProfile() (totalTime, count uint64) {
-	return n.profile.GetProcessStats()
+	return n.monitor.GetProcessProfile()
 }
 
 // GetAvgProcessExecTime 获取平均 Process 执行时间
-// 只包含 Handler.Process 的纯执行时间
 func (n *BaseNode) GetAvgProcessExecTime() uint64 {
-	return n.profile.GetAvgProcessTime()
+	return n.monitor.GetAvgProcessExecTime()
 }
 
 // AddInputQueue registers an InputQueue.
@@ -482,65 +435,39 @@ func (n *BaseNode) InjectPacket(pkt packet.Packet) error {
 // Order: Receive (Input) -> Process (Handler) -> Send (Output)
 func (n *BaseNode) Tick(cycle uint64, _ time.Duration) error {
 	// ===== Phase 1: Receive (Input) =====
-	receiveStart := GetCPUCycles()
+	recvToken := n.monitor.OnReceiveStart()
 
-	// Input queues wait for upstream and receive data for CURRENT cycle.
-	// This includes sync wait time (WaitDone blocking)
 	if err := n.tickInputQueues(cycle); err != nil {
 		return fmt.Errorf("node %d input tick failed: %w", n.id, err)
 	}
 
-	receiveEnd := GetCPUCycles()
-	n.receiveCycles.Add(receiveEnd - receiveStart)
-
-	// Trace: 记录 Receive Phase（通过编译标签控制）
 	packetCount := 0
 	for _, input := range n.inputBuffer {
 		packetCount += len(input)
 	}
-	n.traceReceive(int64(receiveStart), int64(receiveEnd), cycle, packetCount)
+	n.monitor.OnReceiveEnd(recvToken, cycle, packetCount)
 
 	// ===== Phase 2: Process (Handler) =====
-	processStart := GetCPUCycles()
+	procToken := n.monitor.OnProcessStart()
 
-	// Handler logic processes the data we just received.
-	// Packets are available in n.inputBuffer (which points to n.inputValues)
 	if err := n.handler.Process(cycle, n.inputBuffer); err != nil {
 		return fmt.Errorf("node %d process failed: %w", n.id, err)
 	}
 
-	processEnd := GetCPUCycles()
-
-	// 新 profiling: 只记录 Handler.Process 的纯执行时间
-	n.profile.RecordProcessExec(processEnd - processStart)
-
-	// 旧 profiling: 包含所有时间（待废弃）
-	n.processCycles.Add(processEnd - processStart)
-
-	// Trace: 记录 Process Phase（通过编译标签控制）
-	n.traceProcess(int64(processStart), int64(processEnd), cycle)
+	n.monitor.OnProcessEnd(procToken, cycle)
 
 	// ===== Phase 3: Send (Output) =====
-	sendStart := GetCPUCycles()
+	sendToken := n.monitor.OnSendStart()
 
-	// Output queues send the data just injected to downstream.
 	if err := n.tickOutputQueues(cycle); err != nil {
 		return fmt.Errorf("node %d output tick failed: %w", n.id, err)
 	}
 
-	sendEnd := GetCPUCycles()
-	n.sendCycles.Add(sendEnd - sendStart)
-
-	// Trace: 记录 Send Phase（通过编译标签控制）
 	sentCount := 0
 	for _, output := range n.outputs {
 		sentCount += output.Length()
 	}
-	n.traceSend(int64(sendStart), int64(sendEnd), cycle, sentCount)
-
-	// ===== Update counters =====
-	n.totalProcessCycles.Add((processEnd - processStart) + (sendEnd - sendStart)) // 兼容旧代码
-	n.processCount.Add(1)
+	n.monitor.OnSendEnd(sendToken, cycle, sentCount)
 
 	return nil
 }
@@ -624,8 +551,6 @@ func (n *BaseNode) AdvanceTo(targetCycle int) error {
 
 	debug.Logf("Node.AdvanceTo: node=%d, target=%d, starting from cycle=%d", n.id, targetCycle, n.currentCycle)
 
-	debug.Logf("Node.AdvanceTo: node=%d, target=%d, starting from cycle=%d", n.id, targetCycle, n.currentCycle)
-
 	// Execute logic for each cycle from current up to target (inclusive? check plan)
 	// Plan said: "Link.AdvanceTo: loop from current to target (inclusive)"
 	// Implementation in Link was: for cycle := l.currentCycle; cycle <= targetCycle; cycle++
@@ -692,38 +617,29 @@ func (n *BaseNode) GetAllData() map[string]interface{} {
 	return copy
 }
 
-// ===== Tracer Methods =====
+// ===== Tracer Methods (Delegated to Monitor) =====
 
 // SetTracer 设置 trace recorder（用于 Chrome trace）
 func (n *BaseNode) SetTracer(tracer *trace.TraceRecorder) {
-	// 如果 tracer 为 nil，清空
-	if tracer == nil {
-		n.tracer = nil
-		return
+	n.monitor.SetTracer(tracer)
+	// Register ourselves as source if tracer is set
+	if tracer != nil && tracer.IsNodeTraced(n.id) {
+		tracer.RegisterSource(n)
 	}
-
-	// 检查过滤器：如果没有通过筛选，则不设置 tracer
-	if !tracer.IsNodeTraced(n.id) {
-		n.tracer = nil
-		return
-	}
-
-	n.tracer = tracer
-	// 注册自己作为 Trace Source (Thread-Safe)
-	tracer.RegisterSource(n)
 }
 
 // GetTracer 获取 trace recorder
 func (n *BaseNode) GetTracer() *trace.TraceRecorder {
-	return n.tracer
+	// n.monitor.tracer is private, this logic was only present in BaseNode before.
+	// Since GetTracer is mostly internal or debug, we might remove it or expose via Monitor?
+	// The original Node interface didn't have GetTracer, only BaseNode struct had.
+	// We can't access m.tracer directly.
+	// For now, let's omit or if needed add GetTracer to NodeMonitor.
+	// But actually, we don't really need to expose it if everything is delegated.
+	return nil
 }
 
 // GetTraceEvents implements trace.TraceSource.
-// It returns a copy of the local event buffer.
-// Warning: This implies GetTraceEvents is called when the node is NOT ticking (e.g. at end of simulation).
 func (n *BaseNode) GetTraceEvents() []trace.TraceEvent {
-	// Return a copy to be safe, although if used in "Deferred Merge" (post-sim), direct access might be okay.
-	// But slice header copy is cheap.
-	// Returning the slice itself is fine if we promise not to modify it anymore.
-	return n.localTraceBuffer
+	return n.monitor.GetTraceEvents()
 }

@@ -3,14 +3,17 @@ package node
 import (
 	"math/rand"
 	"time"
+
+	"github.com/Readm/flow_sim/internal/core/monitor"
 )
 
 // SpinWaitCycles busy-waits for approximately the specified number of CPU cycles.
 // This is more precise than SpinWait (us) if the CPU frequency is stable.
+// This is more precise than SpinWait (us) if the CPU frequency is stable.
 func SpinWaitCycles(cycles uint64) {
-	start := GetCPUCycles()
+	start := monitor.GetCPUCycles()
 	for {
-		if GetCPUCycles()-start >= cycles {
+		if monitor.GetCPUCycles()-start >= cycles {
 			break
 		}
 		Pause()
@@ -21,7 +24,7 @@ func SpinWaitCycles(cycles uint64) {
 // It samples for the specified duration (e.g. 100ms) to average out noise.
 func CalibrateCyclesPerUS(duration time.Duration) float64 {
 	start := time.Now()
-	startCycles := GetCPUCycles()
+	startCycles := monitor.GetCPUCycles()
 
 	// Busy, active wait to avoid sleep state frequency scaling
 	// But we need to reference time.
@@ -29,7 +32,7 @@ func CalibrateCyclesPerUS(duration time.Duration) float64 {
 		// spin
 	}
 
-	endCycles := GetCPUCycles()
+	endCycles := monitor.GetCPUCycles()
 	elapsed := time.Since(start)
 
 	return float64(endCycles-startCycles) / float64(elapsed.Microseconds())

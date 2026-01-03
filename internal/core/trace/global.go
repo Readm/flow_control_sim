@@ -1,5 +1,3 @@
-//go:build trace
-
 package trace
 
 import (
