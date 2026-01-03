@@ -26,7 +26,7 @@ func TestTraceBasic(t *testing.T) {
 	// 1. 创建 tracer
 	config := trace.TracerConfig{
 		Enabled:        true,
-		MaxCycles:      10, // 只记录前 10 个 cycles
+		EndCycle:       10, // 只记录前 10 个 cycles
 		SampleRate:     1,  // 每个 cycle 都记录
 		MinDuration:    0,
 		BlockThreshold: 1000,
@@ -80,7 +80,8 @@ func TestTraceBasic(t *testing.T) {
 	}
 
 	// 7. 验证
-	eventCount := tracer.EventCount()
+	events := tracer.GetEvents()
+	eventCount := len(events)
 	if eventCount == 0 {
 		t.Errorf("Expected some events, got 0")
 	}
@@ -93,7 +94,7 @@ func TestTraceBasic(t *testing.T) {
 // TestTraceWithMetadata 测试带元数据的导出
 func TestTraceWithMetadata(t *testing.T) {
 	config := trace.DefaultConfig()
-	config.MaxCycles = 5
+	config.EndCycle = 5
 	tracer := trace.NewTraceRecorder(config)
 
 	// 创建简单的 network
