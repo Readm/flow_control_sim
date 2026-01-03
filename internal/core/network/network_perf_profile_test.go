@@ -14,6 +14,7 @@ import (
 
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
+	"github.com/Readm/flow_sim/internal/core/trace"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -321,6 +322,13 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 	// Sample for 100ms
 	cyclesPerUS := node.CalibrateCyclesPerUS(100 * time.Millisecond)
 	b.Logf("Calibrated CPU Frequency: %.2f cycles/us (%.2f GHz)", cyclesPerUS, cyclesPerUS/1000.0)
+
+	// Inject Trace Flush (Safe for all builds, no-op if trace disabled)
+	defer func() {
+		if err := trace.FlushGlobal(); err != nil {
+			b.Logf("Trace Flush failed: %v", err)
+		}
+	}()
 
 	// Calculate min/max cycles for 5-20us spin
 	minSpinCycles := int(5.0 * cyclesPerUS)

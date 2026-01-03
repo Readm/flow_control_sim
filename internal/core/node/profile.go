@@ -1,4 +1,4 @@
-//go:build profile
+//go:build profile || trace
 
 package node
 

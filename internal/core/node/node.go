@@ -40,6 +40,11 @@ type Node interface {
 	DeleteData(key string)
 	UpdateData(modifier func(map[string]interface{}))
 	UpdateKeyData(key string, modifier func(interface{}) interface{})
+
+	// Name returns the human-readable name of the node.
+	Name() string
+	// SetName sets the human-readable name of the node.
+	SetName(name string)
 }
 
 // Tickable is an interface for components that can be ticked.
@@ -92,7 +97,8 @@ type NodeHandler interface {
 // BaseNode implements the common logic for all nodes.
 // Specific node types should embed BaseNode and implement NodeHandler.
 type BaseNode struct {
-	id int
+	id   int
+	name string
 
 	inputs  []InputQueue
 	outputs []OutputQueue
@@ -126,10 +132,9 @@ type BaseNode struct {
 	// 只记录 Handler.Process 的纯执行时间，不包含 Queue 的 Tick 时间
 	profile NodeProfile
 
-	// ===== Tracing: Chrome trace 追踪（可选）=====
-	// 使用编译时控制: go build -tags trace
-	// 可以为 nil（不追踪）
-	tracer *trace.TraceRecorder
+	// Tracing: Chrome trace 追踪（编译时控制）
+	tracer           *trace.TraceRecorder
+	localTraceBuffer []trace.TraceEvent
 
 	// 兼容旧代码的计数器
 	totalProcessCycles atomic.Uint64 // 累计处理时间（CPU cycles）
@@ -145,8 +150,10 @@ type BaseNode struct {
 func NewBaseNode(id int, handler NodeHandler) *BaseNode {
 	return &BaseNode{
 		id:               id,
+		name:             fmt.Sprintf("Node%d", id), // Default name
 		inputs:           make([]InputQueue, 0),
 		outputs:          make([]OutputQueue, 0),
+		localTraceBuffer: make([]trace.TraceEvent, 0, 1024), // Init local buffer
 		inputBuffer:      make([][]queue.PacketRef, 0),
 		inputValues:      make([][]queue.PacketRef, 0),
 		caches:           make([]cache.Cache, 0),
@@ -165,6 +172,12 @@ func (n *BaseNode) CurrentCycle() int {
 
 // ID returns the node identifier.
 func (n *BaseNode) ID() int { return n.id }
+
+// Name returns the node name.
+func (n *BaseNode) Name() string { return n.name }
+
+// SetName sets the node name.
+func (n *BaseNode) SetName(name string) { n.name = name }
 
 // ===== Profiling Getters =====
 
@@ -683,10 +696,34 @@ func (n *BaseNode) GetAllData() map[string]interface{} {
 
 // SetTracer 设置 trace recorder（用于 Chrome trace）
 func (n *BaseNode) SetTracer(tracer *trace.TraceRecorder) {
+	// 如果 tracer 为 nil，清空
+	if tracer == nil {
+		n.tracer = nil
+		return
+	}
+
+	// 检查过滤器：如果没有通过筛选，则不设置 tracer
+	if !tracer.IsNodeTraced(n.id) {
+		n.tracer = nil
+		return
+	}
+
 	n.tracer = tracer
+	// 注册自己作为 Trace Source (Thread-Safe)
+	tracer.RegisterSource(n)
 }
 
 // GetTracer 获取 trace recorder
 func (n *BaseNode) GetTracer() *trace.TraceRecorder {
 	return n.tracer
+}
+
+// GetTraceEvents implements trace.TraceSource.
+// It returns a copy of the local event buffer.
+// Warning: This implies GetTraceEvents is called when the node is NOT ticking (e.g. at end of simulation).
+func (n *BaseNode) GetTraceEvents() []trace.TraceEvent {
+	// Return a copy to be safe, although if used in "Deferred Merge" (post-sim), direct access might be okay.
+	// But slice header copy is cheap.
+	// Returning the slice itself is fine if we promise not to modify it anymore.
+	return n.localTraceBuffer
 }

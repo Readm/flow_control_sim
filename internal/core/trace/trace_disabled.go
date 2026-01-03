@@ -8,7 +8,8 @@ type TraceEvent struct{}
 // TracerConfig 配置（禁用时也需要定义）
 type TracerConfig struct {
 	Enabled        bool
-	MaxCycles      int
+	StartCycle     int
+	EndCycle       int
 	SampleRate     int
 	MinDuration    int64
 	NodeFilter     []int
@@ -28,6 +29,16 @@ func NewTraceRecorder(config TracerConfig) *TraceRecorder {
 	return &TraceRecorder{}
 }
 
+// TraceSource 接口定义（即使禁用 trace 也需要，因为 node.go 引用了它）
+type TraceSource interface {
+	GetTraceEvents() []TraceEvent
+	ID() int
+	Name() string
+}
+
+func (tr *TraceRecorder) RegisterSource(source TraceSource) {}
+func (tr *TraceRecorder) IsNodeTraced(id int) bool          { return false }
+
 // 所有方法都是空操作，编译器会内联优化掉
 
 func (tr *TraceRecorder) RecordComplete(
@@ -35,8 +46,8 @@ func (tr *TraceRecorder) RecordComplete(
 	category string,
 	pid int,
 	tid int,
-	startCycle int64,
-	endCycle int64,
+	start float64,
+	end float64,
 	args map[string]interface{},
 ) {
 }
@@ -46,7 +57,7 @@ func (tr *TraceRecorder) RecordInstant(
 	category string,
 	pid int,
 	tid int,
-	cycle int64,
+	cycle float64,
 	args map[string]interface{},
 ) {
 }
@@ -72,6 +83,10 @@ func (tr *TraceRecorder) Disable() {
 }
 
 func (tr *TraceRecorder) IsEnabled() bool {
+	return false
+}
+
+func (tr *TraceRecorder) IsCycleTraced(cycle int64) bool {
 	return false
 }
 

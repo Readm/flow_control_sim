@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/components/cache"
 	"github.com/Readm/flow_sim/internal/components/directory"
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/core/link"
 	"github.com/Readm/flow_sim/internal/core/node"
@@ -106,13 +106,20 @@ type Network struct {
 
 // New creates an empty network.
 func New() *Network {
-	return &Network{
+	net := &Network{
 		nodes:        make(map[int]*NodeHandle),
 		links:        make([]*link.Link, 0),
 		nodeList:     nil,
 		frozen:       false,
 		currentCycle: 0,
 	}
+
+	// 自动注入全局 Tracer (如果启用了 -flow_trace)
+	if globalTracer := trace.GetGlobalTracer(); globalTracer != nil {
+		net.SetTracer(globalTracer)
+	}
+
+	return net
 }
 
 // CurrentCycle returns the maximum cycle reached by the network (based on targetCycle of last AdvanceTo).
@@ -131,6 +138,11 @@ func (n *Network) SetTracer(tracer *trace.TraceRecorder) {
 		if traceable, ok := handle.Node.(trace.Traceable); ok {
 			traceable.SetTracer(tracer)
 		}
+	}
+
+	// 为所有 links 设置 tracer
+	for _, l := range n.links {
+		l.SetTracer(tracer)
 	}
 }
 
@@ -340,6 +352,11 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 
 	// Link will be initialized in Advance or explicitly by user
 
+	// Inject global tracer if enabled
+	if n.tracer != nil {
+		linkInstance.SetTracer(n.tracer)
+	}
+
 	n.links = append(n.links, linkInstance)
 	return linkInstance, nil
 }
@@ -485,6 +502,11 @@ func (n *Network) Reset(schema *NetworkSchema) error {
 		ahead_port.ConnectWithIDs(edgeSchema.SrcNodeID, edgeSchema.DstNodeID, linkInstance, targetInput)
 
 		// Link will be initialized in Advance or explicitly by user
+
+		// Inject global tracer if enabled
+		if n.tracer != nil {
+			linkInstance.SetTracer(n.tracer)
+		}
 
 		n.links = append(n.links, linkInstance)
 	}

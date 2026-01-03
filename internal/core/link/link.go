@@ -5,6 +5,7 @@ import (
 
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
+	"github.com/Readm/flow_sim/internal/core/trace"
 	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
@@ -61,6 +62,12 @@ type Link struct {
 	bandwidth    int
 	currentCycle int
 	tickHook     func(cycle int)
+
+	// ===== Tracing =====
+	// ===== Tracing =====
+	tracer              *trace.TraceRecorder
+	localTraceBuffer    []trace.TraceEvent
+	currentProcessStart float64
 
 	// Note: pendingPackets is removed, state is now owned by linkType
 }
@@ -165,18 +172,31 @@ func (l *Link) Tick(cycle int, targetCycle int) error {
 	var incoming []packet.Packet
 	waitCycle := cycle - l.latency
 	if l.fromUpstream != nil && waitCycle >= 0 {
+		ts := l.traceReceiveStart() // TRACE
 		incoming = l.fromUpstream.Receive(waitCycle)
+		l.traceReceiveEnd(ts, cycle, len(incoming)) // TRACE
+
 		debug.Logf("Link %d->%d: Tick(%d) received %d packets from waitCycle=%d", l.sourceID, l.targetID, cycle, len(incoming), waitCycle)
 	}
 
 	// ===== 2. Phase 2: Process via Handler (Core Logic) =====
+	// ===== 2. Phase 2: Process via Handler (Core Logic) =====
+	l.currentCycle = cycle
+	l.currentProcessStart = l.traceProcessStart() // TRACE
 	if err := l.linkType.Process(l, cycle, targetCycle, incoming); err != nil {
 		return fmt.Errorf("link %d->%d handler failed: %w", l.sourceID, l.targetID, err)
 	}
+	// Note: Check if process was paused/ended inside by decorator
+	if l.currentProcessStart != 0 {
+		l.traceProcessEnd(l.currentProcessStart, cycle) // TRACE
+	}
 
 	// ===== 3. Phase 3: Mark this cycle as done for downstream =====
+	// ===== 3. Phase 3: Mark this cycle as done for downstream =====
 	if l.toDownstream != nil {
+		tsSend := l.traceSendStart() // TRACE
 		l.toDownstream.MarkDone(cycle)
+		l.traceSendEnd(tsSend, cycle) // TRACE
 	}
 
 	l.invokeTickHook(cycle)
@@ -262,4 +282,42 @@ func (l *Link) GetUpstreamPort() *ahead_port.Port {
 // Returns nil if the port is not a concrete *Port type.
 func (l *Link) GetDownstreamPort() *ahead_port.Port {
 	return l.downstreamPort
+}
+
+// ===== TraceSource Implementation =====
+
+// SetTracer registers the link with the global tracer.
+func (l *Link) SetTracer(t *trace.TraceRecorder) {
+	if t == nil {
+		return
+	}
+	l.tracer = t
+	// Pre-allocate buffer to avoid allocation during simulation
+	l.localTraceBuffer = make([]trace.TraceEvent, 0, 1024)
+
+	// Register as TraceSource
+	t.RegisterSource(l)
+
+	// Apply Port Decorator for downstream tracing
+	if l.toDownstream != nil {
+		l.toDownstream = NewTracedInPort(l.toDownstream, l)
+	}
+}
+
+func (l *Link) GetTraceEvents() []trace.TraceEvent {
+	return l.localTraceBuffer
+}
+
+func (l *Link) ID() int {
+	// Unique ID for Link to avoid collision with Node IDs (0..N).
+	// We map Link to pid 200000 + sourceID*1000 + targetID.
+	return 200000 + l.sourceID*1000 + l.targetID
+}
+
+func (l *Link) Name() string {
+	return fmt.Sprintf("Link %d->%d", l.sourceID, l.targetID)
+}
+
+func (l *Link) TraceID() int {
+	return l.ID()
 }

@@ -31,10 +31,16 @@ func normalizeTimestamps(events []TraceEvent) []TraceEvent {
 	}
 
 	// 找到最小时间戳（只考虑 Complete 和 Instant 事件）
-	minTimestamp := int64(^uint64(0) >> 1) // Max int64
+	// 找到最小时间戳（只考虑 Complete 和 Instant 事件）
+	minTimestamp := float64(^uint64(0) >> 1) // Max float? No, just use a large number or 1e18
+	// Better: use the first one
+	first := true
 	for _, e := range events {
 		if e.Phase == PhaseComplete || e.Phase == PhaseInstant {
-			if e.Timestamp < minTimestamp {
+			if first {
+				minTimestamp = e.Timestamp
+				first = false
+			} else if e.Timestamp < minTimestamp {
 				minTimestamp = e.Timestamp
 			}
 		}
@@ -75,7 +81,8 @@ func (tr *TraceRecorder) Export(filename string) error {
 			"version":     "flow_sim v1.0",
 			"event_count": len(normalizedEvents),
 			"config": map[string]interface{}{
-				"max_cycles":      tr.config.MaxCycles,
+				"start_cycle":     tr.config.StartCycle,
+				"end_cycle":       tr.config.EndCycle,
 				"sample_rate":     tr.config.SampleRate,
 				"min_duration":    tr.config.MinDuration,
 				"block_threshold": tr.config.BlockThreshold,

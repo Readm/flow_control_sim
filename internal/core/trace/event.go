@@ -20,11 +20,11 @@ type TraceEvent struct {
 	Phase string `json:"ph"`
 
 	// 时间戳（微秒，我们用 cycle）
-	Timestamp int64 `json:"ts"`
+	Timestamp float64 `json:"ts"`
 
 	// 持续时间（微秒，我们用 cycle）
 	// 只对 Complete event ("X") 有效
-	Duration int64 `json:"dur,omitempty"`
+	Duration float64 `json:"dur,omitempty"`
 
 	// Process ID（我们用 NodeID 或 LinkID）
 	Pid int `json:"pid"`
@@ -35,6 +35,10 @@ type TraceEvent struct {
 	// - 3: Send Phase
 	// - 4: Transfer Phase (for Link)
 	Tid int `json:"tid"`
+
+	// Color Name (optional)
+	// Supported: good, bad, terrible, yellow, olive, etc.
+	Cname string `json:"cname,omitempty"`
 
 	// 自定义参数
 	Args map[string]interface{} `json:"args,omitempty"`
@@ -65,21 +69,22 @@ const (
 )
 
 // NewCompleteEvent 创建一个完整事件（有开始和结束时间）
-func NewCompleteEvent(name, category string, pid, tid int, startCycle, endCycle int64, args map[string]interface{}) TraceEvent {
+func NewCompleteEvent(name, category, cname string, pid, tid int, start, end float64, args map[string]interface{}) TraceEvent {
 	return TraceEvent{
 		Name:      name,
 		Category:  category,
 		Phase:     PhaseComplete,
-		Timestamp: startCycle,
-		Duration:  endCycle - startCycle,
+		Timestamp: start,
+		Duration:  end - start,
 		Pid:       pid,
 		Tid:       tid,
+		Cname:     cname,
 		Args:      args,
 	}
 }
 
 // NewInstantEvent 创建一个瞬时事件（如阻塞点）
-func NewInstantEvent(name, category string, pid, tid int, cycle int64, args map[string]interface{}) TraceEvent {
+func NewInstantEvent(name, category string, pid, tid int, cycle float64, args map[string]interface{}) TraceEvent {
 	return TraceEvent{
 		Name:      name,
 		Category:  category,

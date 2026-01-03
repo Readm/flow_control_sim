@@ -1,4 +1,4 @@
-//go:build !profile
+//go:build !profile && !trace
 
 package node
 
@@ -6,9 +6,9 @@ package node
 type NodeProfile struct{}
 
 // 所有方法都是空操作
-func (p *NodeProfile) RecordProcessExec(cycles uint64)              {}
-func (p *NodeProfile) GetProcessStats() (uint64, uint64)            { return 0, 0 }
-func (p *NodeProfile) GetAvgProcessTime() uint64                    { return 0 }
+func (p *NodeProfile) RecordProcessExec(cycles uint64)   {}
+func (p *NodeProfile) GetProcessStats() (uint64, uint64) { return 0, 0 }
+func (p *NodeProfile) GetAvgProcessTime() uint64         { return 0 }
 
 // GetCPUCycles 返回 0（禁用时）
 func GetCPUCycles() uint64 {
