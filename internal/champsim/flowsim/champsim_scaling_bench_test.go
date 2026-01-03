@@ -6,6 +6,9 @@ import (
 	"runtime"
 	"testing"
 
+	"strconv"
+	"strings"
+
 	"github.com/Readm/flow_sim/internal/champsim/cache"
 	"github.com/Readm/flow_sim/internal/champsim/cpu"
 	"github.com/Readm/flow_sim/internal/champsim/dram"
@@ -470,11 +473,25 @@ func Benchmark_ChampSim_64CPU(b *testing.B) {
 
 	// Generate core count samples: 1, 2, 4, 8... up to 16
 	var coreCountSamples []int
-	for i := 1; i <= 16 && i <= numPhysicalCPU; i *= 2 {
-		coreCountSamples = append(coreCountSamples, i)
+	benchCoresEnv := os.Getenv("BENCH_CORES")
+	if benchCoresEnv != "" {
+		// Parse comma-separated list of cores
+		parts := strings.Split(benchCoresEnv, ",")
+		for _, p := range parts {
+			if c, err := strconv.Atoi(strings.TrimSpace(p)); err == nil {
+				coreCountSamples = append(coreCountSamples, c)
+			}
+		}
 	}
-	if coreCountSamples[len(coreCountSamples)-1] != 16 && numPhysicalCPU >= 16 {
-		coreCountSamples = append(coreCountSamples, 16)
+
+	// Default samples if not provided
+	if len(coreCountSamples) == 0 {
+		for i := 1; i <= 16 && i <= numPhysicalCPU; i *= 2 {
+			coreCountSamples = append(coreCountSamples, i)
+		}
+		if coreCountSamples[len(coreCountSamples)-1] != 16 && numPhysicalCPU >= 16 {
+			coreCountSamples = append(coreCountSamples, 16)
+		}
 	}
 
 	const cpusPerL2 = 2
@@ -578,11 +595,7 @@ func Benchmark_ChampSim_64CPU(b *testing.B) {
 			}
 
 			// Report metrics
-			b.ReportMetric(float64(numSimCPUs), "sim_cpus")
-			b.ReportMetric(float64(totalNodes), "total_nodes")
-			b.ReportMetric(actualCyclesPerOp, "actual_cycles/op")
 			b.ReportMetric(efficiencyPct, "efficiency_pct")
-			b.ReportMetric(speedup, "speedup")
 		})
 	}
 }
