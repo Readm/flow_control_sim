@@ -95,6 +95,6 @@ ThirdParty/
 *.xz
 
 # AI files
-.claude/*
+.claude/
 CLAUDE.md
 server

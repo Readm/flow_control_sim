@@ -65,6 +65,10 @@ go test -bench=BenchmarkRingCoreScaling -run=^$ ./internal/core/network -args -b
 go test -bench=Benchmark_ChampSim_64CPU -run=^$ ./internal/champsim/flowsim -benchtime=1x -timeout=300s
 ```
 
+性能追踪网址（仅2核）：
+
+https://readm.github.io/flow_sim/dev/bench/
+
 ## 项目结构
 
 ```
