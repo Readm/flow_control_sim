@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767433641648,
+  "lastUpdate": 1767434269773,
   "repoUrl": "https://github.com/Readm/flow_sim",
   "entries": {
     "ChampSim 64-CPU Scaling Benchmark": [
@@ -186,6 +186,90 @@ window.BENCHMARK_DATA = {
             "value": 509803,
             "unit": "allocs/op",
             "extra": "7 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "committer": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "distinct": true,
+          "id": "af58ce9131f800150e18c9ee00f438ce9fcfeef6",
+          "message": "Optimize CI benchmark: restrict to 1,2 cores and simplify metrics",
+          "timestamp": "2026-01-03T17:57:21+08:00",
+          "tree_id": "99993161df319715fe153118138f5249c362ba4a",
+          "url": "https://github.com/Readm/flow_sim/commit/af58ce9131f800150e18c9ee00f438ce9fcfeef6"
+        },
+        "date": 1767434268990,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1",
+            "value": 303096069,
+            "unit": "ns/op\t       100.0 efficiency_pct\t68227728 B/op\t  530971 allocs/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - ns/op",
+            "value": 303096069,
+            "unit": "ns/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - efficiency_pct",
+            "value": 100,
+            "unit": "efficiency_pct",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - B/op",
+            "value": 68227728,
+            "unit": "B/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - allocs/op",
+            "value": 530971,
+            "unit": "allocs/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2",
+            "value": 203088634,
+            "unit": "ns/op\t        89.15 efficiency_pct\t66545717 B/op\t  512888 allocs/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - ns/op",
+            "value": 203088634,
+            "unit": "ns/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - efficiency_pct",
+            "value": 89.15,
+            "unit": "efficiency_pct",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - B/op",
+            "value": 66545717,
+            "unit": "B/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - allocs/op",
+            "value": 512888,
+            "unit": "allocs/op",
+            "extra": "6 times\n4 procs"
           }
         ]
       }
