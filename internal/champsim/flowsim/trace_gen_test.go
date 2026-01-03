@@ -58,7 +58,7 @@ func TestGenerateChampSimTrace(t *testing.T) {
 
 	config := trace.TracerConfig{
 		Enabled:        true,
-		MaxCycles:      maxCycles,
+		EndCycle:       maxCycles,
 		SampleRate:     1,      // 每个 cycle 都记录
 		MinDuration:    0,      // 记录所有事件
 		NodeFilter:     nil,    // 记录所有节点！
@@ -140,7 +140,8 @@ func TestGenerateChampSimTrace(t *testing.T) {
 	}
 
 	// 6. 报告结果
-	eventCount := tracer.EventCount()
+	events := tracer.GetEvents()
+	eventCount := len(events)
 	t.Logf(" Trace 生成成功!")
 	t.Logf(" 生成了 %d 个事件", eventCount)
 	t.Logf(" 文件位置: %s", outputFile)
@@ -188,7 +189,7 @@ func TestGenerateFullSystemTrace(t *testing.T) {
 	// 不过滤节点，记录所有节点
 	config := trace.TracerConfig{
 		Enabled:        true,
-		MaxCycles:      maxCycles,
+		EndCycle:       maxCycles,
 		SampleRate:     2, // 每 2 个 cycles 采样以减少数据量
 		MinDuration:    0,
 		NodeFilter:     nil, // 记录所有节点
@@ -214,6 +215,6 @@ func TestGenerateFullSystemTrace(t *testing.T) {
 	}
 
 	t.Logf(" 完整系统 Trace 生成成功!")
-	t.Logf(" 生成了 %d 个事件", tracer.EventCount())
+	t.Logf(" 生成了 %d 个事件", len(tracer.GetEvents()))
 	t.Logf(" 文件位置: %s (gzip 压缩)", outputFile)
 }
