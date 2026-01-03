@@ -35,12 +35,12 @@ func TestGenerateChampSimTrace(t *testing.T) {
 	}
 	testReader.Close()
 
-	// 设置单核运行以简化分析
-	oldMaxProcs := runtime.GOMAXPROCS(1)
+	// 设置 16 核运行
+	oldMaxProcs := runtime.GOMAXPROCS(16)
 	defer runtime.GOMAXPROCS(oldMaxProcs)
 
 	t.Logf(" 生成 ChampSim 64-CPU Chrome Trace...")
-	t.Logf(" 配置: %d CPUs, %d cycles, 1 physical core", numSimCPUs, maxCycles)
+	t.Logf(" 配置: %d CPUs, %d cycles, 16 physical cores", numSimCPUs, maxCycles)
 
 	// 1. 创建 tracer
 	// 追踪所有 RingRouter 节点 (200-215)

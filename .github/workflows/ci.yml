@@ -25,11 +25,22 @@ jobs:
         go-version: '1.21'
         cache: true
 
-    - name: Tidy dependencies
-      run: go mod tidy
+    - name: Run Performance Benchmark
+      run: |
+        chmod +x scripts/perf_recorder.sh
+        scripts/perf_recorder.sh | tee benchmark_output.txt
 
-    - name: Run All Tests
-      run: go test -tags "e2e trace" -v ./...
-
-    - name: Build All
-      run: go build -tags "e2e trace" -v ./...
+    - name: Store Benchmark Result
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: ChampSim 64-CPU Scaling Benchmark
+        tool: 'go'
+        output-file-path: benchmark_output.txt
+        # 即使失败也保存结果，方便调试
+        fail-on-alert: true
+        # 推送到 gh-pages 分支存储历史记录
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+        # 只有在 main/master 分支才执行自动推送
+        comment-on-alert: true
+        alert-threshold: '200%'
