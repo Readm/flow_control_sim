@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767435677440,
+  "lastUpdate": 1767450398624,
   "repoUrl": "https://github.com/Readm/flow_sim",
   "entries": {
     "ChampSim 64-CPU Scaling Benchmark": [
@@ -352,6 +352,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "Benchmark_ChampSim_64CPU/Cores_2 - allocs/op",
             "value": 521015,
+            "unit": "allocs/op",
+            "extra": "6 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "committer": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "distinct": true,
+          "id": "48aeea4f0dc3bd10f96a16bb3a8435ae4cd52631",
+          "message": "feat: Add project structure documentation and refactor CPU cycle monitoring to a new monitor package, removing disabled profiling and tracing stubs.",
+          "timestamp": "2026-01-03T22:26:15+08:00",
+          "tree_id": "9da6eb55f840c06da119a381256d15f0589de65d",
+          "url": "https://github.com/Readm/flow_sim/commit/48aeea4f0dc3bd10f96a16bb3a8435ae4cd52631"
+        },
+        "date": 1767450398371,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1",
+            "value": 332447593,
+            "unit": "ns/op\t       100.0 efficiency_pct\t109619432 B/op\t  528481 allocs/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - ns/op",
+            "value": 332447593,
+            "unit": "ns/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - efficiency_pct",
+            "value": 100,
+            "unit": "efficiency_pct",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - B/op",
+            "value": 109619432,
+            "unit": "B/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - allocs/op",
+            "value": 528481,
+            "unit": "allocs/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2",
+            "value": 206656911,
+            "unit": "ns/op\t        96.36 efficiency_pct\t108023209 B/op\t  510789 allocs/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - ns/op",
+            "value": 206656911,
+            "unit": "ns/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - efficiency_pct",
+            "value": 96.36,
+            "unit": "efficiency_pct",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - B/op",
+            "value": 108023209,
+            "unit": "B/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - allocs/op",
+            "value": 510789,
             "unit": "allocs/op",
             "extra": "6 times\n4 procs"
           }
