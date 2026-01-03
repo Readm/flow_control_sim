@@ -27,7 +27,6 @@ jobs:
 
     - name: Run Performance Benchmark
       run: |
-        chmod +x scripts/perf_recorder.sh
         scripts/perf_recorder.sh | tee benchmark_output.txt
 
     - name: Store Benchmark Result
