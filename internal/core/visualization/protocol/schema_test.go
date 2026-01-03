@@ -1,4 +1,4 @@
-package tests
+package protocol
 
 import (
 	"os"
@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
-
-	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 )
 
 // OpenAPISpec represents the minimal structure we need to parse from openapi.yaml
@@ -55,9 +53,9 @@ func TestOpenAPIConsistency(t *testing.T) {
 		GoType     interface{}
 		SchemaName string
 	}{
-		{protocol.CyNetwork{}, "Network"},
-		{protocol.CyNode{}, "Node"},
-		{protocol.CyEdge{}, "Edge"},
+		{CyNetwork{}, "Network"},
+		{CyNode{}, "Node"},
+		{CyEdge{}, "Edge"},
 	}
 
 	for _, check := range checks {

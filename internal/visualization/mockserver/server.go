@@ -1,4 +1,4 @@
-package server
+package mockserver
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 	"github.com/Readm/flow_sim/internal/config"
 	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
-	"github.com/Readm/flow_sim/tests/e2e/mocks"
+	"github.com/Readm/flow_sim/internal/testing/mocks"
 )
 
 // Options configures the bridge server.

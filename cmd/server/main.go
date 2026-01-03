@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 
 	"github.com/Readm/flow_sim/internal/core/state"
-	"github.com/Readm/flow_sim/tests/e2e/mocks"
-	"github.com/Readm/flow_sim/tests/e2e/server"
+	"github.com/Readm/flow_sim/internal/testing/mocks"
+	"github.com/Readm/flow_sim/internal/visualization/mockserver"
 )
 
 func main() {
@@ -38,7 +38,7 @@ func main() {
 	absStatic, _ := filepath.Abs(*staticDir)
 	log.Printf("Serving static files from: %s", absStatic)
 
-	srv, err := server.New(server.Options{
+	srv, err := mockserver.New(mockserver.Options{
 		Controller:         ctrl,
 		StaticDir:          *staticDir,
 		DefaultTotalCycles: 1000,

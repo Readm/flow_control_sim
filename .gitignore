@@ -93,3 +93,8 @@ ThirdParty/
 !testdata/traces/small.champsimtrace
 !testdata/traces/small_mcf.champsimtrace
 *.xz
+
+# AI files
+.claude/*
+CLAUDE.md
+server
