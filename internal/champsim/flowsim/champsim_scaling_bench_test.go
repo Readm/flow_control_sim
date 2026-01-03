@@ -14,6 +14,7 @@ import (
 	"github.com/Readm/flow_sim/internal/champsim/dram"
 	"github.com/Readm/flow_sim/internal/champsim/trace"
 	compcache "github.com/Readm/flow_sim/internal/components/cache"
+	"github.com/Readm/flow_sim/internal/core/monitor"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -538,12 +539,12 @@ func Benchmark_ChampSim_64CPU(b *testing.B) {
 				}
 
 				// Start timing ONLY for simulation execution
-				iterStart := node.GetCPUCycles()
+				iterStart := monitor.GetCPUCycles()
 				if err := net.AdvanceTo(int(maxCycles - 1)); err != nil {
 					handlers.Cleanup()
 					b.Fatalf("Simulation failed: %v", err)
 				}
-				iterEnd := node.GetCPUCycles()
+				iterEnd := monitor.GetCPUCycles()
 
 				totalCycles += (iterEnd - iterStart)
 				lastNet = net
