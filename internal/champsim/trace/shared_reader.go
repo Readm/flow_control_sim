@@ -496,8 +496,28 @@ func (r *SharedTraceReader) refillCache() error {
 // trace数据字段（DestRegisters, SrcRegisters, DestMemory, SrcMemory）是只读的，
 // 可以安全地在多个CPU之间共享，无需深拷贝
 func (r *SharedTraceReader) copyInstruction(src *instruction.OOOModelInstr) *instruction.OOOModelInstr {
-	// 浅拷贝：切片共享底层数组（只读数据，安全）
+	// 浅拷贝：切片共享底层数组（只读数据，安全）-- 错误！
+	// 警告：必须深拷贝切片！因为 O3CPU 会在重命名阶段就地修改 DestRegisters/SrcRegisters
+	// 如果不深拷贝，多个 CPU 会修改同一个底层数组，导致严重的数据竞争和状态破坏！
 	dst := *src
+
+	// 深拷贝切片
+	if len(src.DestRegisters) > 0 {
+		dst.DestRegisters = make([]instruction.PhysicalRegisterID, len(src.DestRegisters))
+		copy(dst.DestRegisters, src.DestRegisters)
+	}
+	if len(src.SrcRegisters) > 0 {
+		dst.SrcRegisters = make([]instruction.PhysicalRegisterID, len(src.SrcRegisters))
+		copy(dst.SrcRegisters, src.SrcRegisters)
+	}
+	if len(src.DestMemory) > 0 {
+		dst.DestMemory = make([]uint64, len(src.DestMemory))
+		copy(dst.DestMemory, src.DestMemory)
+	}
+	if len(src.SrcMemory) > 0 {
+		dst.SrcMemory = make([]uint64, len(src.SrcMemory))
+		copy(dst.SrcMemory, src.SrcMemory)
+	}
 
 	// 只设置CPU特定的字段
 	// 其他字段（ReadyTime, BranchPrediction等）在src中已经是初始值（0/false）
