@@ -92,14 +92,11 @@ func Benchmark_ChampSim_64CPU(b *testing.B) {
 
 func Benchmark_ChampSim_Baseline_1CPU(b *testing.B) {
 	// 1. Trace finding logic (same as 64CPU)
+	// 1. Trace finding logic
 	traceFile := os.Getenv("CHAMPSIM_TRACE")
 	if traceFile == "" {
-		largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
-		if _, err := os.Stat(largeTrace); err == nil {
-			traceFile = largeTrace
-		} else {
-			traceFile = "../../testdata/traces/small.champsimtrace"
-		}
+		// specific trace file not provided, use default small trace (aligned with CI)
+		traceFile = "../../testdata/traces/small.champsimtrace"
 	}
 
 	var finalNet *network.Network
