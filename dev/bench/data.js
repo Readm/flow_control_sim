@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767450398624,
+  "lastUpdate": 1767595119101,
   "repoUrl": "https://github.com/Readm/flow_sim",
   "entries": {
     "ChampSim 64-CPU Scaling Benchmark": [
@@ -436,6 +436,120 @@ window.BENCHMARK_DATA = {
           {
             "name": "Benchmark_ChampSim_64CPU/Cores_2 - allocs/op",
             "value": 510789,
+            "unit": "allocs/op",
+            "extra": "6 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "committer": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "distinct": true,
+          "id": "71390da5e23bf0c1c14deeb2ba1b18428e01b0a5",
+          "message": "rm stale files",
+          "timestamp": "2026-01-05T14:38:05+08:00",
+          "tree_id": "eb6ed67379264ab443bcaf3a40bfab969b999ad0",
+          "url": "https://github.com/Readm/flow_sim/commit/71390da5e23bf0c1c14deeb2ba1b18428e01b0a5"
+        },
+        "date": 1767595118272,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1",
+            "value": 326951266,
+            "unit": "ns/op\t 211700830 actual_cycles/op\t109515984 B/op\t  527057 allocs/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - ns/op",
+            "value": 326951266,
+            "unit": "ns/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - actual_cycles/op",
+            "value": 211700830,
+            "unit": "actual_cycles/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - B/op",
+            "value": 109515984,
+            "unit": "B/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1 - allocs/op",
+            "value": 527057,
+            "unit": "allocs/op",
+            "extra": "4 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2",
+            "value": 212685452,
+            "unit": "ns/op\t 112457283 actual_cycles/op\t108495218 B/op\t  516764 allocs/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - ns/op",
+            "value": 212685452,
+            "unit": "ns/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - actual_cycles/op",
+            "value": 112457283,
+            "unit": "actual_cycles/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - B/op",
+            "value": 108495218,
+            "unit": "B/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2 - allocs/op",
+            "value": 516764,
+            "unit": "allocs/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_4",
+            "value": 172007639,
+            "unit": "ns/op\t  81984477 actual_cycles/op\t107556585 B/op\t  504256 allocs/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_4 - ns/op",
+            "value": 172007639,
+            "unit": "ns/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_4 - actual_cycles/op",
+            "value": 81984477,
+            "unit": "actual_cycles/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_4 - B/op",
+            "value": 107556585,
+            "unit": "B/op",
+            "extra": "6 times\n4 procs"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_4 - allocs/op",
+            "value": 504256,
             "unit": "allocs/op",
             "extra": "6 times\n4 procs"
           }
