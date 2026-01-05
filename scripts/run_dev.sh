@@ -44,6 +44,13 @@ sleep 2
 # 3. Start Frontend Dev Server
 echo -e "${BLUE}[3/3] Starting Frontend Dev Server (Port 8080)...${NC}"
 cd web
+
+# Check for node_modules
+if [ ! -d "node_modules" ]; then
+    echo -e "${BLUE}Installing frontend dependencies...${NC}"
+    npm install
+fi
+
 # npm run serve blocks, so we run it in foreground. 
 # Ctrl+C will trigger the trap to kill backend.
 npm run serve
