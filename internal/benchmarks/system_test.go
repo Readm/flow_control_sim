@@ -110,6 +110,8 @@ func Benchmark_ChampSim_Baseline_1CPU(b *testing.B) {
 	}
 
 	var finalNet *network.Network
+	// Capture statistics for the Baseline run
+	baselineStats := network.CollectGlobalRuntimeStats()
 
 	b.Run("SingleCore_Baseline", func(b *testing.B) {
 		// Force single thread execution for baseline
@@ -169,7 +171,6 @@ func Benchmark_ChampSim_Baseline_1CPU(b *testing.B) {
 
 	// Print global stats only ONCE after benchmark completes
 	if finalNet != nil {
-		//fmt.Printf("\n--- Global Stats for Baseline 1 Core ---\n")
-		finalNet.PrintGlobalPerformanceSummary()
+		finalNet.PrintGlobalPerformanceSummary(&baselineStats)
 	}
 }

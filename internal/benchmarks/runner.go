@@ -30,6 +30,9 @@ func RunScalingBenchmark(b *testing.B, name string, testFunc func(b *testing.B, 
 
 	for _, coreCount := range coreCountSamples {
 		var lastNet *network.Network
+		// Capture stats start for this core count
+		iterationStartStats := network.CollectGlobalRuntimeStats()
+
 		b.Run(fmt.Sprintf("Cores_%d", coreCount), func(b *testing.B) {
 			// Set GOMAXPROCS for this benchmark
 			oldMaxProcs := runtime.GOMAXPROCS(coreCount)
@@ -44,7 +47,7 @@ func RunScalingBenchmark(b *testing.B, name string, testFunc func(b *testing.B, 
 
 		// Print global stats after the sub-benchmark finishes (only once per core count)
 		if lastNet != nil {
-			lastNet.PrintGlobalPerformanceSummary()
+			lastNet.PrintGlobalPerformanceSummary(&iterationStartStats)
 		}
 	}
 }

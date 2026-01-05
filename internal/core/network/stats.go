@@ -546,9 +546,20 @@ func CollectGlobalRuntimeStats() GlobalRuntimeStat {
 }
 
 // PrintGlobalPerformanceSummary 打印全局性能摘要（结合 Runtime Metrics 和 Internal Profiling）
-func (n *Network) PrintGlobalPerformanceSummary() {
+// baseline: 可选的基础统计数据，如果提供，则打印相对于 baseline 的增量数据
+func (n *Network) PrintGlobalPerformanceSummary(baseline *GlobalRuntimeStat) {
 	// 1. 获取 Runtime Metrics (宏观数据)
-	rStat := CollectGlobalRuntimeStats()
+	current := CollectGlobalRuntimeStats()
+	rStat := current
+
+	// 如果提供了 baseline，计算增量
+	if baseline != nil {
+		rStat.TotalCPUSec = current.TotalCPUSec - baseline.TotalCPUSec
+		rStat.IdleCPUSec = current.IdleCPUSec - baseline.IdleCPUSec
+		rStat.UserCPUSec = current.UserCPUSec - baseline.UserCPUSec
+		rStat.GCTotalCPUSec = current.GCTotalCPUSec - baseline.GCTotalCPUSec
+		rStat.ScavengeCPUSec = current.ScavengeCPUSec - baseline.ScavengeCPUSec
+	}
 
 	// 如果 runtime metrics 数据全为 0 (可能是 Go 版本太低不支持，或刚启动)，则只打印内部数据
 	hasRuntimeMetrics := rStat.TotalCPUSec > 0
