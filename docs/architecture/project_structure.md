@@ -12,6 +12,7 @@ flow_sim/
 ├── web/                            # 前端资源和配置 (openapi.yaml)
 ├── scripts/                        # 实用脚本 (trace 验证等)
 └── internal/                       # 私有应用程序代码
+    ├── benchmarks/                 # 统一性能基准测试 (runner, network, system)
     ├── core/                       # 核心仿真引擎
     │   ├── network/                # 网络管理
     │   │   ├── Network             # 节点/链路容器

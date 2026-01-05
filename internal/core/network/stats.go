@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	metrics "runtime/metrics"
 	"sort"
 	"strings"
 )
@@ -32,7 +33,7 @@ func (n *Network) CollectSyncProfile() []BlockStat {
 
 	for _, lk := range n.links {
 		// 获取 Link 的两个 Port
-		upstreamPort := lk.GetUpstreamPort()   // OutputQueue -> Link
+		upstreamPort := lk.GetUpstreamPort()     // OutputQueue -> Link
 		downstreamPort := lk.GetDownstreamPort() // Link -> InputQueue
 
 		if upstreamPort == nil && downstreamPort == nil {
@@ -490,4 +491,94 @@ func (n *Network) PrintNodeDetailedTimeProfile(topN int) {
 		fmt.Printf("Total:               %15d cycles\n", totalAll)
 		fmt.Println()
 	}
+}
+
+// ===== 全局运行时性能统计 (Go 1.25+ runtime/metrics) =====
+
+// GlobalRuntimeStat 记录从 Go 运行时获取的 CPU 统计信息
+type GlobalRuntimeStat struct {
+	TotalCPUSec    float64 // /cpu/classes/total:cpu-seconds
+	IdleCPUSec     float64 // /cpu/classes/idle:cpu-seconds
+	UserCPUSec     float64 // /cpu/classes/user:cpu-seconds
+	GCTotalCPUSec  float64 // /cpu/classes/gc/total:cpu-seconds
+	ScavengeCPUSec float64 // /cpu/classes/scavenge/total:cpu-seconds
+}
+
+// CollectGlobalRuntimeStats 从 runtime/metrics 获取全局 CPU 数据
+func CollectGlobalRuntimeStats() GlobalRuntimeStat {
+	// 定义我们需要读取的指标名称
+	// 注意: 这些指标需要 Go 1.23+
+	samples := []metrics.Sample{
+		{Name: "/cpu/classes/total:cpu-seconds"},
+		{Name: "/cpu/classes/idle:cpu-seconds"},
+		{Name: "/cpu/classes/user:cpu-seconds"},
+		{Name: "/cpu/classes/gc/total:cpu-seconds"},
+		{Name: "/cpu/classes/scavenge/total:cpu-seconds"},
+	}
+
+	// 从运行时读取指标
+	metrics.Read(samples)
+
+	stat := GlobalRuntimeStat{}
+
+	// 解析结果
+	for _, s := range samples {
+		val := 0.0
+		if s.Value.Kind() == metrics.KindFloat64 {
+			val = s.Value.Float64()
+		}
+
+		switch s.Name {
+		case "/cpu/classes/total:cpu-seconds":
+			stat.TotalCPUSec = val
+		case "/cpu/classes/idle:cpu-seconds":
+			stat.IdleCPUSec = val
+		case "/cpu/classes/user:cpu-seconds":
+			stat.UserCPUSec = val
+		case "/cpu/classes/gc/total:cpu-seconds":
+			stat.GCTotalCPUSec = val
+		case "/cpu/classes/scavenge/total:cpu-seconds":
+			stat.ScavengeCPUSec = val
+		}
+	}
+
+	return stat
+}
+
+// PrintGlobalPerformanceSummary 打印全局性能摘要（结合 Runtime Metrics 和 Internal Profiling）
+func (n *Network) PrintGlobalPerformanceSummary() {
+	// 1. 获取 Runtime Metrics (宏观数据)
+	rStat := CollectGlobalRuntimeStats()
+
+	// 如果 runtime metrics 数据全为 0 (可能是 Go 版本太低不支持，或刚启动)，则只打印内部数据
+	hasRuntimeMetrics := rStat.TotalCPUSec > 0
+
+	// 2. 获取 Internal Profiling (微观数据)
+	// 汇总所有节点的 Process 时间
+	nodeStats := n.CollectNodeDetailedTimeProfile()
+	var totalProcessCycles uint64
+	for _, s := range nodeStats {
+		totalProcessCycles += s.TotalProcess
+	}
+
+	if !hasRuntimeMetrics {
+		fmt.Printf("Global Stats: InternalLogic=%d Cycles (Runtime Metrics Unavailable)\n", totalProcessCycles)
+		return
+	}
+
+	// 计算各部分占比
+	total := rStat.TotalCPUSec
+	if total == 0 {
+		total = 1.0 // 避免除零
+	}
+
+	idlePct := (rStat.IdleCPUSec / total) * 100
+	userPct := (rStat.UserCPUSec / total) * 100
+	gcPct := (rStat.GCTotalCPUSec / total) * 100
+	sysPct := (rStat.ScavengeCPUSec / total) * 100
+
+	overheadPct := gcPct + sysPct
+
+	// 简洁的一行输出
+	fmt.Printf("CPU Stats: Idle=%.1f%% User=%.1f%% Sys=%.1f%%\n", idlePct, userPct, overheadPct)
 }

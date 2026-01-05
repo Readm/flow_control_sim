@@ -52,17 +52,17 @@ net.AdvanceTo(1000) // 运行至 1000 个周期
 go test ./...
 
 # 运行性能测试
-go test -bench=. ./internal/core/network/...
+go test -bench=. ./internal/benchmarks/...
 
 # 运行核心扩展性基准测试（自定义节点数）
 # -bench: 指定测试函数
 # -run=^$: 跳过普通单元测试
 # -args -bench_nodes=N: 指定网络节点数量（默认50）
-go test -bench=BenchmarkRingCoreScaling -run=^$ ./internal/core/network -args -bench_nodes=100
+go test -bench=BenchmarkRingCoreScaling -run=^$ -v ./internal/benchmarks -args -bench_nodes=100
 
 # 运行 ChampSim 64-CPU 并行扩展性基准测试
 # 测试不同物理核心数下的并行效率（1/2/4/8/16核）
-go test -bench=Benchmark_ChampSim_64CPU -run=^$ ./internal/champsim/flowsim -benchtime=1x -timeout=300s
+go test -bench=Benchmark_ChampSim_64CPU -run=^$ -v ./internal/benchmarks -benchtime=1x -timeout=300s
 ```
 
 性能追踪网址（仅2核）：
@@ -74,6 +74,7 @@ https://readm.github.io/flow_sim/dev/bench/
 ```
 flow_sim/
 ├── internal/
+│   ├── benchmarks/     # 统一性能基准测试
 │   ├── core/
 │   │   ├── network/        # 网络拓扑管理与调度中心
 │   │   ├── node/           # 节点（Router, Processor）实现
@@ -107,10 +108,10 @@ flow_sim/
 
 ```bash
 # 运行完整的并行扩展性测试（1/2/4/8/16核）
-go test -bench=Benchmark_ChampSim_64CPU -run=^$ ./internal/champsim/flowsim -benchtime=1x -timeout=300s
+go test -bench=Benchmark_ChampSim_64CPU -run=^$ -v ./internal/benchmarks -benchtime=1x -timeout=300s
 
 # 运行特定核心数的测试
-go test -bench=Benchmark_ChampSim_64CPU/Cores_8 -run=^$ ./internal/champsim/flowsim -benchtime=1x -timeout=300s
+go test -bench=Benchmark_ChampSim_64CPU/Cores_8 -run=^$ -v ./internal/benchmarks -benchtime=1x -timeout=300s
 ```
 
 #### 性能结果（参考）
