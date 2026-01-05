@@ -33,12 +33,17 @@ jobs:
       run: |
         scripts/perf_recorder.sh | tee benchmark_output.txt
 
+    - name: Convert Benchmark Results to JSON
+      run: |
+        python3 scripts/bench_to_json.py < benchmark_output.txt > benchmark_data.json
+        cat benchmark_data.json
+
     - name: Store Benchmark Result
       uses: benchmark-action/github-action-benchmark@v1
       with:
-        name: ChampSim 64-CPU Scaling Benchmark
-        tool: 'go'
-        output-file-path: benchmark_output.txt
+        name: ChampSim System Benchmarks
+        tool: 'customBiggerIsBetter'
+        output-file-path: benchmark_data.json
         # 即使失败也保存结果，方便调试
         fail-on-alert: true
         # 推送到 gh-pages 分支存储历史记录
@@ -47,3 +52,5 @@ jobs:
         # 只有在 main/master 分支才执行自动推送
         comment-on-alert: true
         alert-threshold: '200%'
+        # 使用新的目录存储 sim_Hz 数据，相当于清空旧数据
+        benchmark-data-dir-path: dev/bench_hz

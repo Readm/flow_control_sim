@@ -26,7 +26,7 @@ func RunScalingBenchmark(b *testing.B, name string, testFunc func(b *testing.B, 
 		coreCountSamples = coreCountSamples[:len(coreCountSamples)-1]
 	}
 
-	b.Logf("Running Scaling Benchmark '%s' with core counts: %v", name, coreCountSamples)
+	fmt.Printf("Running Scaling Benchmark '%s' with core counts: %v\n", name, coreCountSamples)
 
 	for _, coreCount := range coreCountSamples {
 		var lastNet *network.Network

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Readm/flow_sim/internal/core/monitor"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -49,7 +48,6 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 		// Calculate min/max cycles for 5-20us spin
 		minSpinCycles := int(5.0 * cyclesPerUS)
 		maxSpinCycles := int(20.0 * cyclesPerUS)
-		avgSpinCycles := uint64(12.5 * cyclesPerUS)
 
 		// Create network
 		net := network.New()
@@ -179,7 +177,6 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 		}
 
 		b.ResetTimer()
-		startTotalCycles := monitor.GetCPUCycles()
 
 		for i := 0; i < b.N; i++ {
 			if err := net.AdvanceTo(net.CurrentCycle() + advanceCycles - 1); err != nil {
@@ -187,9 +184,9 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 			}
 		}
 
-		endTotalCycles := monitor.GetCPUCycles()
 		b.StopTimer()
 
+		// Metrics
 		// Metrics
 		injected := atomic.LoadInt64(&injectedCount)
 		received := atomic.LoadInt64(&receivedCount)
@@ -199,20 +196,22 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 			ratio = float64(received) / float64(injected)
 		}
 
-		simWorkPerOpCycles := float64(nodeCount) * float64(advanceCycles) * float64(avgSpinCycles)
-		simWorkPerCoreCycles := simWorkPerOpCycles / float64(coreCount)
-		actualCyclesPerOp := float64(endTotalCycles-startTotalCycles) / float64(b.N)
-		efficiencyPct := 0.0
-		if actualCyclesPerOp > 0 {
-			efficiencyPct = (simWorkPerCoreCycles / actualCyclesPerOp) * 100
-		}
+		// Calculate sim_Hz
+		// Total simulated cycles = b.N * advanceCycles
+		// Total time = b.Elapsed().Seconds()
+		// Note: b.Elapsed() includes overhead, but b.ResetTimer() was called.
+		// A more accurate per-op latency is N/Elapsed.
+		// sim_Hz = (TotalSimCycles) / TotalTime
 
-		b.ReportMetric(float64(injected), "packets_injected")
+		elapsedSec := b.Elapsed().Seconds()
+		if elapsedSec == 0 {
+			elapsedSec = 1e-9 // Avoid div zero
+		}
+		totalSimCycles := float64(b.N) * float64(advanceCycles)
+		simHz := totalSimCycles / elapsedSec
+
+		b.ReportMetric(simHz, "sim_Hz")
 		b.ReportMetric(ratio*100, "reception_rate_pct")
-		b.ReportMetric(simWorkPerOpCycles, "ideal_sim_work_cycles/op")
-		b.ReportMetric(simWorkPerCoreCycles, "ideal_cycles_per_core_op")
-		b.ReportMetric(actualCyclesPerOp, "actual_cycles/op")
-		b.ReportMetric(efficiencyPct, "efficiency_pct")
 
 		return net
 	})
@@ -240,7 +239,6 @@ func BenchmarkBidirectionalRingCoreScaling(b *testing.B) {
 		cyclesPerUS := node.CalibrateCyclesPerUS(100 * time.Millisecond)
 		minSpinCycles := int(5.0 * cyclesPerUS)
 		maxSpinCycles := int(20.0 * cyclesPerUS)
-		avgSpinCycles := uint64(12.5 * cyclesPerUS) // Used for efficiency calc
 
 		net := network.New()
 		nodeHandles := make([]*network.NodeHandle, nodeCount)
@@ -347,7 +345,6 @@ func BenchmarkBidirectionalRingCoreScaling(b *testing.B) {
 		}
 
 		b.ResetTimer()
-		startTotalCycles := monitor.GetCPUCycles()
 
 		for i := 0; i < b.N; i++ {
 			if err := net.AdvanceTo(net.CurrentCycle() + advanceCycles); err != nil {
@@ -355,9 +352,9 @@ func BenchmarkBidirectionalRingCoreScaling(b *testing.B) {
 			}
 		}
 
-		endTotalCycles := monitor.GetCPUCycles()
 		b.StopTimer()
 
+		// Metrics
 		injected := atomic.LoadInt64(&injectedCount)
 		received := atomic.LoadInt64(&receivedCount)
 
@@ -366,19 +363,16 @@ func BenchmarkBidirectionalRingCoreScaling(b *testing.B) {
 			ratio = float64(received) / float64(injected)
 		}
 
-		// Calculate metrics (same as logic above)
-		// Assuming similar cycle counts per node
-		simWorkPerOpCycles := float64(nodeCount) * float64(advanceCycles) * float64(avgSpinCycles)
-		simWorkPerCoreCycles := simWorkPerOpCycles / float64(coreCount)
-		actualCyclesPerOp := float64(endTotalCycles-startTotalCycles) / float64(b.N)
-		efficiencyPct := 0.0
-		if actualCyclesPerOp > 0 {
-			efficiencyPct = (simWorkPerCoreCycles / actualCyclesPerOp) * 100
+		// Calculate sim_Hz
+		elapsedSec := b.Elapsed().Seconds()
+		if elapsedSec == 0 {
+			elapsedSec = 1e-9
 		}
+		totalSimCycles := float64(b.N) * float64(advanceCycles)
+		simHz := totalSimCycles / elapsedSec
 
-		b.ReportMetric(float64(injected), "packets_injected")
+		b.ReportMetric(simHz, "sim_Hz")
 		b.ReportMetric(ratio*100, "reception_rate_pct")
-		b.ReportMetric(efficiencyPct, "efficiency_pct")
 
 		return net
 	})

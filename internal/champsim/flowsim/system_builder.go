@@ -15,7 +15,7 @@ import (
 
 // SystemHandlers holds all handlers for cleanup
 type SystemHandlers struct {
-	TraceReaders []trace.TraceReader // Renamed to Exported field
+	TraceReaders []trace.TraceReader
 }
 
 func (h *SystemHandlers) Cleanup() {
@@ -417,6 +417,153 @@ func BuildChampSimSystem(numCPUs int, traceFile string) (*network.Network, *Syst
 		net.ConnectNodes(memCtrlWorkerNodes[mcIdx], 1, dramNodes[mcIdx], 0, 20, 1)
 		net.ConnectNodes(dramNodes[mcIdx], 0, memCtrlWorkerNodes[mcIdx], 1, 20, 1)
 	}
+
+	return net, handlers, nil
+}
+
+// BuildChampSimSingleCoreSystem builds a baseline single-core system
+// Topology: 1 CPU -> 1 L2 -> 1 L3 <-> 1 MemCtrl -> 1 DRAM
+// No Network/Ring, but uses same latencies where applicable.
+func BuildChampSimSingleCoreSystem(traceFile string) (*network.Network, *SystemHandlers, error) {
+	// IDs
+	const (
+		cpuID     = 0
+		l2ID      = 1
+		l3ID      = 2
+		memCtrlID = 3
+		dramID    = 4
+	)
+
+	handlers := &SystemHandlers{}
+	net := network.New()
+
+	// 1. CPU
+	traceReader, err := trace.NewSharedTraceReader(traceFile, 0, trace.FormatStandard)
+	if err != nil {
+		return nil, nil, err
+	}
+	handlers.TraceReaders = append(handlers.TraceReaders, traceReader)
+
+	o3cpu := cpu.NewO3CPU(traceReader, cpu.DefaultO3CPUConfig())
+	o3cpu.SetStandaloneMode(false)
+	l1dCache, _ := cache.NewSetAssociativeCache(compcache.DefaultL1DConfig())
+	memoryAdapter := NewFlowSimMemoryAdapter()
+	l1dCache.SetLowerLevel(memoryAdapter)
+	o3cpu.SetL1DCache(l1dCache)
+
+	cpuHandler := NewCPUNodeHandler(cpuID, l2ID, o3cpu, l1dCache, memoryAdapter, queue.NewOutputQueue(128, 1))
+	cpuNode := node.NewWorkerNode(cpuID)
+	cpuNode.SetProcessHook(cpuHandler.Process)
+	cpuInputQ := queue.NewInputQueue(128, 1)
+	cpuOutputQ := queue.NewOutputQueue(128, 1)
+	cpuNode.AddInputQueue(cpuInputQ)
+	cpuNode.AddOutputQueue(cpuOutputQ)
+	net.AddNode(&network.NodeHandle{Node: cpuNode, Inputs: []*queue.InputQueue{cpuInputQ}, Outputs: []*queue.OutputQueue{cpuOutputQ}})
+
+	// 2. L2 Cache
+	l2Config := compcache.CacheConfig{Name: "L2_0", NumSets: 512, NumWays: 16, BlockSize: 64, MSHRSize: 32, HitLatency: 20, FillLatency: 10}
+	l2Cache, _ := cache.NewSetAssociativeCache(l2Config)
+	// L2 connects to 1 CPU (port 0) and L3 (handled via nextLevelID)
+	// But L2 handler expects input queues for CPUs. Here 1 CPU.
+	l2Handler := NewL2CacheNodeHandler(l2ID, []int{cpuID}, l3ID, l2Cache, []*queue.OutputQueue{queue.NewOutputQueue(128, 1), queue.NewOutputQueue(128, 1)})
+	l2Node := node.NewWorkerNode(l2ID)
+	l2Node.SetProcessHook(l2Handler.Process)
+	// Ports: 0: CPU-side In/Out, 1: L3-side In/Out (Implicit in Handler implementation? Let's check logic)
+	// L2 Handler implementation:
+	// Inputs: 0..N-1 from CPUs.
+	// Last Input? Usually L2 receives from L3 too.
+	// Actually L2CacheNodeHandler uses `queues` array where first N are for CPUs, last one is for L3 (NextLevel).
+	// So for 1 CPU: 2 queues. Index 0: CPU, Index 1: L3.
+	l2InputQs := []*queue.InputQueue{queue.NewInputQueue(128, 1), queue.NewInputQueue(128, 1)}
+	l2OutputQs := []*queue.OutputQueue{queue.NewOutputQueue(128, 1), queue.NewOutputQueue(128, 1)}
+	for _, q := range l2InputQs {
+		l2Node.AddInputQueue(q)
+	}
+	for _, q := range l2OutputQs {
+		l2Node.AddOutputQueue(q)
+	}
+	// Re-create handler with correct queues ref?
+	// The handler stores `queues`. We passed `queue.NewOutputQueue` above which are NOT the ones attached to the node?
+	// Wait, in previous code:
+	// l2OutputQueues := make...
+	// l2Handler := NewL2CacheNodeHandler(..., l2OutputQueues)
+	// l2Node.AddOutputQueue(q) (iterating l2OutputQueues)
+	// So I should create queues first.
+	// Redoing L2 Setup correctly:
+	l2OutQs := []*queue.OutputQueue{queue.NewOutputQueue(128, 1), queue.NewOutputQueue(128, 1)}
+	l2Handler = NewL2CacheNodeHandler(l2ID, []int{cpuID}, l3ID, l2Cache, l2OutQs)
+	l2Node.SetProcessHook(l2Handler.Process) // Re-set
+	for _, q := range l2InputQs {
+		l2Node.AddInputQueue(q) // Use previously created inputs
+	}
+	for _, q := range l2OutQs {
+		l2Node.AddOutputQueue(q) // Use newly created outputs
+	}
+	net.AddNode(&network.NodeHandle{Node: l2Node, Inputs: l2InputQs, Outputs: l2OutQs})
+
+	// 3. L3 Cache
+	l3Config := compcache.CacheConfig{Name: "L3_0", NumSets: 2048, NumWays: 16, BlockSize: 64, MSHRSize: 64, HitLatency: 40, FillLatency: 20}
+	l3Cache, _ := cache.NewSetAssociativeCache(l3Config)
+	// L3 connects to 1 L2 and 1 MemCtrl.
+	// Handler: 1 input from L2, 1 input from MemCtrl.
+	l3InputQs := []*queue.InputQueue{queue.NewInputQueue(256, 1), queue.NewInputQueue(256, 1)}
+	l3OutQs := []*queue.OutputQueue{queue.NewOutputQueue(256, 1), queue.NewOutputQueue(256, 1)}
+	l3Handler := NewL2CacheNodeHandler(l3ID, []int{l2ID}, memCtrlID, l3Cache, l3OutQs)
+	l3Node := node.NewWorkerNode(l3ID)
+	l3Node.SetProcessHook(l3Handler.Process)
+	for _, q := range l3InputQs {
+		l3Node.AddInputQueue(q)
+	}
+	for _, q := range l3OutQs {
+		l3Node.AddOutputQueue(q)
+	}
+	net.AddNode(&network.NodeHandle{Node: l3Node, Inputs: l3InputQs, Outputs: l3OutQs})
+
+	// 4. Memory Controller
+	// Connects to L3 (simulating 'Ring' side) and DRAM.
+	// In System: ringID and dramID.
+	// Here, we pretend L3 is the 'ring' source/dest.
+	mcInputQs := []*queue.InputQueue{queue.NewInputQueue(256, 1), queue.NewInputQueue(256, 1)}
+	mcOutQs := []*queue.OutputQueue{queue.NewOutputQueue(256, 1), queue.NewOutputQueue(256, 1)}
+	// Handler expects logic to talk to Ring (index 0) and DRAM (index 1).
+	mcHandler := NewMemoryControllerHandler(memCtrlID, []int{l3ID}, []int{dramID}, mcOutQs, MappingInterleaved)
+	mcNode := node.NewWorkerNode(memCtrlID)
+	mcNode.SetProcessHook(mcHandler.Process)
+	for _, q := range mcInputQs {
+		mcNode.AddInputQueue(q)
+	}
+	for _, q := range mcOutQs {
+		mcNode.AddOutputQueue(q)
+	}
+	net.AddNode(&network.NodeHandle{Node: mcNode, Inputs: mcInputQs, Outputs: mcOutQs})
+
+	// 5. DRAM
+	dramChannel, _ := dram.NewDRAMChannel(dram.DefaultDRAMConfig())
+	dramInputQ := queue.NewInputQueue(128, 1)
+	dramOutputQ := queue.NewOutputQueue(128, 1)
+	dramHandler := NewDRAMNodeHandler(dramID, memCtrlID, dramChannel, dramOutputQ)
+	dramNode := node.NewWorkerNode(dramID)
+	dramNode.SetProcessHook(dramHandler.Process)
+	dramNode.AddInputQueue(dramInputQ)
+	dramNode.AddOutputQueue(dramOutputQ)
+	net.AddNode(&network.NodeHandle{Node: dramNode, Inputs: []*queue.InputQueue{dramInputQ}, Outputs: []*queue.OutputQueue{dramOutputQ}})
+
+	// Connections
+	// CPU(0) <-> L2(0) [Latency 10]
+	net.ConnectNodes(cpuNode, 0, l2Node, 0, 10, 1)
+	net.ConnectNodes(l2Node, 0, cpuNode, 0, 10, 1)
+
+	// L2(1) <-> L3(0) [Latency 20]
+	net.ConnectNodes(l2Node, 1, l3Node, 0, 20, 1)
+	net.ConnectNodes(l3Node, 0, l2Node, 1, 20, 1)
+
+	// L3(1) <-> MemCtrl(0) [Latency 20? Simulating NoC+Local]
+	net.ConnectNodes(l3Node, 1, mcNode, 0, 20, 1)
+	net.ConnectNodes(mcNode, 0, l3Node, 1, 20, 1)
+
+	// MemCtrl(1) <-> DRAM(0) [Latency 20]
+	net.ConnectNodes(mcNode, 1, dramNode, 0, 20, 1)
+	net.ConnectNodes(dramNode, 0, mcNode, 1, 20, 1)
 
 	return net, handlers, nil
 }
