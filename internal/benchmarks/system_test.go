@@ -19,15 +19,8 @@ func Benchmark_ChampSim_64CPU(b *testing.B) {
 		// Use environment variable if provided, otherwise fallback to repo's small trace
 		traceFile := os.Getenv("CHAMPSIM_TRACE")
 		if traceFile == "" {
-			// Check if large trace exists locally (not in git)
-			largeTrace := "../../../testdata/traces/400.perlbench-41B.champsimtrace.xz"
-			if _, err := os.Stat(largeTrace); err == nil {
-				traceFile = largeTrace
-			} else {
-				// Fallback to the small trace snippet provided for CI
-				// Note: Adjusted path relative to internal/benchmarks
-				traceFile = "../../testdata/traces/small.champsimtrace"
-			}
+			// specific trace file not provided, use default small trace (aligned with CI)
+			traceFile = "../../testdata/traces/small.champsimtrace"
 		}
 
 		// Check if trace file is available
