@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767598564264,
+  "lastUpdate": 1767614901546,
   "repoUrl": "https://github.com/Readm/flow_sim",
   "entries": {
     "ChampSim System Benchmarks": [
@@ -112,6 +112,80 @@ window.BENCHMARK_DATA = {
           {
             "name": "Benchmark_ChampSim_Baseline_1CPU/SingleCore_Baseline-4",
             "value": 168194,
+            "unit": "sim_Hz"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "committer": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "distinct": true,
+          "id": "99b6784333ac0caf97752d47ac7ce6897cbbd428",
+          "message": "Fix critical race condition in SharedTraceReader instruction copying",
+          "timestamp": "2026-01-05T20:06:23+08:00",
+          "tree_id": "c66304bee87e9cbbec8d7e84b4db9fa04397d7d6",
+          "url": "https://github.com/Readm/flow_sim/commit/99b6784333ac0caf97752d47ac7ce6897cbbd428"
+        },
+        "date": 1767614901026,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkRingCoreScaling/Cores_1-4",
+            "value": 1487,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkRingCoreScaling/Cores_2-4",
+            "value": 2965,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkRingCoreScaling/Cores_4-4",
+            "value": 5751,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkBidirectionalRingCoreScaling/Cores_1-4",
+            "value": 1437,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkBidirectionalRingCoreScaling/Cores_2-4",
+            "value": 2957,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkBidirectionalRingCoreScaling/Cores_4-4",
+            "value": 5830,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1-4",
+            "value": 3793,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2-4",
+            "value": 6617,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_4-4",
+            "value": 8274,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_Baseline_1CPU/SingleCore_Baseline-4",
+            "value": 180660,
             "unit": "sim_Hz"
           }
         ]
