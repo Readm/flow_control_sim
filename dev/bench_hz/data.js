@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767627342591,
+  "lastUpdate": 1767673610630,
   "repoUrl": "https://github.com/Readm/flow_sim",
   "entries": {
     "ChampSim System Benchmarks": [
@@ -630,6 +630,80 @@ window.BENCHMARK_DATA = {
           {
             "name": "Benchmark_ChampSim_Baseline_1CPU/SingleCore_Baseline-4",
             "value": 206360,
+            "unit": "sim_Hz"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "committer": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "distinct": true,
+          "id": "d16cb34a013d17af772c2f69cf473decd39ba580",
+          "message": "feat: Add CPU profiling to benchmarks, expand runtime metrics with scheduler statistics, and provide performance profiling documentation.",
+          "timestamp": "2026-01-06T12:25:53+08:00",
+          "tree_id": "0c047a444f1a69ed699e6a7aa527736cd004b62d",
+          "url": "https://github.com/Readm/flow_sim/commit/d16cb34a013d17af772c2f69cf473decd39ba580"
+        },
+        "date": 1767673610195,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkRingCoreScaling/Cores_1-4",
+            "value": 1493,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkRingCoreScaling/Cores_2-4",
+            "value": 2973,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkRingCoreScaling/Cores_4-4",
+            "value": 5596,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkBidirectionalRingCoreScaling/Cores_1-4",
+            "value": 1462,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkBidirectionalRingCoreScaling/Cores_2-4",
+            "value": 2976,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkBidirectionalRingCoreScaling/Cores_4-4",
+            "value": 5838,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1-4",
+            "value": 3422,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2-4",
+            "value": 6500,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_4-4",
+            "value": 9599,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_Baseline_1CPU/SingleCore_Baseline-4",
+            "value": 211544,
             "unit": "sim_Hz"
           }
         ]
