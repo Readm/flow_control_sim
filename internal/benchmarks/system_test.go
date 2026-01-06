@@ -3,6 +3,7 @@ package benchmarks
 import (
 	"os"
 	"runtime"
+	"runtime/debug"
 	"testing"
 
 	"github.com/Readm/flow_sim/internal/champsim/flowsim"
@@ -100,8 +101,19 @@ func Benchmark_ChampSim_Baseline_1CPU(b *testing.B) {
 	}
 
 	var finalNet *network.Network
+
+	// Force GC and return memory to OS to clean up heap from previous benchmarks (e.g. 64CPU)
+	// runtime.GC() is blocking but doesn't necessarily return memory to OS immediately.
+	// FreeOSMemory forces both GC and aggressive returning of memory.
+	debug.FreeOSMemory()
+
 	// Capture statistics for the Baseline run
 	baselineStats := network.CollectGlobalRuntimeStats()
+
+	// Check and start profiling if requested
+	if profiler, err := StartProfiling("Baseline_1CPU"); err == nil && profiler != nil {
+		defer profiler.StopAndAnalyze()
+	}
 
 	b.Run("SingleCore_Baseline", func(b *testing.B) {
 		// Force single thread execution for baseline

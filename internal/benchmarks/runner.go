@@ -3,6 +3,7 @@ package benchmarks
 import (
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"testing"
 
 	"github.com/Readm/flow_sim/internal/core/network"
@@ -30,8 +31,17 @@ func RunScalingBenchmark(b *testing.B, name string, testFunc func(b *testing.B, 
 
 	for _, coreCount := range coreCountSamples {
 		var lastNet *network.Network
+		// Force GC and return memory to OS
+		debug.FreeOSMemory()
 		// Capture stats start for this core count
 		iterationStartStats := network.CollectGlobalRuntimeStats()
+
+		// Check and start profiling if requested
+		if profiler, err := StartProfiling(fmt.Sprintf("%s_Cores_%d", name, coreCount)); err == nil && profiler != nil {
+			defer profiler.StopAndAnalyze()
+		} else if err != nil {
+			b.Logf("Failed to start profiling: %v", err)
+		}
 
 		b.Run(fmt.Sprintf("Cores_%d", coreCount), func(b *testing.B) {
 			// Set GOMAXPROCS for this benchmark

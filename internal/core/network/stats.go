@@ -502,18 +502,25 @@ type GlobalRuntimeStat struct {
 	UserCPUSec     float64 // /cpu/classes/user:cpu-seconds
 	GCTotalCPUSec  float64 // /cpu/classes/gc/total:cpu-seconds
 	ScavengeCPUSec float64 // /cpu/classes/scavenge/total:cpu-seconds
+
+	// Scheduler Metrics
+	SchedLatencies  *metrics.Float64Histogram // /sched/latencies:seconds (Histogram)
+	STWPauseTotal   float64                   // /sched/pauses/total/gc:seconds
+	OtherPauseTotal float64                   // /sched/pauses/total/other:seconds
 }
 
 // CollectGlobalRuntimeStats 从 runtime/metrics 获取全局 CPU 数据
 func CollectGlobalRuntimeStats() GlobalRuntimeStat {
 	// 定义我们需要读取的指标名称
-	// 注意: 这些指标需要 Go 1.23+
 	samples := []metrics.Sample{
 		{Name: "/cpu/classes/total:cpu-seconds"},
 		{Name: "/cpu/classes/idle:cpu-seconds"},
 		{Name: "/cpu/classes/user:cpu-seconds"},
 		{Name: "/cpu/classes/gc/total:cpu-seconds"},
 		{Name: "/cpu/classes/scavenge/total:cpu-seconds"},
+		{Name: "/sched/latencies:seconds"},
+		{Name: "/sched/pauses/total/gc:seconds"},
+		{Name: "/sched/pauses/total/other:seconds"},
 	}
 
 	// 从运行时读取指标
@@ -539,10 +546,66 @@ func CollectGlobalRuntimeStats() GlobalRuntimeStat {
 			stat.GCTotalCPUSec = val
 		case "/cpu/classes/scavenge/total:cpu-seconds":
 			stat.ScavengeCPUSec = val
+		case "/sched/latencies:seconds":
+			if s.Value.Kind() == metrics.KindFloat64Histogram {
+				h := s.Value.Float64Histogram()
+				// Copy histogram to safe local storage
+				buckets := make([]float64, len(h.Buckets))
+				copy(buckets, h.Buckets)
+				counts := make([]uint64, len(h.Counts))
+				copy(counts, h.Counts)
+				stat.SchedLatencies = &metrics.Float64Histogram{
+					Buckets: buckets,
+					Counts:  counts,
+				}
+			}
+		case "/sched/pauses/total/gc:seconds":
+			stat.STWPauseTotal = val
+		case "/sched/pauses/total/other:seconds":
+			stat.OtherPauseTotal = val
 		}
 	}
 
 	return stat
+}
+
+// Helper to calculate P50 and P99 from histogram delta
+func calculatePercentiles(h *metrics.Float64Histogram) (p50, p99 float64) {
+	if h == nil {
+		return 0, 0
+	}
+
+	totalCount := uint64(0)
+	for _, count := range h.Counts {
+		totalCount += count
+	}
+	if totalCount == 0 {
+		return 0, 0
+	}
+
+	p50Check := float64(totalCount) * 0.50
+	p99Check := float64(totalCount) * 0.99
+
+	currentCount := uint64(0)
+	p50Found := false
+
+	for i, count := range h.Counts {
+		currentCount += count
+
+		if !p50Found && float64(currentCount) >= p50Check {
+			// Bucket i covers range [Buckets[i-1], Buckets[i])
+			// Wait, Buckets length is len(Counts)+1
+			// Range is [Buckets[i], Buckets[i+1])
+			p50 = h.Buckets[i] // Use lower bound of bucket as approximation
+			p50Found = true
+		}
+
+		if float64(currentCount) >= p99Check {
+			p99 = h.Buckets[i]
+			return p50, p99
+		}
+	}
+	return p50, p99
 }
 
 // PrintGlobalPerformanceSummary 打印全局性能摘要（结合 Runtime Metrics 和 Internal Profiling）
@@ -559,6 +622,23 @@ func (n *Network) PrintGlobalPerformanceSummary(baseline *GlobalRuntimeStat) {
 		rStat.UserCPUSec = current.UserCPUSec - baseline.UserCPUSec
 		rStat.GCTotalCPUSec = current.GCTotalCPUSec - baseline.GCTotalCPUSec
 		rStat.ScavengeCPUSec = current.ScavengeCPUSec - baseline.ScavengeCPUSec
+
+		rStat.STWPauseTotal = current.STWPauseTotal - baseline.STWPauseTotal
+		rStat.OtherPauseTotal = current.OtherPauseTotal - baseline.OtherPauseTotal
+
+		// Histogram Delta: count[i] = current.count[i] - baseline.count[i]
+		if current.SchedLatencies != nil && baseline.SchedLatencies != nil {
+			deltaCounts := make([]uint64, len(current.SchedLatencies.Counts))
+			for i := range current.SchedLatencies.Counts {
+				if current.SchedLatencies.Counts[i] >= baseline.SchedLatencies.Counts[i] {
+					deltaCounts[i] = current.SchedLatencies.Counts[i] - baseline.SchedLatencies.Counts[i]
+				}
+			}
+			rStat.SchedLatencies = &metrics.Float64Histogram{
+				Buckets: current.SchedLatencies.Buckets,
+				Counts:  deltaCounts,
+			}
+		}
 	}
 
 	// 如果 runtime metrics 数据全为 0 (可能是 Go 版本太低不支持，或刚启动)，则只打印内部数据
@@ -590,6 +670,16 @@ func (n *Network) PrintGlobalPerformanceSummary(baseline *GlobalRuntimeStat) {
 
 	overheadPct := gcPct + sysPct
 
+	// 计算延时
+	latP50, latP99 := calculatePercentiles(rStat.SchedLatencies)
+	// Convert seconds to microseconds for display
+	latP50us := latP50 * 1e6
+	latP99us := latP99 * 1e6
+
+	// STW Total in ms
+	stwTotalMs := (rStat.STWPauseTotal + rStat.OtherPauseTotal) * 1e3
+
 	// 简洁的一行输出
-	fmt.Printf("CPU Stats: Idle=%.1f%% User=%.1f%% Sys=%.1f%%\n", idlePct, userPct, overheadPct)
+	fmt.Printf("CPU Stats: Idle=%.1f%% User=%.1f%% Sys=%.1f%% | Wait: P50=%.1fus P99=%.1fus STW=%.2fms\n",
+		idlePct, userPct, overheadPct, latP50us, latP99us, stwTotalMs)
 }
