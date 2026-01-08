@@ -1,0 +1,469 @@
+openapi: 3.0.3
+info:
+  title: Flow Simulation Network API
+  version: 1.0.0
+  description: OpenAPI schema for FlowSim network topology, configuration, and state
+
+paths:
+  /load_networks:
+    get:
+      summary: 返回所有网络
+      responses:
+        "200":
+          description: FlowSimNetwork 列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FlowSimNetwork"
+
+  /build_network:
+    post:
+      summary: 根据 FlowSimNetwork 构建仿真网络
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FlowSimNetwork"
+      responses:
+        "200":
+          description: 构建成功，返回规范化的 FlowSimNetwork
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlowSimNetwork"
+
+  /reset_network:
+    post:
+      summary: 重置仿真，把网络重置为给定 FlowSimNetwork
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FlowSimNetwork"
+      responses:
+        "200":
+          description: 重置后的 FlowSimNetwork
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlowSimNetwork"
+
+  /advance_to:
+    post:
+      summary: 仿真到指定 cycle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - cycle
+              properties:
+                cycle:
+                  type: integer
+                  description: 目标仿真周期
+      responses:
+        "200":
+          description: 返回更新后的网络状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlowSimNetwork"
+
+  /current_state:
+    get:
+      summary: 获取当前网络状态（用于轮询）
+      responses:
+        "200":
+          description: 当前 FlowSimNetwork 状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlowSimNetwork"
+
+  /validate_network:
+    post:
+      summary: 验证网络配置合法性
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FlowSimNetwork"
+      responses:
+        "200":
+          description: 验证结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  errors:
+                    type: array
+                    items:
+                      type: string
+                required:
+                  - valid
+
+  /save_network:
+    post:
+      summary: 保存网络到文件
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: 文件名
+                network:
+                  $ref: "#/components/schemas/FlowSimNetwork"
+              required:
+                - name
+                - network
+      responses:
+        "200":
+          description: 保存成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path:
+                    type: string
+                    description: 保存的文件路径
+
+  /load_preset:
+    post:
+      summary: 加载预设网络拓扑
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: 预设名称
+                params:
+                  type: object
+                  additionalProperties: true
+                  description: 预设参数
+              required:
+                - name
+      responses:
+        "200":
+          description: 加载成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlowSimNetwork"
+
+components:
+  schemas:
+    FlowSimNetwork:
+      type: object
+      description: "Flow Simulation 网络定义，包含拓扑、配置、状态和可视化信息"
+      properties:
+        version:
+          type: string
+          description: "Schema 版本号"
+          example: "1.0.0"
+        cycle:
+          type: integer
+          description: "当前仿真周期"
+          example: 0
+        nodes:
+          type: array
+          description: "节点列表"
+          items:
+            $ref: '#/components/schemas/Node'
+        edges:
+          type: array
+          description: "边列表"
+          items:
+            $ref: '#/components/schemas/Edge'
+        zoom:
+          type: number
+          description: "可选：视图缩放级别（CyEditor）"
+        pan:
+          type: object
+          description: "可选：视图平移（CyEditor）"
+          properties:
+            x:
+              type: number
+            y:
+              type: number
+      required:
+        - nodes
+        - edges
+      additionalProperties: false
+
+    Node:
+      type: object
+      description: "网络节点，兼容 CyEditor 格式"
+      properties:
+        # === 业务逻辑字段 ===
+        node_id:
+          type: integer
+          description: "节点唯一标识符"
+        node_name:
+          type: string
+          description: "节点名称"
+        node_features:
+          type: array
+          description: "节点特性列表，如 ['cpu', 'cache']"
+          items:
+            type: string
+
+        # === 端口定义 ===
+        in_ports:
+          type: array
+          description: "输入端口列表"
+          items:
+            $ref: '#/components/schemas/Port'
+        out_ports:
+          type: array
+          description: "输出端口列表"
+          items:
+            $ref: '#/components/schemas/Port'
+
+        # === 组件配置 ===
+        cache:
+          $ref: '#/components/schemas/CacheConfig'
+        directory:
+          $ref: '#/components/schemas/DirectoryConfig'
+        coherence_domain_id:
+          type: integer
+          description: "一致性域 ID"
+
+        # === CyEditor 可视化字段 ===
+        data:
+          type: object
+          description: "CyEditor data 字段，存储节点元数据"
+          properties:
+            id:
+              type: string
+              description: "Cytoscape 节点 ID（通常为 'node-{node_id}'）"
+            type:
+              type: string
+              description: "节点类型（用于渲染）"
+            label:
+              type: string
+              description: "节点显示标签"
+          required:
+            - id
+          additionalProperties: true  # 允许 CyEditor 扩展字段
+
+        position:
+          type: object
+          description: "CyEditor position 字段"
+          properties:
+            x:
+              type: number
+            y:
+              type: number
+          required:
+            - x
+            - y
+
+        # === 可选样式 ===
+        style:
+          type: object
+          description: "Cytoscape 样式"
+          additionalProperties: true
+
+      required:
+        - node_id
+        - node_name
+        - data
+        - position
+      additionalProperties: false
+
+    Port:
+      type: object
+      description: "端口定义，包含配置和运行时状态"
+      properties:
+        port_id:
+          type: integer
+          description: "端口 ID"
+        bandwidth:
+          type: integer
+          description: "带宽（配置）"
+        buffer_size:
+          type: integer
+          description: "缓冲区大小（配置）"
+        packet_types:
+          type: array
+          description: "支持的包类型"
+          items:
+            type: integer
+
+        # === 运行时状态 ===
+        buffer_length:
+          type: integer
+          description: "当前缓冲区使用量"
+        capacity:
+          type: integer
+          description: "缓冲区容量（别名，与 buffer_size 相同）"
+        bitmap:
+          type: string
+          description: "缓冲区占用位图，如 '1010...'"
+      required:
+        - port_id
+        - bandwidth
+      additionalProperties: false
+
+    CacheConfig:
+      type: object
+      description: "缓存配置和统计"
+      properties:
+        # === 配置字段 ===
+        capacity:
+          type: integer
+          minimum: 0
+          description: "缓存容量（字节）"
+        num_sets:
+          type: integer
+          minimum: 0
+          description: "缓存组数"
+        replacement_policy:
+          type: string
+          description: "替换策略"
+          enum: ["LRU", "FIFO", "Random", "LFU"]
+        states:
+          type: string
+          description: "一致性状态协议"
+          example: "MESI"
+
+        # === 运行时统计 ===
+        hits:
+          type: integer
+          description: "缓存命中次数"
+        misses:
+          type: integer
+          description: "缓存未命中次数"
+        accesses:
+          type: integer
+          description: "总访问次数"
+      required:
+        - capacity
+        - num_sets
+        - replacement_policy
+        - states
+      additionalProperties: false
+
+    DirectoryConfig:
+      type: object
+      description: "目录配置"
+      properties:
+        capacity:
+          type: integer
+          minimum: 0
+        num_sets:
+          type: integer
+          minimum: 0
+        replacement_policy:
+          type: string
+        states:
+          type: string
+      required:
+        - capacity
+        - num_sets
+        - replacement_policy
+        - states
+      additionalProperties: false
+
+    Edge:
+      type: object
+      description: "连接两个节点的边，兼容 CyEditor 格式"
+      properties:
+        # === 业务逻辑字段 ===
+        edge_id:
+          type: integer
+          description: "边唯一标识符"
+        src_node_id:
+          type: integer
+          description: "源节点 ID"
+        src_port_id:
+          type: integer
+          description: "源端口 ID"
+        dst_node_id:
+          type: integer
+          description: "目标节点 ID"
+        dst_port_id:
+          type: integer
+          description: "目标端口 ID"
+
+        # === 链路配置 ===
+        latency:
+          type: integer
+          description: "链路延迟（周期）"
+        bandwidth:
+          type: integer
+          description: "链路带宽"
+        packet_types:
+          type: array
+          description: "支持的包类型"
+          items:
+            type: integer
+
+        # === CyEditor 可视化字段 ===
+        data:
+          type: object
+          description: "CyEditor data 字段"
+          properties:
+            id:
+              type: string
+              description: "Cytoscape 边 ID（通常为 'edge-{edge_id}'）"
+            source:
+              type: string
+              description: "源节点 data.id"
+            target:
+              type: string
+              description: "目标节点 data.id"
+            lineType:
+              type: string
+              description: "线条类型"
+              enum: ["solid", "dashed", "taxi"]
+          required:
+            - id
+            - source
+            - target
+          additionalProperties: true
+
+        # === 运行时状态（可视化用） ===
+        link_status:
+          type: array
+          description: "链路占用状态"
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                description: "状态名称（如 'occupancy'）"
+              values:
+                type: array
+                description: "每个时间槽的占用情况"
+                items:
+                  type: integer
+            required:
+              - name
+              - values
+
+      required:
+        - edge_id
+        - src_node_id
+        - dst_node_id
+        - data
+      additionalProperties: false

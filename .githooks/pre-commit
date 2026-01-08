@@ -15,19 +15,18 @@ if git diff --cached --name-only | grep -q "web/openapi.yaml"; then
         exit 1
     fi
     
-    # We don't strictly enforce TS generation in this hook as it might require node_modules
-    # but we try if possible
-    if [ -f "web/package.json" ]; then
+    # Try to generate TS types if dev environment (web_dev exists)
+    if [ -d "web_dev" ] && [ -f "web_dev/package.json" ]; then
          ./scripts/generate_ts_types.sh
-         if [ $? -ne 0 ]; then
-            echo "⚠️ Failed to generate TypeScript types. Please check manually."
+         if [ $? -eq 0 ]; then
+            echo "ℹ️  TypeScript types updated in web_dev. Please commit them in the submodule."
+         else
+            echo "⚠️ Failed to generate TypeScript types."
          fi
     fi
 
     # Add generated files to the commit
-    # Note: Broadly adding might cover other changes, but here we want to ensure sync
     git add internal/core/visualization/protocol/types.gen.go
-    git add web/src/types/api.ts 2>/dev/null || true
     
-    echo "✅ Generated code updated and added to commit."
+    echo "✅ Generated code updated."
 fi

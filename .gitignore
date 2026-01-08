@@ -97,4 +97,10 @@ ThirdParty/
 # AI files
 .claude/
 
-server
+/server
+
+# Frontend Submodule
+# web_dev/  <-- Do not ignore, it's a submodule
+
+# Generated static assets (force tracked)
+!web/static/

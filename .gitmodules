@@ -1,3 +1,3 @@
-[submodule "web"]
-	path = web
+[submodule "web_dev"]
+	path = web_dev
 	url = https://github.com/Readm/cyeditor-noc

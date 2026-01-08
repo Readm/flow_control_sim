@@ -16,12 +16,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        submodules: false  # Disable built-in handling to avoid recursive errors
+        submodules: recursive
 
-    - name: Checkout Submodules Manually
-      run: |
-        git submodule update --init web
-        # Only init the top-level 'web' submodule, ignoring nested broken ones
 
     - name: Set up Go
       uses: actions/setup-go@v4
@@ -34,10 +30,7 @@ jobs:
         # Install oapi-codegen
         go install github.com/deepmap/oapi-codegen/cmd/oapi-codegen@latest
         
-        # Install Node.js for TypeScript generation
-        sudo apt-get install -y nodejs npm
-        
-        # Generate code
+        # Generate code (Go only)
         ./scripts/generate_go_types.sh
         
         # Check for changes

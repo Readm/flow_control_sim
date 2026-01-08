@@ -2,6 +2,7 @@
 # 生成 Go 类型定义从 OpenAPI schema
 
 set -e
+export PATH=$PATH:$HOME/go/bin
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
