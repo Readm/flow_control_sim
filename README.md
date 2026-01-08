@@ -146,7 +146,38 @@ go test -bench=Benchmark_ChampSim_64CPU/Cores_8 -run=^$ -v ./internal/benchmarks
 2. 使用 bufferless link 减少 Ready 等待
 3. 增加 pipeline 深度允许更多 tick-ahead 优化
 
-## 文档指引
+## 开发工作流 (Developer Workflows)
+
+为了兼顾使用的便捷性和开发的灵活性，本项目分为两种开发模式。
+
+### 1. 普通开发者 (后端/算法)
+你的关注点在 Go 语言核心逻辑、算法或后端架构。
+- **不需要** 安装 Node.js / npm。
+- **不需要** 初始化 `web_dev` 子模块。
+- **前端界面**: 仓库自带编译好的静态资源 (`web/static`)，开箱即用。
+- **运行**: 直接 `go build` 和 `./server` 即可。
+
+### 2. 前端开发者 (Vue/Web)
+你需要修改 Web 界面或可视化逻辑。
+1. **初始化子模块**:
+   ```bash
+   git submodule update --init --recursive
+   ```
+2. **进入开发目录**:
+   ```bash
+   cd web_dev
+   npm install
+   ```
+3. **开发与构建**:
+   修改代码后，运行构建脚本将资源同步到主仓库：
+   ```bash
+   ./scripts/build_frontend.sh
+   ```
+4. **提交变更**:
+   - 在 `web_dev` 中提交源码变更。
+   - 在主仓库中提交 updated `web/static` 资源。
+
+
 
 - [架构概览](docs/architecture/arch.md)
 - [AheadPort 设计详解](docs/design/ahead_port.md)
