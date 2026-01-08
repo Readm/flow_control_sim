@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767860255422,
+  "lastUpdate": 1767879433607,
   "repoUrl": "https://github.com/Readm/flow_sim",
   "entries": {
     "ChampSim System Benchmarks": [
@@ -852,6 +852,80 @@ window.BENCHMARK_DATA = {
           {
             "name": "Benchmark_ChampSim_Baseline_1CPU/SingleCore_Baseline-4",
             "value": 177550,
+            "unit": "sim_Hz"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "committer": {
+            "email": "assasaki@163.com",
+            "name": "readm",
+            "username": "Readm"
+          },
+          "distinct": true,
+          "id": "746f427b75245883a13706f4647ba84fdaa0d6a8",
+          "message": "feat: enhanced network builder, visualization adapter and docs\n\n- Refactored core network and builder components (builder, link, node, network)\n- Updated visualization/adapter.go and mock_controller.go with DisplayData support\n- Updated run_dev.sh to manage web_dev submodule\n- Added architecture documentation (DATA_STRUCTURES, PROTOCOL_INTEGRATION, SCHEMA_MIGRATION)\n- Added builder tests and http workflow integration tests",
+          "timestamp": "2026-01-08T21:35:44+08:00",
+          "tree_id": "35757b46a0dec4656d797df72a2ef1e8fa8d27d2",
+          "url": "https://github.com/Readm/flow_sim/commit/746f427b75245883a13706f4647ba84fdaa0d6a8"
+        },
+        "date": 1767879433302,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkRingCoreScaling/Cores_1-4",
+            "value": 1463,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkRingCoreScaling/Cores_2-4",
+            "value": 2950,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkRingCoreScaling/Cores_4-4",
+            "value": 5755,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkBidirectionalRingCoreScaling/Cores_1-4",
+            "value": 1435,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkBidirectionalRingCoreScaling/Cores_2-4",
+            "value": 2968,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "BenchmarkBidirectionalRingCoreScaling/Cores_4-4",
+            "value": 5815,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_1-4",
+            "value": 3309,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_2-4",
+            "value": 6722,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_64CPU/Cores_4-4",
+            "value": 8668,
+            "unit": "sim_Hz"
+          },
+          {
+            "name": "Benchmark_ChampSim_Baseline_1CPU/SingleCore_Baseline-4",
+            "value": 204072,
             "unit": "sim_Hz"
           }
         ]
