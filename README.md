@@ -153,6 +153,33 @@ go test -bench=Benchmark_ChampSim_64CPU/Cores_8 -run=^$ -v ./internal/benchmarks
 - [Port API 重构说明](docs/design/port_api_redesign.md)
 - [性能分析报告](docs/dev/performance_analysis.md)
 
+## 共享指南 (Shared Guidelines)
+
+为了保持团队在 OpenAPI 变更上的高效协作，我们采用了 **"Schema-First" + "CI 强制一致性"** 的策略。
+
+### 1. 核心原则
+- **Golden Source**: `web/openapi.yaml` 是 API 定义的唯一真理源。
+- **自动同步**: Go 类型 (`types.gen.go`) 和 TS 类型 (`api.ts`) 必须与 YAML 保持一致。
+- **CI 守门**: 如果生成的代码与 YAML 不一致，CI 会直接失败。
+
+### 2. 推荐工作流 (Git Hooks)
+为了避免提交后被 CI 打回，建议配置本地 Git Hooks：
+
+```bash
+# 只需运行一次
+git config core.hooksPath .githooks
+```
+
+配置后，每次 `git commit` 时会自动检查并重新生成代码（如果 `openapi.yaml` 有变动）。
+
+### 3. 如何手动生成
+如果不使用 Git Hooks，请在修改 `openapi.yaml` 后手动运行：
+
+```bash
+./scripts/generate_go_types.sh
+./scripts/generate_ts_types.sh
+```
+
 ## License
 
 Copyright (c) 2025

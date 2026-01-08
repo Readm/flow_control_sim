@@ -1,0 +1,33 @@
+#!/bin/sh
+#
+# Pre-commit hook to ensure generated code is up to date with OpenAPI schema.
+#
+# To install: git config core.hooksPath .githooks
+
+# Check if openapi.yaml is staged for commit
+if git diff --cached --name-only | grep -q "web/openapi.yaml"; then
+    echo "📜 OpenAPI schema change detected. Regenerating code..."
+    
+    # Run generation scripts
+    ./scripts/generate_go_types.sh
+    if [ $? -ne 0 ]; then
+        echo "❌ Failed to generate Go types. Aborting commit."
+        exit 1
+    fi
+    
+    # We don't strictly enforce TS generation in this hook as it might require node_modules
+    # but we try if possible
+    if [ -f "web/package.json" ]; then
+         ./scripts/generate_ts_types.sh
+         if [ $? -ne 0 ]; then
+            echo "⚠️ Failed to generate TypeScript types. Please check manually."
+         fi
+    fi
+
+    # Add generated files to the commit
+    # Note: Broadly adding might cover other changes, but here we want to ensure sync
+    git add internal/core/visualization/protocol/types.gen.go
+    git add web/src/types/api.ts 2>/dev/null || true
+    
+    echo "✅ Generated code updated and added to commit."
+fi

@@ -29,6 +29,25 @@ jobs:
         go-version: '1.21'
         cache: true
 
+    - name: Verify Generated Code
+      run: |
+        # Install oapi-codegen
+        go install github.com/deepmap/oapi-codegen/cmd/oapi-codegen@latest
+        
+        # Install Node.js for TypeScript generation
+        sudo apt-get install -y nodejs npm
+        
+        # Generate code
+        ./scripts/generate_go_types.sh
+        
+        # Check for changes
+        if [ -n "$(git status --porcelain)" ]; then 
+          echo "❌ Generated code is out of sync with openapi.yaml";
+          echo "Please run generation scripts locally and commit the changes.";
+          git status;
+          exit 1;
+        fi
+
     - name: Run Unit Tests
       run: |
         go test -timeout=20s -v ./...
