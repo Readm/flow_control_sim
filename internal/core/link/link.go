@@ -8,6 +8,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/monitor"
 	"github.com/Readm/flow_sim/internal/core/trace"
 	"github.com/Readm/flow_sim/internal/core/visualization"
+	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -66,10 +67,14 @@ type Link struct {
 	currentCycle int
 	tickHook     func(cycle int)
 
+	// ===== Protocol 配置引用 (只读,直接引用 protocol.Edge) =====
+	configRef *protocol.Edge
+
 	// ===== Business and Display data =====
 	edgeID      int                       // 业务 ID，对应 Edge.EdgeId
 	packetTypes []string                  // 包类型列表
 	displayData map[string]interface{}    // 可视化数据（data, style 等）
+	// TODO: Phase 2 将被移除,改用 configRef 和 Network.sourceConfig
 
 	// ===== Monitor =====
 	monitor             *monitor.LinkMonitor
@@ -354,6 +359,18 @@ func (l *Link) ResumeProcess() {
 // RecordWait records a wait event.
 func (l *Link) RecordWait(start, end float64, cycle int) {
 	l.monitor.OnWait(start, end, cycle)
+}
+
+// ===== Protocol Config 访问方法 (Phase 1) =====
+
+// SetConfigRef 设置 Protocol 配置引用 (只读)
+func (l *Link) SetConfigRef(config *protocol.Edge) {
+	l.configRef = config
+}
+
+// GetConfigRef 获取 Protocol 配置引用 (只读)
+func (l *Link) GetConfigRef() *protocol.Edge {
+	return l.configRef
 }
 
 // ===== Business and Display Data Accessors =====

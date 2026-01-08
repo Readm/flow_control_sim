@@ -31,18 +31,41 @@ func (n *BaseNode) ExportState(cfg state.ExportConfig) state.NodeState {
 		ns.CustomData[k] = v
 	}
 
-	// Copy Features
-	for k, v := range n.features {
-		ns.Features[k] = v
-	}
+	// Phase 2: 从 configRef 读取 Config 和 Display 数据
+	if n.configRef != nil {
+		// Copy Features from configRef
+		if n.configRef.Cache != nil {
+			cacheConfig := map[string]interface{}{
+				"capacity":           n.configRef.Cache.Capacity,
+				"num_sets":           n.configRef.Cache.NumSets,
+				"replacement_policy": string(n.configRef.Cache.ReplacementPolicy),
+				"states":             n.configRef.Cache.States,
+			}
+			ns.Features["cache"] = cacheConfig
+		}
 
-	// Copy DisplayData
-	for k, v := range n.displayData {
-		ns.DisplayData[k] = v
-	}
+		if n.configRef.Directory != nil {
+			directoryConfig := map[string]interface{}{
+				"capacity":           n.configRef.Directory.Capacity,
+				"num_sets":           n.configRef.Directory.NumSets,
+				"replacement_policy": n.configRef.Directory.ReplacementPolicy,
+				"states":             n.configRef.Directory.States,
+			}
+			ns.Features["directory"] = directoryConfig
+		}
 
-	// Copy CoherenceDomainID
-	ns.CoherenceDomainID = n.coherenceDomainID
+		// Copy DisplayData from configRef
+		ns.DisplayData["position"] = n.configRef.Position
+		ns.DisplayData["data"] = n.configRef.Data
+		if n.configRef.Style != nil {
+			ns.DisplayData["style"] = *n.configRef.Style
+		}
+
+		// Copy CoherenceDomainID from configRef
+		ns.CoherenceDomainID = n.configRef.CoherenceDomainId
+	}
+	// Phase 2: 移除 fallback 分支,因为 features/displayData/coherenceDomainID 字段已删除
+	// 所有数据现在都必须通过 configRef 提供
 
 	// Export Input Queues
 	for _, input := range n.inputs {

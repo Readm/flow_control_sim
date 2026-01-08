@@ -12,6 +12,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/monitor"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/core/trace"
+	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
@@ -45,6 +46,10 @@ type Node interface {
 	Name() string
 	// SetName sets the human-readable name of the node.
 	SetName(name string)
+
+	// Protocol 配置访问 (Phase 1)
+	SetConfigRef(config *protocol.Node)
+	GetConfigRef() *protocol.Node
 
 	// 配置信息访问
 	SetFeature(feature string, config map[string]interface{})
@@ -128,16 +133,12 @@ type BaseNode struct {
 	caches      []cache.Cache
 	directories []directory.Directory
 
+	// Protocol 配置引用 (只读,直接引用 protocol.Node)
+	configRef *protocol.Node
+
 	// Protocol-specific data storage
 	dataMu sync.RWMutex
 	data   map[string]interface{}
-
-	// 配置信息 (对应 FlowSimNetwork.Node.Features)
-	features          map[string]map[string]interface{}
-	coherenceDomainID *int
-
-	// 显示信息 (对应 FlowSimNetwork.Node DisplayData: position, data, style)
-	displayData map[string]interface{}
 
 	// Handler reference (for polymorphic behavior)
 	handler NodeHandler
@@ -161,8 +162,6 @@ func NewBaseNode(id int, handler NodeHandler) *BaseNode {
 		inputValues:      make([][]queue.PacketRef, 0),
 		caches:           make([]cache.Cache, 0),
 		directories:      make([]directory.Directory, 0),
-		features:         make(map[string]map[string]interface{}),
-		displayData:      make(map[string]interface{}),
 		data:             make(map[string]interface{}),
 		handler:          handler,
 		currentCycle:     0,
@@ -665,73 +664,109 @@ func (n *BaseNode) GetTraceEvents() []trace.TraceEvent {
 	return n.monitor.GetTraceEvents()
 }
 
+// ========== Protocol Config 访问方法 (Phase 1) ==========
+
+// SetConfigRef 设置 Protocol 配置引用 (只读)
+func (n *BaseNode) SetConfigRef(config *protocol.Node) {
+	n.configRef = config
+}
+
+// GetConfigRef 获取 Protocol 配置引用 (只读)
+func (n *BaseNode) GetConfigRef() *protocol.Node {
+	return n.configRef
+}
+
 // ========== Features 和 DisplayData 访问方法 ==========
 
-// SetFeature 设置节点feature配置
+// SetFeature 设置节点feature配置 (Phase 2: 已废弃, 空实现)
+// Deprecated: Config 数据现在通过 configRef 管理, 此方法仅保持接口兼容
 func (n *BaseNode) SetFeature(feature string, config map[string]interface{}) {
-	n.dataMu.Lock()
-	defer n.dataMu.Unlock()
-	if n.features == nil {
-		n.features = make(map[string]map[string]interface{})
-	}
-	n.features[feature] = config
+	// Phase 2: 空实现, 保持接口兼容
 }
 
-// GetFeature 获取节点feature配置
+// GetFeature 获取节点feature配置 (Phase 2: 从 configRef 读取)
 func (n *BaseNode) GetFeature(feature string) (map[string]interface{}, bool) {
-	n.dataMu.RLock()
-	defer n.dataMu.RUnlock()
-	config, ok := n.features[feature]
-	return config, ok
-}
-
-// SetCoherenceDomainID 设置一致性域ID
-func (n *BaseNode) SetCoherenceDomainID(id int) {
-	n.dataMu.Lock()
-	defer n.dataMu.Unlock()
-	n.coherenceDomainID = &id
-}
-
-// GetCoherenceDomainID 获取一致性域ID
-func (n *BaseNode) GetCoherenceDomainID() *int {
-	n.dataMu.RLock()
-	defer n.dataMu.RUnlock()
-	return n.coherenceDomainID
-}
-
-// SetDisplayData 设置显示数据的某个键值
-func (n *BaseNode) SetDisplayData(key string, value interface{}) {
-	n.dataMu.Lock()
-	defer n.dataMu.Unlock()
-	if n.displayData == nil {
-		n.displayData = make(map[string]interface{})
+	// Phase 2: 从 configRef 读取
+	if n.configRef != nil {
+		switch feature {
+		case "cache":
+			if n.configRef.Cache != nil {
+				return map[string]interface{}{
+					"capacity":           n.configRef.Cache.Capacity,
+					"num_sets":           n.configRef.Cache.NumSets,
+					"replacement_policy": string(n.configRef.Cache.ReplacementPolicy),
+					"states":             n.configRef.Cache.States,
+				}, true
+			}
+		case "directory":
+			if n.configRef.Directory != nil {
+				return map[string]interface{}{
+					"capacity":           n.configRef.Directory.Capacity,
+					"num_sets":           n.configRef.Directory.NumSets,
+					"replacement_policy": n.configRef.Directory.ReplacementPolicy,
+					"states":             n.configRef.Directory.States,
+				}, true
+			}
+		}
 	}
-	n.displayData[key] = value
+	return nil, false
 }
 
-// GetDisplayData 获取显示数据的某个键值
+// SetCoherenceDomainID 设置一致性域ID (Phase 2: 已废弃, 空实现)
+// Deprecated: Config 数据现在通过 configRef 管理, 此方法仅保持接口兼容
+func (n *BaseNode) SetCoherenceDomainID(id int) {
+	// Phase 2: 空实现, 保持接口兼容
+}
+
+// GetCoherenceDomainID 获取一致性域ID (Phase 2: 从 configRef 读取)
+func (n *BaseNode) GetCoherenceDomainID() *int {
+	// Phase 2: 从 configRef 读取
+	if n.configRef != nil {
+		return n.configRef.CoherenceDomainId
+	}
+	return nil
+}
+
+// SetDisplayData 设置显示数据的某个键值 (Phase 2: 已废弃, 空实现)
+// Deprecated: Display 数据现在通过 configRef 管理, 此方法仅保持接口兼容
+func (n *BaseNode) SetDisplayData(key string, value interface{}) {
+	// Phase 2: 空实现, 保持接口兼容
+}
+
+// GetDisplayData 获取显示数据的某个键值 (Phase 2: 从 configRef 读取)
 func (n *BaseNode) GetDisplayData(key string) (interface{}, bool) {
-	n.dataMu.RLock()
-	defer n.dataMu.RUnlock()
-	val, ok := n.displayData[key]
-	return val, ok
+	// Phase 2: 从 configRef 读取
+	if n.configRef != nil {
+		switch key {
+		case "position":
+			return n.configRef.Position, true
+		case "data":
+			return n.configRef.Data, true
+		case "style":
+			if n.configRef.Style != nil {
+				return *n.configRef.Style, true
+			}
+		}
+	}
+	return nil, false
 }
 
-// GetAllDisplayData 获取所有显示数据
+// GetAllDisplayData 获取所有显示数据 (Phase 2: 从 configRef 读取)
 func (n *BaseNode) GetAllDisplayData() map[string]interface{} {
-	n.dataMu.RLock()
-	defer n.dataMu.RUnlock()
-	// 返回副本以避免并发问题
-	result := make(map[string]interface{}, len(n.displayData))
-	for k, v := range n.displayData {
-		result[k] = v
+	// Phase 2: 从 configRef 读取
+	result := make(map[string]interface{})
+	if n.configRef != nil {
+		result["position"] = n.configRef.Position
+		result["data"] = n.configRef.Data
+		if n.configRef.Style != nil {
+			result["style"] = *n.configRef.Style
+		}
 	}
 	return result
 }
 
-// SetAllDisplayData 设置所有显示数据
+// SetAllDisplayData 设置所有显示数据 (Phase 2: 已废弃, 空实现)
+// Deprecated: Display 数据现在通过 configRef 管理, 此方法仅保持接口兼容
 func (n *BaseNode) SetAllDisplayData(data map[string]interface{}) {
-	n.dataMu.Lock()
-	defer n.dataMu.Unlock()
-	n.displayData = data
+	// Phase 2: 空实现, 保持接口兼容
 }

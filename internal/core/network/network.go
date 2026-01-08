@@ -11,6 +11,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/core/trace"
+	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 )
 
 // ... (rest of imports and structs unchanged) ...
@@ -37,6 +38,9 @@ type Network struct {
 	nodeList     []*NodeHandle
 	frozen       bool // True after first Advance or explicit Finalize
 	currentCycle int  // Track max cycle reached for convenience
+
+	// Protocol 配置引用 (只读,保留原始 FlowSimNetwork 用于 Display 数据)
+	sourceConfig *protocol.FlowSimNetwork
 
 	// Worker management
 	workerCtx    context.Context
@@ -70,6 +74,18 @@ func New() *Network {
 // CurrentCycle returns the maximum cycle reached by the network (based on targetCycle of last AdvanceTo).
 func (n *Network) CurrentCycle() int {
 	return n.currentCycle
+}
+
+// ===== Protocol Config 访问方法 (Phase 1) =====
+
+// SetSourceConfig 设置原始 Protocol 配置引用 (只读)
+func (n *Network) SetSourceConfig(config *protocol.FlowSimNetwork) {
+	n.sourceConfig = config
+}
+
+// GetSourceConfig 获取原始 Protocol 配置引用 (只读)
+func (n *Network) GetSourceConfig() *protocol.FlowSimNetwork {
+	return n.sourceConfig
 }
 
 // SetTracer 设置 trace recorder 并将其传播到所有支持 trace 的节点

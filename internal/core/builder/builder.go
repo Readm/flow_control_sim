@@ -15,8 +15,11 @@ import (
 func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network, error) {
 	net := network.New()
 
+	// 保存原始配置引用 (用于 Display 数据和 Config 访问)
+	net.SetSourceConfig(&flowNet)
+
 	// 1. 创建节点
-	for _, nodeProto := range flowNet.Nodes {
+	for i, nodeProto := range flowNet.Nodes {
 		var newNode node.Node
 
 		// 根据 node_features 确定节点类型
@@ -33,6 +36,10 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 			newNode = node.NewWorkerNode(nodeProto.NodeId)
 		}
 
+		// Phase 2: 设置 Protocol 配置引用 (直接引用,Export 时会从这里读取)
+		// 注意: 必须使用 &flowNet.Nodes[i] 而不是 &nodeProto,因为 nodeProto 是循环变量
+		newNode.SetConfigRef(&flowNet.Nodes[i])
+
 		// 添加缓存组件
 		if nodeProto.Cache != nil {
 			c := cache.NewFullyAssociativeCache(nodeProto.Cache.Capacity)
@@ -45,42 +52,11 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 			newNode.AddDirectory(d)
 		}
 
-		// 保存 CoherenceDomainID
-		if nodeProto.CoherenceDomainId != nil {
-			newNode.SetCoherenceDomainID(*nodeProto.CoherenceDomainId)
-		}
+		// 保存节点名称到 CustomData
 		newNode.SetData("name", nodeProto.NodeName)
 
-		// 保存 Features（Cache 配置）
-		if nodeProto.Cache != nil {
-			cacheConfig := map[string]interface{}{
-				"capacity":           nodeProto.Cache.Capacity,
-				"num_sets":           nodeProto.Cache.NumSets,
-				"replacement_policy": string(nodeProto.Cache.ReplacementPolicy),
-				"states":             nodeProto.Cache.States,
-			}
-			newNode.SetFeature("cache", cacheConfig)
-		}
-
-		// 保存 Features（Directory 配置）
-		if nodeProto.Directory != nil {
-			directoryConfig := map[string]interface{}{
-				"capacity":           nodeProto.Directory.Capacity,
-				"num_sets":           nodeProto.Directory.NumSets,
-				"replacement_policy": nodeProto.Directory.ReplacementPolicy,
-				"states":             nodeProto.Directory.States,
-			}
-			newNode.SetFeature("directory", directoryConfig)
-		}
-
-		// 保存 DisplayData
-		displayData := make(map[string]interface{})
-		displayData["position"] = nodeProto.Position
-		displayData["data"] = nodeProto.Data
-		if nodeProto.Style != nil {
-			displayData["style"] = *nodeProto.Style
-		}
-		newNode.SetAllDisplayData(displayData)
+		// Phase 2: 不再填充 Features 和 DisplayData
+		// Export 时会直接从 configRef 读取
 
 		// 创建输入队列
 		var inputs []*queue.InputQueue
@@ -137,7 +113,7 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 	}
 
 	// 2. 创建链路
-	for _, edgeProto := range flowNet.Edges {
+	for i, edgeProto := range flowNet.Edges {
 		// 默认参数
 		srcPort := 0
 		dstPort := 0
@@ -171,22 +147,11 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 				err)
 		}
 
-		// 保存 EdgeID
-		linkInstance.SetEdgeID(edgeProto.EdgeId)
+		// Phase 2: 设置 Protocol 配置引用 (Export 时会从这里读取)
+		linkInstance.SetConfigRef(&flowNet.Edges[i])
 
-		// 保存 PacketTypes
-		if edgeProto.PacketTypes != nil && len(*edgeProto.PacketTypes) > 0 {
-			packetTypes := make([]string, len(*edgeProto.PacketTypes))
-			for i, pt := range *edgeProto.PacketTypes {
-				packetTypes[i] = fmt.Sprintf("%d", pt)
-			}
-			linkInstance.SetPacketTypes(packetTypes)
-		}
-
-		// 保存 DisplayData
-		linkDisplayData := make(map[string]interface{})
-		linkDisplayData["data"] = edgeProto.Data
-		linkInstance.SetAllDisplayData(linkDisplayData)
+		// Phase 2: 不再填充业务数据和 DisplayData
+		// Export 时会直接从 configRef 读取
 	}
 
 	return net, nil
