@@ -3,119 +3,10 @@ package visualization
 import (
 	"fmt"
 	"math"
-	"sync"
 
 	"github.com/Readm/flow_sim/internal/core/state"
 	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 )
-
-// DisplayCache 缓存前端提交的可视化信息
-type DisplayCache struct {
-	mu    sync.RWMutex
-	nodes map[int]NodeDisplayInfo // node_id -> display info
-	edges map[int]EdgeDisplayInfo // edge_id -> display info
-}
-
-// NodeDisplayInfo 节点显示信息
-type NodeDisplayInfo struct {
-	Data     map[string]interface{} // CyEditor data 字段
-	Position struct {
-		X float32 `json:"x"`
-		Y float32 `json:"y"`
-	} // position 字段
-	Style map[string]interface{} // style 字段（可选）
-}
-
-// EdgeDisplayInfo 边显示信息
-type EdgeDisplayInfo struct {
-	Data map[string]interface{} // CyEditor data 字段
-}
-
-var globalDisplayCache = &DisplayCache{
-	nodes: make(map[int]NodeDisplayInfo),
-	edges: make(map[int]EdgeDisplayInfo),
-}
-
-// CacheNodeDisplay 缓存节点显示信息
-func CacheNodeDisplay(nodeID int, data map[string]interface{}, position struct {
-	X float32 `json:"x"`
-	Y float32 `json:"y"`
-}, style map[string]interface{}) {
-	globalDisplayCache.mu.Lock()
-	defer globalDisplayCache.mu.Unlock()
-	globalDisplayCache.nodes[nodeID] = NodeDisplayInfo{
-		Data:     data,
-		Position: position,
-		Style:    style,
-	}
-}
-
-// CacheEdgeDisplay 缓存边显示信息
-func CacheEdgeDisplay(edgeID int, data map[string]interface{}) {
-	globalDisplayCache.mu.Lock()
-	defer globalDisplayCache.mu.Unlock()
-	globalDisplayCache.edges[edgeID] = EdgeDisplayInfo{
-		Data: data,
-	}
-}
-
-// GetNodeDisplay 获取缓存的节点显示信息
-func GetNodeDisplay(nodeID int) (NodeDisplayInfo, bool) {
-	globalDisplayCache.mu.RLock()
-	defer globalDisplayCache.mu.RUnlock()
-	info, ok := globalDisplayCache.nodes[nodeID]
-	return info, ok
-}
-
-// GetEdgeDisplay 获取缓存的边显示信息
-func GetEdgeDisplay(edgeID int) (EdgeDisplayInfo, bool) {
-	globalDisplayCache.mu.RLock()
-	defer globalDisplayCache.mu.RUnlock()
-	info, ok := globalDisplayCache.edges[edgeID]
-	return info, ok
-}
-
-// GetEdgeDisplayByPorts 根据节点和端口信息查找缓存的边显示信息
-// 遍历所有缓存的边,匹配 source/target 和端口信息
-func GetEdgeDisplayByPorts(srcNodeID, srcPortID, dstNodeID, dstPortID int) (EdgeDisplayInfo, bool) {
-	globalDisplayCache.mu.RLock()
-	defer globalDisplayCache.mu.RUnlock()
-
-	// 遍历所有缓存的边,找到匹配的
-	for _, info := range globalDisplayCache.edges {
-		// 检查data中的source和target
-		source, hasSource := info.Data["source"].(string)
-		target, hasTarget := info.Data["target"].(string)
-
-		if !hasSource || !hasTarget {
-			continue
-		}
-
-		expectedSource := fmt.Sprintf("node-%d", srcNodeID)
-		expectedTarget := fmt.Sprintf("node-%d", dstNodeID)
-
-		if source != expectedSource || target != expectedTarget {
-			continue
-		}
-
-		// 检查端口信息(可能存储在 srcPort/dstPort 字段中)
-		if srcPort, ok := info.Data["srcPort"].(int); ok {
-			if srcPort != srcPortID {
-				continue
-			}
-		}
-		if dstPort, ok := info.Data["dstPort"].(int); ok {
-			if dstPort != dstPortID {
-				continue
-			}
-		}
-
-		// 找到匹配的边
-		return info, true
-	}
-
-	return EdgeDisplayInfo{}, false
-}
 
 // StateToFlowSimNetwork 将 NetworkState 转换为 FlowSimNetwork（完整转换，包含状态和 display）
 func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
@@ -127,6 +18,27 @@ func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
 		Cycle:   &cycle,
 		Nodes:   make([]protocol.Node, 0, len(ns.Nodes)),
 		Edges:   make([]protocol.Edge, 0, len(ns.Links)),
+	}
+
+	// 恢复网络级别的显示信息
+	if zoom, ok := ns.DisplayData["zoom"].(float64); ok {
+		zoomFloat32 := float32(zoom)
+		network.Zoom = &zoomFloat32
+	}
+	if pan, ok := ns.DisplayData["pan"].(map[string]interface{}); ok {
+		panStruct := struct {
+			X *float32 `json:"x,omitempty"`
+			Y *float32 `json:"y,omitempty"`
+		}{}
+		if x, ok := pan["x"].(float64); ok {
+			xFloat32 := float32(x)
+			panStruct.X = &xFloat32
+		}
+		if y, ok := pan["y"].(float64); ok {
+			yFloat32 := float32(y)
+			panStruct.Y = &yFloat32
+		}
+		network.Pan = &panStruct
 	}
 
 	// 转换节点
@@ -141,6 +53,16 @@ func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
 		if len(nodeState.Inputs) > 0 {
 			inPorts := make([]protocol.Port, len(nodeState.Inputs))
 			for idx, q := range nodeState.Inputs {
+				var packetTypes *[]int
+				if len(q.PacketTypes) > 0 {
+					pts := make([]int, 0, len(q.PacketTypes))
+					for _, pt := range q.PacketTypes {
+						var ptInt int
+						fmt.Sscanf(pt, "%d", &ptInt)
+						pts = append(pts, ptInt)
+					}
+					packetTypes = &pts
+				}
 				inPorts[idx] = protocol.Port{
 					PortId:       idx,
 					Bandwidth:    q.Bandwidth,
@@ -148,6 +70,7 @@ func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
 					BufferLength: &q.Length,
 					Capacity:     &q.Capacity,
 					Bitmap:       &q.Bitmap,
+					PacketTypes:  packetTypes,
 				}
 			}
 			node.InPorts = &inPorts
@@ -157,6 +80,16 @@ func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
 		if len(nodeState.Outputs) > 0 {
 			outPorts := make([]protocol.Port, len(nodeState.Outputs))
 			for idx, q := range nodeState.Outputs {
+				var packetTypes *[]int
+				if len(q.PacketTypes) > 0 {
+					pts := make([]int, 0, len(q.PacketTypes))
+					for _, pt := range q.PacketTypes {
+						var ptInt int
+						fmt.Sscanf(pt, "%d", &ptInt)
+						pts = append(pts, ptInt)
+					}
+					packetTypes = &pts
+				}
 				outPorts[idx] = protocol.Port{
 					PortId:       idx,
 					Bandwidth:    q.Bandwidth,
@@ -164,58 +97,86 @@ func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
 					BufferLength: &q.Length,
 					Capacity:     &q.Capacity,
 					Bitmap:       &q.Bitmap,
+					PacketTypes:  packetTypes,
 				}
 			}
 			node.OutPorts = &outPorts
 		}
 
-		// 转换缓存配置和统计
-		// 注意: state.CacheState 只包含统计数据,配置信息需要从其他地方获取
-		// 这里暂时跳过 cache,因为 state 中没有配置信息
-		// TODO: 如果需要完整的 cache 配置,需要在 NodeState 中添加配置字段
-		if len(nodeState.Caches) > 0 {
-			c := nodeState.Caches[0]
-			// 使用默认配置值,只填充统计数据
-			hits := int(c.Hits)
-			misses := int(c.Misses)
-			accesses := int(c.Accesses)
-			node.Cache = &protocol.CacheConfig{
-				Capacity:          1024,  // 默认值
-				NumSets:           1,     // 默认值
-				ReplacementPolicy: protocol.LRU, // 默认值
-				States:            "MESI", // 默认值
-				Hits:              &hits,
-				Misses:            &misses,
-				Accesses:          &accesses,
-			}
-		}
+		// 从 Features 恢复 Cache 配置，从 Stats 恢复统计数据
+		if nodeState.Features != nil {
+			if cacheConfig, ok := nodeState.Features["cache"]; ok && cacheConfig != nil {
+				capacity, _ := cacheConfig["capacity"].(int)
+				numSets, _ := cacheConfig["num_sets"].(int)
+				replacementPolicy, _ := cacheConfig["replacement_policy"].(string)
+				states, _ := cacheConfig["states"].(string)
 
-		// 转换目录配置（如果有）
-		// 注意: state.DirectoryState 只包含运行时条目,配置信息需要从其他地方获取
-		// TODO: 如果需要完整的 directory 配置,需要在 NodeState 中添加配置字段
-		if len(nodeState.Directories) > 0 {
-			// 使用默认配置值
-			node.Directory = &protocol.DirectoryConfig{
-				Capacity:          256,    // 默认值
-				NumSets:           1,      // 默认值
-				ReplacementPolicy: "LRU",  // 默认值
-				States:            "MESI", // 默认值
+			cacheConfigProto := &protocol.CacheConfig{
+				Capacity:          capacity,
+				NumSets:           numSets,
+				ReplacementPolicy: protocol.CacheConfigReplacementPolicy(replacementPolicy),
+				States:            states,
+			}
+
+			// 从 Stats 恢复统计数据
+			if cacheStats, ok := nodeState.Stats["cache"].([]state.CacheState); ok && len(cacheStats) > 0 {
+				c := cacheStats[0]
+				hits := int(c.Hits)
+				misses := int(c.Misses)
+				accesses := int(c.Accesses)
+				cacheConfigProto.Hits = &hits
+				cacheConfigProto.Misses = &misses
+				cacheConfigProto.Accesses = &accesses
+			}
+			node.Cache = cacheConfigProto
+			}
+
+			// Directory 配置
+			if directoryConfig, ok := nodeState.Features["directory"]; ok && directoryConfig != nil {
+				capacity, _ := directoryConfig["capacity"].(int)
+				numSets, _ := directoryConfig["num_sets"].(int)
+				replacementPolicy, _ := directoryConfig["replacement_policy"].(string)
+				states, _ := directoryConfig["states"].(string)
+
+				node.Directory = &protocol.DirectoryConfig{
+					Capacity:          capacity,
+					NumSets:           numSets,
+					ReplacementPolicy: replacementPolicy,
+					States:            states,
+				}
 			}
 		}
 
 		// 一致性域 ID
-		if coherenceDomainID, ok := nodeState.CustomData["coherence_domain_id"].(int); ok {
-			node.CoherenceDomainId = &coherenceDomainID
+		if nodeState.CoherenceDomainID != nil {
+			node.CoherenceDomainId = nodeState.CoherenceDomainID
 		}
 
-		// 恢复或生成 Display 信息
-		if displayInfo, cached := GetNodeDisplay(nodeState.ID); cached {
-			// 使用缓存的 display 信息
-			node.Data = mapToNodeData(displayInfo.Data)
-			node.Position = displayInfo.Position
-			node.Style = &displayInfo.Style
-		} else {
-			// 生成默认 display 信息（圆形布局）
+		// 从 DisplayData 恢复显示信息
+		if nodeState.DisplayData != nil {
+			// 恢复 position
+			if pos, ok := nodeState.DisplayData["position"].(struct {
+				X float32 `json:"x"`
+				Y float32 `json:"y"`
+			}); ok {
+				node.Position = pos
+			}
+
+			// 恢复 data
+			if dataMap, ok := nodeState.DisplayData["data"].(protocol.Node_Data); ok {
+				node.Data = dataMap
+			} else if dataMap, ok := nodeState.DisplayData["data"].(map[string]interface{}); ok {
+				node.Data = mapToNodeData(dataMap)
+			}
+
+			// 恢复 style
+			if style, ok := nodeState.DisplayData["style"].(map[string]interface{}); ok {
+				node.Style = &style
+			}
+		}
+
+		// 如果没有 DisplayData，生成默认 display 信息（圆形布局）
+		if node.Data.Id == "" {
 			angle := 2 * math.Pi * float64(i) / float64(len(ns.Nodes))
 			radius := 200.0
 			centerX, centerY := 400.0, 300.0
@@ -247,22 +208,23 @@ func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
 		nodeIDMap[n.ID] = true
 	}
 
-	for i, linkState := range ns.Links {
+	for _, linkState := range ns.Links {
 		// 跳过无效的链路
 		if !nodeIDMap[linkState.SourceID] || !nodeIDMap[linkState.TargetID] {
 			continue
 		}
 
-		edgeID := i + 1
 		edge := protocol.Edge{
-			EdgeId:    edgeID,
+			EdgeId:    linkState.EdgeID,
 			SrcNodeId: linkState.SourceID,
 			DstNodeId: linkState.TargetID,
 		}
 
-		// 端口 ID (现在从 LinkState 中导出)
-		edge.SrcPortId = &linkState.SourcePortID
-		edge.DstPortId = &linkState.TargetPortID
+		// 端口 ID - 创建副本避免指针共享
+		srcPortID := linkState.SourcePortID
+		dstPortID := linkState.TargetPortID
+		edge.SrcPortId = &srcPortID
+		edge.DstPortId = &dstPortID
 
 		// 链路参数
 		if linkState.Latency > 0 {
@@ -272,25 +234,29 @@ func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
 			edge.Bandwidth = &linkState.Bandwidth
 		}
 
-		// CyEditor data 字段
-		// 优先使用基于端口的查找,回退到edgeID查找
-		displayInfo, cached := GetEdgeDisplayByPorts(linkState.SourceID, linkState.SourcePortID, linkState.TargetID, linkState.TargetPortID)
-		if !cached {
-			displayInfo, cached = GetEdgeDisplay(edgeID)
+		// PacketTypes
+		if len(linkState.PacketTypes) > 0 {
+			pts := make([]int, 0, len(linkState.PacketTypes))
+			for _, pt := range linkState.PacketTypes {
+				var ptInt int
+				fmt.Sscanf(pt, "%d", &ptInt)
+				pts = append(pts, ptInt)
+			}
+			edge.PacketTypes = &pts
 		}
 
-		if cached {
-			edge.Data = mapToEdgeData(displayInfo.Data)
-			// 从缓存的display数据中恢复端口信息(如果有)
-			if srcPort, ok := displayInfo.Data["srcPort"].(int); ok {
-				edge.SrcPortId = &srcPort
+		// 从 DisplayData 恢复显示信息
+		if linkState.DisplayData != nil {
+			if dataMap, ok := linkState.DisplayData["data"].(protocol.Edge_Data); ok {
+				edge.Data = dataMap
+			} else if dataMap, ok := linkState.DisplayData["data"].(map[string]interface{}); ok {
+				edge.Data = mapToEdgeData(dataMap)
 			}
-			if dstPort, ok := displayInfo.Data["dstPort"].(int); ok {
-				edge.DstPortId = &dstPort
-			}
-		} else {
+		}
+
+		// 如果没有 DisplayData，生成默认 display 信息
+		if edge.Data.Id == "" {
 			lineType := protocol.Solid
-			// 生成默认 display 信息
 			edge.Data = protocol.Edge_Data{
 				Id:       fmt.Sprintf("edge-%d-p%d-%d-p%d", linkState.SourceID, linkState.SourcePortID, linkState.TargetID, linkState.TargetPortID),
 				Source:   fmt.Sprintf("node-%d", linkState.SourceID),

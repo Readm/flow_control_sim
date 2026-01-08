@@ -20,6 +20,7 @@ type NetworkState struct {
 	CurrentCycle int
 	Nodes        []NodeState
 	Links        []LinkState
+	DisplayData  map[string]interface{} // 可视化信息：zoom, pan
 }
 
 // NodeState represents the state of a single node.
@@ -29,9 +30,24 @@ type NodeState struct {
 	CurrentCycle int
 	Inputs       []QueueState
 	Outputs      []QueueState
-	Caches       []CacheState
-	Directories  []DirectoryState
-	CustomData   map[string]interface{}
+
+	// 统计数据（运行时动态产生）
+	// Stats["cache"] = []CacheState
+	// Stats["directory"] = []DirectoryState
+	// Stats["custom_metric"] = ... (未来扩展)
+	Stats map[string]interface{}
+
+	// 配置信息（静态）
+	Features          map[string]map[string]interface{} // feature配置
+	CoherenceDomainID *int                              // 一致性域ID
+
+	// 可视化信息
+	DisplayData map[string]interface{} // position, data, style
+
+	// 已废弃字段（为了兼容性暂时保留，将在后续版本移除）
+	Caches      []CacheState // 废弃：使用 Stats["cache"] 替代
+	Directories []DirectoryState // 废弃：使用 Stats["directory"] 替代
+	CustomData  map[string]interface{} // 废弃：使用 Features/DisplayData 替代
 }
 
 // LinkState represents the state of a link.
@@ -44,16 +60,22 @@ type LinkState struct {
 	Latency      int
 	Bandwidth    int
 	// Occupancy shows the number of packets in each time slot.
-	Occupancy []int
+	Occupancy   []int
+	PacketTypes []string // 支持的包类型
+
+	// 业务ID和可视化信息
+	EdgeID      int                    // 边的业务ID
+	DisplayData map[string]interface{} // 可视化信息：data (id, source, target, lineType)
 }
 
 // QueueState represents the state of an input or output queue.
 type QueueState struct {
-	Type      string // "Input" or "Output"
-	Length    int
-	Capacity  int
-	Bandwidth int
-	Bitmap    string // "1010..." representation of occupied slots
+	Type        string   // "Input" or "Output"
+	Length      int
+	Capacity    int
+	Bandwidth   int
+	Bitmap      string   // "1010..." representation of occupied slots
+	PacketTypes []string // 支持的包类型
 	// Packets is a list of packet summaries.
 	// In Summary mode, this might be empty or partial.
 	Packets []PacketState

@@ -66,6 +66,11 @@ type Link struct {
 	currentCycle int
 	tickHook     func(cycle int)
 
+	// ===== Business and Display data =====
+	edgeID      int                       // 业务 ID，对应 Edge.EdgeId
+	packetTypes []string                  // 包类型列表
+	displayData map[string]interface{}    // 可视化数据（data, style 等）
+
 	// ===== Monitor =====
 	monitor             *monitor.LinkMonitor
 	currentProcessStart float64
@@ -106,6 +111,9 @@ func NewLinkWithPortIDs(sourceID, sourcePortID, targetID, targetPortID, latency,
 		bandwidth:    bandwidth,
 		linkType:     linkType,
 		currentCycle: 0,
+		edgeID:       linkID,      // 默认使用 linkID 作为 edgeID
+		packetTypes:  []string{},
+		displayData:  make(map[string]interface{}),
 		monitor:      monitor.NewLinkMonitor(linkID),
 	}
 }
@@ -346,4 +354,70 @@ func (l *Link) ResumeProcess() {
 // RecordWait records a wait event.
 func (l *Link) RecordWait(start, end float64, cycle int) {
 	l.monitor.OnWait(start, end, cycle)
+}
+
+// ===== Business and Display Data Accessors =====
+
+// SetEdgeID sets the business edge ID.
+func (l *Link) SetEdgeID(id int) {
+	l.edgeID = id
+}
+
+// GetEdgeID returns the business edge ID.
+func (l *Link) GetEdgeID() int {
+	return l.edgeID
+}
+
+// SetPacketTypes sets the packet types for this link.
+func (l *Link) SetPacketTypes(types []string) {
+	l.packetTypes = types
+}
+
+// GetPacketTypes returns the packet types for this link.
+func (l *Link) GetPacketTypes() []string {
+	return l.packetTypes
+}
+
+// SetDisplayData sets a display data field.
+func (l *Link) SetDisplayData(key string, value interface{}) {
+	if l.displayData == nil {
+		l.displayData = make(map[string]interface{})
+	}
+	l.displayData[key] = value
+}
+
+// GetDisplayData gets a display data field.
+func (l *Link) GetDisplayData(key string) (interface{}, bool) {
+	if l.displayData == nil {
+		return nil, false
+	}
+	val, ok := l.displayData[key]
+	return val, ok
+}
+
+// GetAllDisplayData returns all display data.
+func (l *Link) GetAllDisplayData() map[string]interface{} {
+	result := make(map[string]interface{}, len(l.displayData))
+	for k, v := range l.displayData {
+		result[k] = v
+	}
+	return result
+}
+
+// SetAllDisplayData sets all display data.
+func (l *Link) SetAllDisplayData(data map[string]interface{}) {
+	l.displayData = make(map[string]interface{}, len(data))
+	for k, v := range data {
+		l.displayData[k] = v
+	}
+}
+
+// SourcePortID returns the source port ID.
+func (l *Link) SourcePortID() int {
+	return l.sourcePortID
+}
+
+// TargetPortID returns the target port ID.
+func (l *Link) TargetPortID() int {
+	return l.targetPortID
 }

@@ -8,34 +8,12 @@ import (
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
-	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 )
 
 // BuildFromFlowSimNetwork 直接从 FlowSimNetwork 构建仿真网络
 func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network, error) {
 	net := network.New()
-
-	// 缓存 display 信息以便后续导出
-	for _, n := range flowNet.Nodes {
-		nodeDataMap := nodeDataToMap(n.Data)
-		if n.Style != nil {
-			visualization.CacheNodeDisplay(n.NodeId, nodeDataMap, n.Position, *n.Style)
-		} else {
-			visualization.CacheNodeDisplay(n.NodeId, nodeDataMap, n.Position, nil)
-		}
-	}
-	for _, e := range flowNet.Edges {
-		edgeDataMap := edgeDataToMap(e.Data)
-		// 将端口信息添加到 data map 中
-		if e.SrcPortId != nil {
-			edgeDataMap["srcPort"] = *e.SrcPortId
-		}
-		if e.DstPortId != nil {
-			edgeDataMap["dstPort"] = *e.DstPortId
-		}
-		visualization.CacheEdgeDisplay(e.EdgeId, edgeDataMap)
-	}
 
 	// 1. 创建节点
 	for _, nodeProto := range flowNet.Nodes {
@@ -67,11 +45,42 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 			newNode.AddDirectory(d)
 		}
 
-		// 存储自定义数据（如一致性域 ID）
+		// 保存 CoherenceDomainID
 		if nodeProto.CoherenceDomainId != nil {
-			newNode.SetData("coherence_domain_id", *nodeProto.CoherenceDomainId)
+			newNode.SetCoherenceDomainID(*nodeProto.CoherenceDomainId)
 		}
 		newNode.SetData("name", nodeProto.NodeName)
+
+		// 保存 Features（Cache 配置）
+		if nodeProto.Cache != nil {
+			cacheConfig := map[string]interface{}{
+				"capacity":           nodeProto.Cache.Capacity,
+				"num_sets":           nodeProto.Cache.NumSets,
+				"replacement_policy": string(nodeProto.Cache.ReplacementPolicy),
+				"states":             nodeProto.Cache.States,
+			}
+			newNode.SetFeature("cache", cacheConfig)
+		}
+
+		// 保存 Features（Directory 配置）
+		if nodeProto.Directory != nil {
+			directoryConfig := map[string]interface{}{
+				"capacity":           nodeProto.Directory.Capacity,
+				"num_sets":           nodeProto.Directory.NumSets,
+				"replacement_policy": nodeProto.Directory.ReplacementPolicy,
+				"states":             nodeProto.Directory.States,
+			}
+			newNode.SetFeature("directory", directoryConfig)
+		}
+
+		// 保存 DisplayData
+		displayData := make(map[string]interface{})
+		displayData["position"] = nodeProto.Position
+		displayData["data"] = nodeProto.Data
+		if nodeProto.Style != nil {
+			displayData["style"] = *nodeProto.Style
+		}
+		newNode.SetAllDisplayData(displayData)
 
 		// 创建输入队列
 		var inputs []*queue.InputQueue
@@ -150,19 +159,45 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 		}
 
 		// 连接节点
-		if _, err := net.Connect(
+		linkInstance, err := net.Connect(
 			edgeProto.SrcNodeId, srcPort,
 			edgeProto.DstNodeId, dstPort,
 			latency, bandwidth,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, fmt.Errorf("failed to connect %d:%d->%d:%d: %w",
 				edgeProto.SrcNodeId, srcPort,
 				edgeProto.DstNodeId, dstPort,
 				err)
 		}
+
+		// 保存 EdgeID
+		linkInstance.SetEdgeID(edgeProto.EdgeId)
+
+		// 保存 PacketTypes
+		if edgeProto.PacketTypes != nil && len(*edgeProto.PacketTypes) > 0 {
+			packetTypes := make([]string, len(*edgeProto.PacketTypes))
+			for i, pt := range *edgeProto.PacketTypes {
+				packetTypes[i] = fmt.Sprintf("%d", pt)
+			}
+			linkInstance.SetPacketTypes(packetTypes)
+		}
+
+		// 保存 DisplayData
+		linkDisplayData := make(map[string]interface{})
+		linkDisplayData["data"] = edgeProto.Data
+		linkInstance.SetAllDisplayData(linkDisplayData)
 	}
 
 	return net, nil
+}
+
+// RebuildNetwork 重建现有网络（替代 Network.Reset）
+func RebuildNetwork(existingNet *network.Network, flowNet protocol.FlowSimNetwork) error {
+	// 使用反射访问私有字段的替代方案：
+	// 我们需要添加一个公开方法到 Network
+	// 但为了避免循环依赖，让我们在测试中直接使用 BuildFromFlowSimNetwork
+	return fmt.Errorf("use BuildFromFlowSimNetwork and replace the network instance instead")
 }
 
 // nodeDataToMap 将 protocol.Node_Data 转换为 map[string]interface{}

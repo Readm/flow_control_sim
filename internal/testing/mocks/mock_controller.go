@@ -117,14 +117,57 @@ func (m *Controller) RebuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) 
 		CurrentCycle: 0,
 		Nodes:        make([]state.NodeState, 0, len(flowNet.Nodes)),
 		Links:        make([]state.LinkState, 0, len(flowNet.Edges)),
+		DisplayData:  make(map[string]interface{}),
+	}
+
+	// 保存网络级别的显示信息
+	if flowNet.Zoom != nil {
+		newState.DisplayData["zoom"] = *flowNet.Zoom
+	}
+	if flowNet.Pan != nil {
+		newState.DisplayData["pan"] = *flowNet.Pan
 	}
 
 	// Map Nodes
 	for _, n := range flowNet.Nodes {
 		nodeState := state.NodeState{
-			ID:   n.NodeId,
-			Type: getNodeType(n),
+			ID:          n.NodeId,
+			Type:        getNodeType(n),
+			Stats:       make(map[string]interface{}),
+			Features:    make(map[string]map[string]interface{}),
+			DisplayData: make(map[string]interface{}),
 		}
+
+		// 保存 DisplayData（position, data, style）
+		nodeState.DisplayData["position"] = n.Position
+		nodeState.DisplayData["data"] = n.Data
+		if n.Style != nil {
+			nodeState.DisplayData["style"] = *n.Style
+		}
+
+		// 保存 CoherenceDomainID
+		if n.CoherenceDomainId != nil {
+			nodeState.CoherenceDomainID = n.CoherenceDomainId
+		}
+
+		// 保存 Features 配置
+		if n.Cache != nil {
+			nodeState.Features["cache"] = map[string]interface{}{
+				"capacity":           n.Cache.Capacity,
+				"num_sets":           n.Cache.NumSets,
+				"replacement_policy": n.Cache.ReplacementPolicy,
+				"states":             n.Cache.States,
+			}
+		}
+		if n.Directory != nil {
+			nodeState.Features["directory"] = map[string]interface{}{
+				"capacity":           n.Directory.Capacity,
+				"num_sets":           n.Directory.NumSets,
+				"replacement_policy": n.Directory.ReplacementPolicy,
+				"states":             n.Directory.States,
+			}
+		}
+
 		// Add port information if available
 		if n.InPorts != nil {
 			nodeState.Inputs = make([]state.QueueState, len(*n.InPorts))
@@ -133,19 +176,33 @@ func (m *Controller) RebuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) 
 				if p.BufferSize != nil {
 					capacity = *p.BufferSize
 				}
+				packetTypes := []string{}
+				if p.PacketTypes != nil {
+					for _, pt := range *p.PacketTypes {
+						packetTypes = append(packetTypes, fmt.Sprintf("%d", pt))
+					}
+				}
 				nodeState.Inputs[i] = state.QueueState{
-					Type:      "Input",
-					Capacity:  capacity,
-					Bandwidth: p.Bandwidth,
+					Type:        "Input",
+					Capacity:    capacity,
+					Bandwidth:   p.Bandwidth,
+					PacketTypes: packetTypes,
 				}
 			}
 		}
 		if n.OutPorts != nil {
 			nodeState.Outputs = make([]state.QueueState, len(*n.OutPorts))
 			for i, p := range *n.OutPorts {
+				packetTypes := []string{}
+				if p.PacketTypes != nil {
+					for _, pt := range *p.PacketTypes {
+						packetTypes = append(packetTypes, fmt.Sprintf("%d", pt))
+					}
+				}
 				nodeState.Outputs[i] = state.QueueState{
-					Type:      "Output",
-					Bandwidth: p.Bandwidth,
+					Type:        "Output",
+					Bandwidth:   p.Bandwidth,
+					PacketTypes: packetTypes,
 				}
 			}
 		}
@@ -171,6 +228,13 @@ func (m *Controller) RebuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) 
 			dstPortId = *e.DstPortId
 		}
 
+		packetTypes := []string{}
+		if e.PacketTypes != nil {
+			for _, pt := range *e.PacketTypes {
+				packetTypes = append(packetTypes, fmt.Sprintf("%d", pt))
+			}
+		}
+
 		linkState := state.LinkState{
 			SourceID:     e.SrcNodeId,
 			SourcePortID: srcPortId,
@@ -179,7 +243,14 @@ func (m *Controller) RebuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) 
 			Latency:      latency,
 			Bandwidth:    bandwidth,
 			Occupancy:    make([]int, latency),
+			PacketTypes:  packetTypes,
+			EdgeID:       e.EdgeId,
+			DisplayData:  make(map[string]interface{}),
 		}
+
+		// 保存 DisplayData
+		linkState.DisplayData["data"] = e.Data
+
 		newState.Links = append(newState.Links, linkState)
 	}
 

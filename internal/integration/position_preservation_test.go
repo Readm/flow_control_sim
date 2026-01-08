@@ -107,20 +107,6 @@ func TestPositionPreservation(t *testing.T) {
 	t.Logf("  Node 0 新坐标: (%.1f, %.1f)", expectedNode0X, expectedNode0Y)
 	t.Logf("  Node 1 新坐标: (%.1f, %.1f)", expectedNode1X, expectedNode1Y)
 
-	// 缓存display信息（模拟前端提交网络时的缓存）
-	for _, node := range flowNet.Nodes {
-		visualization.CacheNodeDisplay(
-			node.NodeId,
-			map[string]interface{}{
-				"id":    node.Data.Id,
-				"label": node.Data.Label,
-				"type":  node.Data.Type,
-			},
-			node.Position,
-			nil, // style
-		)
-	}
-
 	// ===== Step 3: Build网络 =====
 	t.Log("Step 3: Build网络")
 	net, err := builder.BuildFromFlowSimNetwork(flowNet)

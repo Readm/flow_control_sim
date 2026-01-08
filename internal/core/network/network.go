@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Readm/flow_sim/internal/components/cache"
-	"github.com/Readm/flow_sim/internal/components/directory"
 	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/debug"
 	"github.com/Readm/flow_sim/internal/core/link"
@@ -24,63 +22,10 @@ type NodeHandle struct {
 	Outputs []*queue.OutputQueue
 }
 
-// PortSchema represents a port in the OpenAPI schema.
-type PortSchema struct {
-	PortID       *int  `json:"port_id,omitempty"`
-	PacketTypes  []int `json:"packet_types,omitempty"`
-	BufferSize   int   `json:"buffer_size"`
-	InBandwidth  int   `json:"in_bandwidth"`
-	OutBandwidth int   `json:"out_bandwidth"`
-}
-
-// CacheConfigSchema represents cache configuration in the OpenAPI schema.
-type CacheConfigSchema struct {
-	Capacity          int    `json:"capacity"`
-	NumSets           int    `json:"num_sets"`
-	ReplacementPolicy string `json:"replacement_policy"`
-	States            string `json:"states"`
-}
-
-// DirectoryConfigSchema represents directory configuration in the OpenAPI schema.
-type DirectoryConfigSchema struct {
-	Capacity          int    `json:"capacity"`
-	NumSets           int    `json:"num_sets"`
-	ReplacementPolicy string `json:"replacement_policy"`
-	States            string `json:"states"`
-}
-
-// NodeSchema represents a node in the OpenAPI schema.
-type NodeSchema struct {
-	NodeID            int                    `json:"node_id"`
-	NodeName          string                 `json:"node_name,omitempty"`
-	NodeFeatures      []string               `json:"node_features,omitempty"`
-	Cache             *CacheConfigSchema     `json:"cache,omitempty"`
-	Directory         *DirectoryConfigSchema `json:"directory,omitempty"`
-	CoherenceDomainID *int                   `json:"coherence_domain_id,omitempty"`
-	InPorts           []PortSchema           `json:"in_ports,omitempty"`
-	OutPorts          []PortSchema           `json:"out_ports,omitempty"`
-}
-
-// EdgeSchema represents an edge in the OpenAPI schema.
-type EdgeSchema struct {
-	EdgeID      int   `json:"edge_id"`
-	SrcNodeID   int   `json:"src_node_id"`
-	SrcPortID   int   `json:"src_port_id"`
-	DstNodeID   int   `json:"dst_node_id"`
-	DstPortID   int   `json:"dst_port_id"`
-	PacketTypes []int `json:"packet_types,omitempty"`
-}
-
-// NetworkSchema represents the network topology in the OpenAPI schema.
-type NetworkSchema struct {
-	Version string       `json:"version,omitempty"`
-	Nodes   []NodeSchema `json:"nodes"`
-	Edges   []EdgeSchema `json:"edges"`
-}
 
 // Network manages a collection of nodes and links.
 // Design assumptions:
-// - Network topology is built once (via AddNode/Connect or FromSchema)
+// - Network topology is built once (via AddNode/Connect or builder.BuildFromFlowSimNetwork)
 // - After construction, topology is immutable during Advance
 // - No concurrent modifications during Advance (single-threaded execution model)
 // - Advance can be called multiple times sequentially
@@ -372,154 +317,6 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 // ConnectWithHandler is a legacy wrapper. Use Connect(..., WithHandler(h)) instead.
 func (n *Network) ConnectWithHandler(sourceID int, sourceOutputIdx int, targetID int, targetInputIdx int, latency int, bandwidth int, handler link.LinkHandler) (*link.Link, error) {
 	return n.Connect(sourceID, sourceOutputIdx, targetID, targetInputIdx, latency, bandwidth, WithHandler(handler))
-}
-
-// Reset clears the network and rebuilds it from the provided schema.
-// Must be called before any Advance. Panics if network is frozen.
-func (n *Network) Reset(schema *NetworkSchema) error {
-	if n.frozen {
-		panic("cannot reset after network is frozen (Advance called)")
-	}
-	if schema == nil {
-		return fmt.Errorf("schema cannot be nil")
-	}
-
-	// Clear existing nodes and links
-	n.stopWorkers()
-	n.nodes = make(map[int]*NodeHandle)
-	n.links = make([]*link.Link, 0)
-	n.nodeList = nil
-	n.frozen = false
-
-	// Create nodes from schema
-	for _, nodeSchema := range schema.Nodes {
-		// Create node
-		newNode := node.NewWorkerNode(nodeSchema.NodeID)
-
-		// Create cache if configured
-		// TODO: adapt cache configs
-		if nodeSchema.Cache != nil {
-			cacheInstance := cache.NewFullyAssociativeCache(nodeSchema.Cache.Capacity)
-			newNode.AddCache(cacheInstance)
-		}
-
-		// Create directory if configured
-		// TODO: adapt cache configs
-		if nodeSchema.Directory != nil {
-			directoryInstance := directory.NewFullyAssociativeDirectory(nodeSchema.Directory.Capacity)
-			newNode.AddDirectory(directoryInstance)
-		}
-
-		// Create input queues
-		inputs := make([]*queue.InputQueue, 0, len(nodeSchema.InPorts))
-		for i, portSchema := range nodeSchema.InPorts {
-			bufferSize := portSchema.BufferSize
-			if bufferSize <= 0 {
-				bufferSize = 8 // Default bufferSize
-			}
-			inBandwidth := portSchema.InBandwidth
-			if inBandwidth <= 0 {
-				return fmt.Errorf("node %d input port %d: inBandwidth must be positive, got %d", nodeSchema.NodeID, i, inBandwidth)
-			}
-			outBandwidth := portSchema.OutBandwidth
-			if outBandwidth <= 0 {
-				return fmt.Errorf("node %d input port %d: outBandwidth must be positive, got %d", nodeSchema.NodeID, i, outBandwidth)
-			}
-			iq := queue.NewInputQueue(bufferSize, inBandwidth)
-			inputs = append(inputs, iq)
-			if err := newNode.AddInputQueue(iq); err != nil {
-				return fmt.Errorf("failed to add input queue to node %d port %d: %w", nodeSchema.NodeID, i, err)
-			}
-		}
-
-		// Create output queues
-		outputs := make([]*queue.OutputQueue, 0, len(nodeSchema.OutPorts))
-		for i, portSchema := range nodeSchema.OutPorts {
-			bufferSize := portSchema.BufferSize
-			if bufferSize <= 0 {
-				bufferSize = 8 // Default bufferSize
-			}
-			inBandwidth := portSchema.InBandwidth
-			if inBandwidth <= 0 {
-				return fmt.Errorf("node %d output port %d: inBandwidth must be positive, got %d", nodeSchema.NodeID, i, inBandwidth)
-			}
-			outBandwidth := portSchema.OutBandwidth
-			if outBandwidth <= 0 {
-				return fmt.Errorf("node %d output port %d: outBandwidth must be positive, got %d", nodeSchema.NodeID, i, outBandwidth)
-			}
-			oq := queue.NewOutputQueue(bufferSize, outBandwidth)
-			outputs = append(outputs, oq)
-			if err := newNode.AddOutputQueue(oq); err != nil {
-				return fmt.Errorf("failed to add output queue to node %d port %d: %w", nodeSchema.NodeID, i, err)
-			}
-		}
-
-		// Create node handle
-		handle := &NodeHandle{
-			Node:    newNode,
-			Inputs:  inputs,
-			Outputs: outputs,
-		}
-
-		// Add to network
-		n.nodes[nodeSchema.NodeID] = handle
-	}
-
-	// Create links from edges
-	for _, edgeSchema := range schema.Edges {
-		// Validate source node
-		source, ok := n.nodes[edgeSchema.SrcNodeID]
-		if !ok {
-			return fmt.Errorf("source node %d not found for edge %d", edgeSchema.SrcNodeID, edgeSchema.EdgeID)
-		}
-		// Validate target node
-		target, ok := n.nodes[edgeSchema.DstNodeID]
-		if !ok {
-			return fmt.Errorf("target node %d not found for edge %d", edgeSchema.DstNodeID, edgeSchema.EdgeID)
-		}
-
-		// Validate port indices
-		if edgeSchema.SrcPortID < 0 || edgeSchema.SrcPortID >= len(source.Outputs) {
-			return fmt.Errorf("source node %d output index %d invalid for edge %d", edgeSchema.SrcNodeID, edgeSchema.SrcPortID, edgeSchema.EdgeID)
-		}
-		if edgeSchema.DstPortID < 0 || edgeSchema.DstPortID >= len(target.Inputs) {
-			return fmt.Errorf("target node %d input index %d invalid for edge %d", edgeSchema.DstNodeID, edgeSchema.DstPortID, edgeSchema.EdgeID)
-		}
-
-		sourceOutput := source.Outputs[edgeSchema.SrcPortID]
-		targetInput := target.Inputs[edgeSchema.DstPortID]
-		if sourceOutput == nil || targetInput == nil {
-			return fmt.Errorf("queues for edge %d (%d->%d) must not be nil", edgeSchema.EdgeID, edgeSchema.SrcNodeID, edgeSchema.DstNodeID)
-		}
-
-		// Use default values: latency=1, bandwidth=1
-		latency := 1
-		bandwidth := 1
-
-		// Create Link
-		linkInstance := link.NewLink(
-			edgeSchema.SrcNodeID,
-			edgeSchema.DstNodeID,
-			latency,
-			bandwidth,
-		)
-
-		// Connect using ahead_port.ConnectWithIDs for profiling
-		// OutputQueue -> Link -> InputQueue
-		ahead_port.ConnectWithIDs(edgeSchema.SrcNodeID, edgeSchema.DstNodeID, sourceOutput, linkInstance)
-		ahead_port.ConnectWithIDs(edgeSchema.SrcNodeID, edgeSchema.DstNodeID, linkInstance, targetInput)
-
-		// Link will be initialized in Advance or explicitly by user
-
-		// Inject global tracer if enabled
-		if n.tracer != nil {
-			linkInstance.SetTracer(n.tracer)
-		}
-
-		n.links = append(n.links, linkInstance)
-	}
-
-	return nil
 }
 
 // AdvanceTo runs all registered nodes and links in parallel up to the target cycle.

@@ -32,9 +32,17 @@ fuser -k 8080/tcp > /dev/null 2>&1
 # 2. Start Backend Server
 echo -e "${BLUE}[2/3] Starting Backend Server (Port 8081)...${NC}"
 cd "$(dirname "$0")/.."
+# Check if web_dev is initialized
+if [ ! -d "web_dev" ] || [ -z "$(ls -A web_dev)" ]; then
+    echo -e "${BLUE}Initializing web_dev submodule...${NC}"
+    git submodule update --init --recursive
+fi
+
 # Run in background, redirect output to a log file or let it print to stdout? 
 # Let's print to stdout but prefixed, or just let it mix for now (simplest for dev).
-go run -tags e2e cmd/server/main.go --port 8081 --static ./web/examples &
+# In Dev mode, backend static files path is less critical because we use frontend dev server,
+# but we point it to source examples just in case.
+go run -tags e2e cmd/server/main.go --port 8081 --static ./web_dev/examples &
 BACKEND_PID=$!
 echo -e "${GREEN}Backend Server started with PID $BACKEND_PID${NC}"
 
@@ -43,7 +51,7 @@ sleep 2
 
 # 3. Start Frontend Dev Server
 echo -e "${BLUE}[3/3] Starting Frontend Dev Server (Port 8080)...${NC}"
-cd web
+cd web_dev
 
 # Check for node_modules
 if [ ! -d "node_modules" ]; then
@@ -53,4 +61,4 @@ fi
 
 # npm run serve blocks, so we run it in foreground. 
 # Ctrl+C will trigger the trap to kill backend.
-npm run serve
+NODE_OPTIONS=--openssl-legacy-provider npm run serve

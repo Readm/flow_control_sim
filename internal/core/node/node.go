@@ -45,6 +45,18 @@ type Node interface {
 	Name() string
 	// SetName sets the human-readable name of the node.
 	SetName(name string)
+
+	// 配置信息访问
+	SetFeature(feature string, config map[string]interface{})
+	GetFeature(feature string) (map[string]interface{}, bool)
+	SetCoherenceDomainID(id int)
+	GetCoherenceDomainID() *int
+
+	// 显示信息访问
+	SetDisplayData(key string, value interface{})
+	GetDisplayData(key string) (interface{}, bool)
+	GetAllDisplayData() map[string]interface{}
+	SetAllDisplayData(data map[string]interface{})
 }
 
 // Tickable is an interface for components that can be ticked.
@@ -120,6 +132,13 @@ type BaseNode struct {
 	dataMu sync.RWMutex
 	data   map[string]interface{}
 
+	// 配置信息 (对应 FlowSimNetwork.Node.Features)
+	features          map[string]map[string]interface{}
+	coherenceDomainID *int
+
+	// 显示信息 (对应 FlowSimNetwork.Node DisplayData: position, data, style)
+	displayData map[string]interface{}
+
 	// Handler reference (for polymorphic behavior)
 	handler NodeHandler
 
@@ -142,6 +161,8 @@ func NewBaseNode(id int, handler NodeHandler) *BaseNode {
 		inputValues:      make([][]queue.PacketRef, 0),
 		caches:           make([]cache.Cache, 0),
 		directories:      make([]directory.Directory, 0),
+		features:         make(map[string]map[string]interface{}),
+		displayData:      make(map[string]interface{}),
 		data:             make(map[string]interface{}),
 		handler:          handler,
 		currentCycle:     0,
@@ -642,4 +663,75 @@ func (n *BaseNode) GetTracer() *trace.TraceRecorder {
 // GetTraceEvents implements trace.TraceSource.
 func (n *BaseNode) GetTraceEvents() []trace.TraceEvent {
 	return n.monitor.GetTraceEvents()
+}
+
+// ========== Features 和 DisplayData 访问方法 ==========
+
+// SetFeature 设置节点feature配置
+func (n *BaseNode) SetFeature(feature string, config map[string]interface{}) {
+	n.dataMu.Lock()
+	defer n.dataMu.Unlock()
+	if n.features == nil {
+		n.features = make(map[string]map[string]interface{})
+	}
+	n.features[feature] = config
+}
+
+// GetFeature 获取节点feature配置
+func (n *BaseNode) GetFeature(feature string) (map[string]interface{}, bool) {
+	n.dataMu.RLock()
+	defer n.dataMu.RUnlock()
+	config, ok := n.features[feature]
+	return config, ok
+}
+
+// SetCoherenceDomainID 设置一致性域ID
+func (n *BaseNode) SetCoherenceDomainID(id int) {
+	n.dataMu.Lock()
+	defer n.dataMu.Unlock()
+	n.coherenceDomainID = &id
+}
+
+// GetCoherenceDomainID 获取一致性域ID
+func (n *BaseNode) GetCoherenceDomainID() *int {
+	n.dataMu.RLock()
+	defer n.dataMu.RUnlock()
+	return n.coherenceDomainID
+}
+
+// SetDisplayData 设置显示数据的某个键值
+func (n *BaseNode) SetDisplayData(key string, value interface{}) {
+	n.dataMu.Lock()
+	defer n.dataMu.Unlock()
+	if n.displayData == nil {
+		n.displayData = make(map[string]interface{})
+	}
+	n.displayData[key] = value
+}
+
+// GetDisplayData 获取显示数据的某个键值
+func (n *BaseNode) GetDisplayData(key string) (interface{}, bool) {
+	n.dataMu.RLock()
+	defer n.dataMu.RUnlock()
+	val, ok := n.displayData[key]
+	return val, ok
+}
+
+// GetAllDisplayData 获取所有显示数据
+func (n *BaseNode) GetAllDisplayData() map[string]interface{} {
+	n.dataMu.RLock()
+	defer n.dataMu.RUnlock()
+	// 返回副本以避免并发问题
+	result := make(map[string]interface{}, len(n.displayData))
+	for k, v := range n.displayData {
+		result[k] = v
+	}
+	return result
+}
+
+// SetAllDisplayData 设置所有显示数据
+func (n *BaseNode) SetAllDisplayData(data map[string]interface{}) {
+	n.dataMu.Lock()
+	defer n.dataMu.Unlock()
+	n.displayData = data
 }
