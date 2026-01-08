@@ -168,14 +168,31 @@ go test -bench=Benchmark_ChampSim_64CPU/Cores_8 -run=^$ -v ./internal/benchmarks
    cd web_dev
    npm install
    ```
-3. **开发与构建**:
-   修改代码后，运行构建脚本将资源同步到主仓库：
+3. **开发与调试**:
+   - 修改 `web_dev` 下的源码。
+   - 运行开发服务器进行调试 (支持热重载):
+     ```bash
+     npm run serve
+     ```
+4. **构建与同步**:
+   开发完成后，运行构建脚本将资源同步到主仓库：
    ```bash
    ./scripts/build_frontend.sh
    ```
-4. **提交变更**:
+5. **提交变更**:
    - 在 `web_dev` 中提交源码变更。
    - 在主仓库中提交 updated `web/static` 资源。
+
+### 3. API 契约与代码生成 (API Synchronization)
+
+本项目采用 Schema-First 策略，后端 (`internal/`) 和前端 (`web_dev/src/`) 的类型定义均由 `web/openapi.yaml` 自动生成。
+
+| 角色 | 关注脚本 | 调用时机 | 作用 |
+|------|----------|----------|------|
+| **后端开发** | `generate_go_types.sh` | 修改 `openapi.yaml` 后 | 更新 Go 结构体 (`types.gen.go`)，确保 impl 与 spec 一致。Git Hook 会自动触发。 |
+| **前端开发** | `generate_ts_types.sh` | 后端更新 API 后 | 更新 TS 类型 (`api.ts`)，获得最新的字段提示和类型检查。需手动运行。 |
+
+> **提示**: 配置 `git config core.hooksPath .githooks` 后，提交时会自动检查并生成代码。
 
 
 
