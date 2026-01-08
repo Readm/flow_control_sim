@@ -13,7 +13,7 @@ import (
 
 func main() {
 	port := flag.String("port", "8080", "Port to listen on")
-	staticDir := flag.String("static", "./web/examples", "Path to static frontend files")
+	staticDir := flag.String("static", "./web/static", "Path to static frontend files")
 	flag.Parse()
 
 	// 1. Create Mock Controller
