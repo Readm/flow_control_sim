@@ -10,7 +10,9 @@ func (l *Link) ExportState(cfg state.ExportConfig) state.LinkState {
 
 	ls := state.LinkState{
 		SourceID:     l.sourceID,
+		SourcePortID: l.sourcePortID,
 		TargetID:     l.targetID,
+		TargetPortID: l.targetPortID,
 		CurrentCycle: l.currentCycle,
 		Latency:      l.latency,
 		Bandwidth:    l.bandwidth,

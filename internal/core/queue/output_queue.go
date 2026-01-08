@@ -62,6 +62,11 @@ func (oq *OutputQueue) SetDownstreamPort(port ahead_port.InPort) {
 	oq.toDownstream = port
 }
 
+// GetDownstreamPort returns the downstream port (for connection validation).
+func (oq *OutputQueue) GetDownstreamPort() ahead_port.InPort {
+	return oq.toDownstream
+}
+
 // Tick sends up to outBandwidth packets to downstream.
 // Implements strict FIFO sending with Head-of-Line blocking.
 func (oq *OutputQueue) Tick(cycle int) error {

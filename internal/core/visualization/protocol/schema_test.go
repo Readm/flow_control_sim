@@ -53,9 +53,9 @@ func TestOpenAPIConsistency(t *testing.T) {
 		GoType     interface{}
 		SchemaName string
 	}{
-		{CyNetwork{}, "Network"},
-		{CyNode{}, "Node"},
-		{CyEdge{}, "Edge"},
+		{FlowSimNetwork{}, "FlowSimNetwork"},
+		{Node{}, "Node"},
+		{Edge{}, "Edge"},
 	}
 
 	for _, check := range checks {

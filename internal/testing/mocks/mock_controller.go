@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/Readm/flow_sim/internal/config"
+	"github.com/Readm/flow_sim/internal/core/builder"
 	"github.com/Readm/flow_sim/internal/core/loadbench"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/state"
+	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 )
 
 var (
@@ -143,12 +146,49 @@ func (m *Controller) Rebuild(cfg config.EntityConfig) error {
 	return nil
 }
 
+// RebuildFromFlowSimNetwork 从 FlowSimNetwork 重建仿真网络
+func (m *Controller) RebuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) error {
+	log.Printf(" RebuildFromFlowSimNetwork: Building network with %d nodes, %d edges", len(flowNet.Nodes), len(flowNet.Edges))
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
+	// 使用 builder 构建真实的网络
+	net, err := builder.BuildFromFlowSimNetwork(flowNet)
+	if err != nil {
+		log.Printf(" RebuildFromFlowSimNetwork: Build failed: %v", err)
+		return fmt.Errorf("failed to build network from FlowSimNetwork: %w", err)
+	}
+
+	m.realNetwork = net
+	log.Printf(" RebuildFromFlowSimNetwork: Successfully set realNetwork")
+
+	// 导出初始状态
+	initialState := net.ExportState(state.ExportConfig{DetailLevel: state.DetailLevelSummary})
+	m.latest = &initialState
+	log.Printf(" RebuildFromFlowSimNetwork: Exported initial state with %d nodes, %d links", len(initialState.Nodes), len(initialState.Links))
+
+	// 通知订阅者
+	go func() {
+		m.subsMu.Lock()
+		defer m.subsMu.Unlock()
+		for _, ch := range m.subs {
+			select {
+			case ch <- initialState:
+			default:
+			}
+		}
+	}()
+
+	return nil
+}
+
 // Run satisfies the simulation controller contract.
 func (m *Controller) Run(ctx context.Context, cfg config.EntityConfig, cycles uint64) error {
 	if ctx == nil {
 		return ErrNilContext
 	}
 	if err := cfg.Validate(); err != nil {
+		log.Printf("  Run: Config validation failed: %v", err)
 		return err
 	}
 	if cycles == 0 {
@@ -160,13 +200,47 @@ func (m *Controller) Run(ctx context.Context, cfg config.EntityConfig, cycles ui
 	var newState state.NetworkState
 
 	if m.realNetwork != nil {
-		// Run real simulation
-		// Note: We ignore errors here for simplicity in this mock wrapper,
-		// but in production log them.
-		_ = m.realNetwork.AdvanceTo(int(cycles))
-		newState = m.realNetwork.ExportState(state.ExportConfig{DetailLevel: state.DetailLevelSummary})
-		m.latest = &newState
+		// Run real simulation with timeout to prevent hanging
+		log.Printf(" Run: Using realNetwork, advancing to cycle %d", cycles)
+
+		// Create a channel to receive the result
+		type advanceResult struct {
+			state state.NetworkState
+			err   error
+		}
+		resultChan := make(chan advanceResult, 1)
+
+		// Run AdvanceTo in a goroutine with timeout
+		go func() {
+			err := m.realNetwork.AdvanceTo(int(cycles))
+			if err != nil {
+				log.Printf(" Run: AdvanceTo failed: %v", err)
+				resultChan <- advanceResult{err: err}
+				return
+			}
+			log.Printf(" Run: AdvanceTo completed, now exporting state...")
+			exportedState := m.realNetwork.ExportState(state.ExportConfig{DetailLevel: state.DetailLevelSummary})
+			log.Printf(" Run: Export completed with %d nodes, %d links, cycle = %d", len(exportedState.Nodes), len(exportedState.Links), exportedState.CurrentCycle)
+			resultChan <- advanceResult{state: exportedState, err: nil}
+		}()
+
+		// Wait for result with 10 second timeout
+		select {
+		case result := <-resultChan:
+			if result.err != nil {
+				m.stateMu.Unlock()
+				return result.err
+			}
+			newState = result.state
+			m.latest = &newState
+			log.Printf(" Run: Successfully updated to cycle %d", newState.CurrentCycle)
+		case <-ctx.Done():
+			log.Printf(" Run: Context cancelled")
+			m.stateMu.Unlock()
+			return ctx.Err()
+		}
 	} else if m.latest != nil {
+		log.Printf("  Run: realNetwork is nil, using mock state with %d nodes, %d links", len(m.latest.Nodes), len(m.latest.Links))
 		m.latest.CurrentCycle = int(cycles)
 		// Also simulate some time passing or traffic changes if needed
 		// For now, just toggling link occupancy to show liveliness

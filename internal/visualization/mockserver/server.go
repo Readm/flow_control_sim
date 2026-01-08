@@ -48,6 +48,7 @@ type Server struct {
 
 // New spins up a new bridge server. Call Close when done.
 func New(opts Options) (*Server, error) {
+	log.Printf("  mockserver.New: Starting initialization...")
 	if opts.Controller == nil {
 		return nil, errors.New("controller is required")
 	}
@@ -61,6 +62,7 @@ func New(opts Options) (*Server, error) {
 		opts.DefaultConfig = defaultEntityConfig()
 	}
 
+	log.Printf("  mockserver.New: Creating server struct...")
 	srv := &Server{
 		controller:    opts.Controller,
 		staticDir:     opts.StaticDir,
@@ -72,6 +74,7 @@ func New(opts Options) (*Server, error) {
 		},
 	}
 
+	log.Printf("  mockserver.New: Setting up routes...")
 	srv.mux = http.NewServeMux()
 
 	// API Endpoints for CyEditor integration
@@ -86,30 +89,38 @@ func New(opts Options) (*Server, error) {
 	fileHandler := http.FileServer(http.Dir(srv.staticDir))
 	srv.mux.Handle("/", fileHandler)
 
+	log.Printf("  mockserver.New: Creating context...")
 	ctx, cancel := context.WithCancel(context.Background())
 	srv.cancel = cancel
 
 	// Start broadcast loop
+	log.Printf("  mockserver.New: Starting broadcast loop...")
 	go srv.broadcastLoop(ctx)
 
+	log.Printf("  mockserver.New: Creating httptest server...")
 	srv.httpServer = httptest.NewServer(loggingMiddleware(srv.mux))
+	log.Printf("  mockserver.New: Initialization complete")
 	return srv, nil
 }
 
 func (s *Server) broadcastLoop(ctx context.Context) {
+	log.Printf("  broadcastLoop: Starting...")
 	sub := s.controller.Subscribe()
+	log.Printf("  broadcastLoop: Subscribed, entering loop")
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("  broadcastLoop: Context done, exiting")
 			return
 		case ns := <-sub:
-			// Convert to CyNetwork
-			cyNet := visualization.StateToCyNetwork(ns)
+			log.Printf("  broadcastLoop: Received state update, cycle=%d", ns.CurrentCycle)
+			// Convert to FlowSimNetwork
+			flowNet := visualization.StateToFlowSimNetwork(ns)
 
 			// Broadcast to all clients
 			s.clientsMu.Lock()
 			for client := range s.clients {
-				err := client.WriteJSON(cyNet)
+				err := client.WriteJSON(flowNet)
 				if err != nil {
 					log.Printf("WS write error: %v", err)
 					client.Close()
@@ -177,8 +188,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Send initial state
 	ns := s.controller.GetState()
 	if ns != nil {
-		cyNet := visualization.StateToCyNetwork(*ns)
-		if err := conn.WriteJSON(cyNet); err != nil {
+		flowNet := visualization.StateToFlowSimNetwork(*ns)
+		if err := conn.WriteJSON(flowNet); err != nil {
 			log.Println("WS initial write failed:", err)
 			return
 		}
@@ -210,10 +221,10 @@ func (s *Server) handleLoadNetworks(w http.ResponseWriter, r *http.Request) {
 
 	ns := s.controller.GetState()
 
-	var networks []protocol.CyNetwork
+	var networks []protocol.FlowSimNetwork
 	if ns != nil {
-		cyNet := visualization.StateToCyNetwork(*ns)
-		networks = append(networks, cyNet)
+		flowNet := visualization.StateToFlowSimNetwork(*ns)
+		networks = append(networks, flowNet)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -230,8 +241,8 @@ func (s *Server) handleResetNetwork(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ns := s.controller.GetState()
 	if ns != nil {
-		cyNet := visualization.StateToCyNetwork(*ns)
-		json.NewEncoder(w).Encode(cyNet)
+		flowNet := visualization.StateToFlowSimNetwork(*ns)
+		json.NewEncoder(w).Encode(flowNet)
 	} else {
 		w.Write([]byte("{}"))
 	}
@@ -251,8 +262,20 @@ func (s *Server) handleAdvanceTo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 使用空配置，因为 Run 会优先使用已构建的 realNetwork
+	// defaultConfig 仅用于满足 Validate() 检查
+	emptyConfig := config.EntityConfig{
+		Nodes: []config.NodeConfig{{ID: 0}}, // 最小有效配置
+		Link: config.LinkConfig{
+			BaseDelay:  1,
+			Multiplier: 1,
+		},
+	}
+
 	go func() {
-		_ = s.controller.Run(context.Background(), s.defaultConfig, uint64(req.Cycle))
+		if err := s.controller.Run(context.Background(), emptyConfig, uint64(req.Cycle)); err != nil {
+			log.Printf("Run error: %v", err)
+		}
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -262,29 +285,39 @@ func (s *Server) handleAdvanceTo(w http.ResponseWriter, r *http.Request) {
 
 // POST /build_network
 func (s *Server) handleBuildNetwork(w http.ResponseWriter, r *http.Request) {
+	log.Printf(" handleBuildNetwork: Received request")
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var cyNet protocol.CyNetwork
-	if err := json.NewDecoder(r.Body).Decode(&cyNet); err != nil {
+	var flowNet protocol.FlowSimNetwork
+	log.Printf(" handleBuildNetwork: Decoding request body...")
+	if err := json.NewDecoder(r.Body).Decode(&flowNet); err != nil {
+		log.Printf(" handleBuildNetwork: Decode failed: %v", err)
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	log.Printf(" handleBuildNetwork: Decoded %d nodes, %d edges", len(flowNet.Nodes), len(flowNet.Edges))
 
-	cfg := visualization.CyNetworkToConfig(cyNet)
-	if err := s.controller.Rebuild(cfg); err != nil {
+	log.Printf(" handleBuildNetwork: Calling RebuildFromFlowSimNetwork...")
+	if err := s.controller.RebuildFromFlowSimNetwork(flowNet); err != nil {
+		log.Printf(" handleBuildNetwork: Rebuild failed: %v", err)
 		http.Error(w, "rebuild failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf(" handleBuildNetwork: Rebuild successful")
 
 	w.Header().Set("Content-Type", "application/json")
 	// Retrieve new state to confirm
+	log.Printf(" handleBuildNetwork: Getting state...")
 	ns := s.controller.GetState()
+	log.Printf(" handleBuildNetwork: Got state, converting to FlowSimNetwork...")
 	if ns != nil {
-		newCyNet := visualization.StateToCyNetwork(*ns)
-		json.NewEncoder(w).Encode(newCyNet)
+		newFlowNet := visualization.StateToFlowSimNetwork(*ns)
+		log.Printf(" handleBuildNetwork: Encoding response...")
+		json.NewEncoder(w).Encode(newFlowNet)
+		log.Printf(" handleBuildNetwork: Response sent")
 	} else {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
@@ -316,8 +349,8 @@ func (s *Server) handleLoadPreset(w http.ResponseWriter, r *http.Request) {
 	// Retrieve new state to return
 	ns := s.controller.GetState()
 	if ns != nil {
-		cyNet := visualization.StateToCyNetwork(*ns)
-		json.NewEncoder(w).Encode(cyNet)
+		flowNet := visualization.StateToFlowSimNetwork(*ns)
+		json.NewEncoder(w).Encode(flowNet)
 	} else {
 		// Should not happen if LoadPreset succeeds
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -340,7 +373,8 @@ func defaultEntityConfig() config.EntityConfig {
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("[%s] %s %s\n", time.Now().Format(time.RFC3339), r.Method, r.URL.Path)
+		log.Printf("[HTTP] %s %s", r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
+		log.Printf("[HTTP] %s %s - completed", r.Method, r.URL.Path)
 	})
 }

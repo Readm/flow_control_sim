@@ -421,12 +421,22 @@ func TestConnectNodes_PortNaming(t *testing.T) {
 	}
 
 	// Test 3: Mixed - int for source, string for target
-	source2 := node.NewWorkerNode(3)
+	// Create a new target to avoid port conflicts
+	target2 := node.NewWorkerNode(3)
+	iq3 := queue.NewInputQueue(8, 1)
+	iq4 := queue.NewInputQueue(8, 1)
+	target2.AddInputQueue(iq3)
+	target2.AddInputQueue(iq4)
+	target2.NameInputPorts("from_cpu", "from_mem")
+
+	source2 := node.NewWorkerNode(4)
 	oq3 := queue.NewOutputQueue(8, 1)
 	source2.AddOutputQueue(oq3)
+
+	net.AddNode(newNodeHandle(target2, []*queue.InputQueue{iq3, iq4}, []*queue.OutputQueue{}))
 	net.AddNode(newNodeHandle(source2, []*queue.InputQueue{}, []*queue.OutputQueue{oq3}))
 
-	link3, err := net.ConnectNodes(source2, 0, target, "from_mem", 1, 1)
+	link3, err := net.ConnectNodes(source2, 0, target2, "from_mem", 1, 1)
 	if err != nil {
 		t.Fatalf("ConnectNodes with mixed port types failed: %v", err)
 	}

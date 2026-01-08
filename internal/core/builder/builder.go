@@ -5,110 +5,117 @@ import (
 
 	"github.com/Readm/flow_sim/internal/components/cache"
 	"github.com/Readm/flow_sim/internal/components/directory"
-	"github.com/Readm/flow_sim/internal/config"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/node"
 	"github.com/Readm/flow_sim/internal/core/queue"
+	"github.com/Readm/flow_sim/internal/core/visualization"
+	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 )
 
-// Build creates a new network from the provided configuration.
-func Build(cfg config.EntityConfig) (*network.Network, error) {
+// BuildFromFlowSimNetwork 直接从 FlowSimNetwork 构建仿真网络
+func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network, error) {
 	net := network.New()
 
-	// 1. Create Nodes
-	for _, nCfg := range cfg.Nodes {
+	// 缓存 display 信息以便后续导出
+	for _, n := range flowNet.Nodes {
+		nodeDataMap := nodeDataToMap(n.Data)
+		if n.Style != nil {
+			visualization.CacheNodeDisplay(n.NodeId, nodeDataMap, n.Position, *n.Style)
+		} else {
+			visualization.CacheNodeDisplay(n.NodeId, nodeDataMap, n.Position, nil)
+		}
+	}
+	for _, e := range flowNet.Edges {
+		edgeDataMap := edgeDataToMap(e.Data)
+		// 将端口信息添加到 data map 中
+		if e.SrcPortId != nil {
+			edgeDataMap["srcPort"] = *e.SrcPortId
+		}
+		if e.DstPortId != nil {
+			edgeDataMap["dstPort"] = *e.DstPortId
+		}
+		visualization.CacheEdgeDisplay(e.EdgeId, edgeDataMap)
+	}
+
+	// 1. 创建节点
+	for _, nodeProto := range flowNet.Nodes {
 		var newNode node.Node
 
-		// Specialized Node Types via switch
-		// For now we use WorkerNode as the generic base, but in future we should support others
-		switch nCfg.Type {
-		case "CentralSwitch":
-			// TODO: Add support for CentralSwitch if needed, for now treat as WorkerNode
-			newNode = node.NewWorkerNode(nCfg.ID)
-		default:
-			newNode = node.NewWorkerNode(nCfg.ID)
+		// 根据 node_features 确定节点类型
+		nodeType := "WorkerNode" // 默认
+		if nodeProto.NodeFeatures != nil && len(*nodeProto.NodeFeatures) > 0 {
+			nodeType = (*nodeProto.NodeFeatures)[0]
 		}
 
-		// Attach Components
-		if nCfg.Cache.Capacity > 0 {
-			// Only FullyAssociativeCache supported by this simple builder for now
-			c := cache.NewFullyAssociativeCache(nCfg.Cache.Capacity)
+		// 创建对应类型的节点
+		switch nodeType {
+		case "CentralSwitch", "HubNode":
+			newNode = node.NewWorkerNode(nodeProto.NodeId)
+		default:
+			newNode = node.NewWorkerNode(nodeProto.NodeId)
+		}
+
+		// 添加缓存组件
+		if nodeProto.Cache != nil {
+			c := cache.NewFullyAssociativeCache(nodeProto.Cache.Capacity)
 			newNode.AddCache(c)
 		}
-		if nCfg.Directory.Capacity > 0 {
-			d := directory.NewFullyAssociativeDirectory(nCfg.Directory.Capacity)
+
+		// 添加目录组件
+		if nodeProto.Directory != nil {
+			d := directory.NewFullyAssociativeDirectory(nodeProto.Directory.Capacity)
 			newNode.AddDirectory(d)
 		}
 
-		// Create default queues (if ports not specified, use default 1 input 1 output)
-		// This is critical for compatibility with simple JSONs
-		if len(nCfg.InPorts) == 0 && len(nCfg.OutPorts) == 0 {
-			// Minimal fallback: 8 inputs, 8 outputs (safe default)
-			for i := 0; i < 8; i++ {
-				newNode.AddInputQueue(queue.NewInputQueue(128, 1))
-				newNode.AddOutputQueue(queue.NewOutputQueue(128, 1))
-			}
-		} else {
-			// Use configured ports
-			for _, p := range nCfg.InPorts {
-				newNode.AddInputQueue(queue.NewInputQueue(p.BufferSize, p.InBandwidth))
-			}
-			for _, p := range nCfg.OutPorts {
-				newNode.AddOutputQueue(queue.NewOutputQueue(p.BufferSize, p.OutBandwidth))
-			}
+		// 存储自定义数据（如一致性域 ID）
+		if nodeProto.CoherenceDomainId != nil {
+			newNode.SetData("coherence_domain_id", *nodeProto.CoherenceDomainId)
 		}
+		newNode.SetData("name", nodeProto.NodeName)
 
-		// Add to network
-		// We need to create a NodeHandle. We have to retrieve the queues back from the node.
-		// node.Node doesn't expose queues easily directly without casting?
-		// Actually network.NodeHandle requires explicit slice of queues.
-		// Let's assume the node stores them in order.
-
-		// HACK: Since we just added them, we can't easily get them back cleanly without accessors.
-		// But network.AddNode takes handle which contains the queues.
-		// For this minimal implementation, let's just make new slices and rely on the fact that
-		// NewWorkerNode stores them. Wait, Node interface matches.
-		// Let's check NodeHandle definition in network.go
-		/*
-			type NodeHandle struct {
-				Node    node.Node
-				Inputs  []*queue.InputQueue
-				Outputs []*queue.OutputQueue
-			}
-		*/
-
-		// Since we don't have easy getters on the interface `node.Node`, we should have kept references
-		// when we created them.
-
-		// Re-doing queue creation to keep references
+		// 创建输入队列
 		var inputs []*queue.InputQueue
-		var outputs []*queue.OutputQueue
-
-		// Use configured ports
-		if len(nCfg.InPorts) == 0 && len(nCfg.OutPorts) == 0 {
-			for i := 0; i < 8; i++ {
-				q := queue.NewInputQueue(128, 1)
-				inputs = append(inputs, q)
-				newNode.AddInputQueue(q) // Ignore error
-			}
-			for i := 0; i < 8; i++ {
-				q := queue.NewOutputQueue(128, 1)
-				outputs = append(outputs, q)
-				newNode.AddOutputQueue(q) // Ignore error
-			}
-		} else {
-			for _, p := range nCfg.InPorts {
-				q := queue.NewInputQueue(p.BufferSize, p.InBandwidth)
+		if nodeProto.InPorts != nil && len(*nodeProto.InPorts) > 0 {
+			for _, port := range *nodeProto.InPorts {
+				bufferSize := 128 // 默认
+				if port.BufferSize != nil {
+					bufferSize = *port.BufferSize
+				}
+				q := queue.NewInputQueue(bufferSize, port.Bandwidth)
 				inputs = append(inputs, q)
 				newNode.AddInputQueue(q)
 			}
-			for _, p := range nCfg.OutPorts {
-				q := queue.NewOutputQueue(p.BufferSize, p.OutBandwidth)
+		} else {
+			// 默认：8个输入端口
+			for i := 0; i < 8; i++ {
+				q := queue.NewInputQueue(128, 1)
+				inputs = append(inputs, q)
+				newNode.AddInputQueue(q)
+			}
+		}
+
+		// 创建输出队列
+		var outputs []*queue.OutputQueue
+		if nodeProto.OutPorts != nil && len(*nodeProto.OutPorts) > 0 {
+			for _, port := range *nodeProto.OutPorts {
+				bufferSize := 128 // 默认
+				if port.BufferSize != nil {
+					bufferSize = *port.BufferSize
+				}
+				q := queue.NewOutputQueue(bufferSize, port.Bandwidth)
+				outputs = append(outputs, q)
+				newNode.AddOutputQueue(q)
+			}
+		} else {
+			// 默认：8个输出端口
+			for i := 0; i < 8; i++ {
+				q := queue.NewOutputQueue(128, 1)
 				outputs = append(outputs, q)
 				newNode.AddOutputQueue(q)
 			}
 		}
 
+		// 添加到网络
 		handle := &network.NodeHandle{
 			Node:    newNode,
 			Inputs:  inputs,
@@ -116,35 +123,77 @@ func Build(cfg config.EntityConfig) (*network.Network, error) {
 		}
 
 		if err := net.AddNode(handle); err != nil {
-			return nil, fmt.Errorf("failed to add node %d: %w", nCfg.ID, err)
+			return nil, fmt.Errorf("failed to add node %d: %w", nodeProto.NodeId, err)
 		}
 	}
 
-	// 2. Create Links
-	for _, eCfg := range cfg.Edges {
-		// Use default latency/bandwidth if not in config
+	// 2. 创建链路
+	for _, edgeProto := range flowNet.Edges {
+		// 默认参数
+		srcPort := 0
+		dstPort := 0
 		latency := 1
 		bandwidth := 1
 
-		// We default to port 0 if not specified (EdgeConfig is simple src/dst)
-		// But complex topology needs ports.
-		// Current simple EdgeConfig in entity.go only has Src and Dst.
-		// That's a limitation. CyEdge has ports. visualization/builder maps CyEdge fields to... checks builder.go
-		// builder.go: Src: e.SrcNodeID, Dst: e.DstNodeID. It ignores ports!
-		// We need to fix builder.go to map ports if EntityConfig supports it.
-		// But EntityConfig EdgeConfig currently doesn't supported ports.
-		// I recall seeing EdgeConfig in Step 38. It only has Src and Dst.
+		// 使用配置的参数
+		if edgeProto.SrcPortId != nil {
+			srcPort = *edgeProto.SrcPortId
+		}
+		if edgeProto.DstPortId != nil {
+			dstPort = *edgeProto.DstPortId
+		}
+		if edgeProto.Latency != nil {
+			latency = *edgeProto.Latency
+		}
+		if edgeProto.Bandwidth != nil {
+			bandwidth = *edgeProto.Bandwidth
+		}
 
-		// Minimal fix: Assume port 0 for now or find free port?
-		// For a minimal prototype, let's assume Port 0 -> Port 0.
-		// Or, strictly speaking, we should have updated EdgeConfig to support ports.
-
-		// Let's assume we map port 0 for now.
-		if _, err := net.Connect(eCfg.Src, eCfg.SrcPort, eCfg.Dst, eCfg.DstPort, latency, bandwidth); err != nil {
-			// Try next port? No, too complex.
-			return nil, fmt.Errorf("failed to connect %d:%d->%d:%d: %w", eCfg.Src, eCfg.SrcPort, eCfg.Dst, eCfg.DstPort, err)
+		// 连接节点
+		if _, err := net.Connect(
+			edgeProto.SrcNodeId, srcPort,
+			edgeProto.DstNodeId, dstPort,
+			latency, bandwidth,
+		); err != nil {
+			return nil, fmt.Errorf("failed to connect %d:%d->%d:%d: %w",
+				edgeProto.SrcNodeId, srcPort,
+				edgeProto.DstNodeId, dstPort,
+				err)
 		}
 	}
 
 	return net, nil
+}
+
+// nodeDataToMap 将 protocol.Node_Data 转换为 map[string]interface{}
+func nodeDataToMap(data protocol.Node_Data) map[string]interface{} {
+	result := make(map[string]interface{})
+	result["id"] = data.Id
+	if data.Label != nil {
+		result["label"] = *data.Label
+	}
+	if data.Type != nil {
+		result["type"] = *data.Type
+	}
+	// 合并 AdditionalProperties
+	for k, v := range data.AdditionalProperties {
+		result[k] = v
+	}
+	return result
+}
+
+// edgeDataToMap 将 protocol.Edge_Data 转换为 map[string]interface{}
+func edgeDataToMap(data protocol.Edge_Data) map[string]interface{} {
+	result := make(map[string]interface{})
+	result["id"] = data.Id
+	result["source"] = data.Source
+	result["target"] = data.Target
+	if data.LineType != nil {
+		result["lineType"] = string(*data.LineType)
+	}
+	// 合并 AdditionalProperties
+	for k, v := range data.AdditionalProperties {
+		result[k] = v
+	}
+	return result
 }

@@ -44,8 +44,10 @@ func CreateLinkHandler(handlerType string, latency, bandwidth int) LinkHandler {
 // Link represents a directed edge in the topology.
 // Link receives packets from upstream and forwards them to downstream with latency and bandwidth constraints.
 type Link struct {
-	sourceID int
-	targetID int
+	sourceID     int
+	sourcePortID int // 源端口 ID
+	targetID     int
+	targetPortID int // 目标端口 ID
 
 	// ===== Port references (not owned by Link) =====
 	fromUpstream ahead_port.OutPort // Receive from upstream
@@ -72,11 +74,16 @@ type Link struct {
 // NewLink creates a Link with BufferedLinkType by default.
 func NewLink(sourceID, targetID, latency, bandwidth int) *Link {
 	linkType := NewBufferedLinkType(latency, bandwidth)
-	return NewLinkWithType(sourceID, targetID, latency, bandwidth, linkType)
+	return NewLinkWithPortIDs(sourceID, 0, targetID, 0, latency, bandwidth, linkType)
 }
 
 // NewLinkWithType creates a new Link with a custom link type.
 func NewLinkWithType(sourceID, targetID, latency, bandwidth int, linkType LinkType) *Link {
+	return NewLinkWithPortIDs(sourceID, 0, targetID, 0, latency, bandwidth, linkType)
+}
+
+// NewLinkWithPortIDs creates a new Link with explicit port IDs.
+func NewLinkWithPortIDs(sourceID, sourcePortID, targetID, targetPortID, latency, bandwidth int, linkType LinkType) *Link {
 	if latency <= 0 {
 		panic("latency must be positive")
 	}
@@ -92,7 +99,9 @@ func NewLinkWithType(sourceID, targetID, latency, bandwidth int, linkType LinkTy
 
 	return &Link{
 		sourceID:     sourceID,
+		sourcePortID: sourcePortID,
 		targetID:     targetID,
+		targetPortID: targetPortID,
 		latency:      latency,
 		bandwidth:    bandwidth,
 		linkType:     linkType,

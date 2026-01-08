@@ -9,6 +9,7 @@ import (
 	"github.com/Readm/flow_sim/internal/core/builder"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/state"
+	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 )
 
 // SimulationController manages the network simulation.
@@ -23,17 +24,9 @@ func New() *SimulationController {
 }
 
 // Rebuild creates a new network from the provided configuration.
+// DEPRECATED: Use RebuildFromFlowSimNetwork instead
 func (c *SimulationController) Rebuild(cfg config.EntityConfig) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	net, err := builder.Build(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to build network: %w", err)
-	}
-
-	c.currentNetwork = net
-	return nil
+	return fmt.Errorf("Rebuild() is deprecated, use RebuildFromFlowSimNetwork() instead")
 }
 
 // Run advances the simulation to the specified cycle.
@@ -88,4 +81,18 @@ func (c *SimulationController) LoadPreset(name string, params map[string]int) er
 func (c *SimulationController) Subscribe() <-chan state.NetworkState {
 	// TODO: Implement real event bus
 	return make(chan state.NetworkState)
+}
+
+// RebuildFromFlowSimNetwork 从 FlowSimNetwork 构建网络（新架构）
+func (c *SimulationController) RebuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	net, err := builder.BuildFromFlowSimNetwork(flowNet)
+	if err != nil {
+		return fmt.Errorf("failed to build network from FlowSimNetwork: %w", err)
+	}
+
+	c.currentNetwork = net
+	return nil
 }

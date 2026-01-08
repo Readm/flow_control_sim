@@ -17,9 +17,12 @@ func main() {
 	flag.Parse()
 
 	// 1. Create Mock Controller
+	log.Printf(" Step 1: Creating Mock Controller...")
 	ctrl := mocks.NewController()
+	log.Printf(" Mock Controller created")
 
 	// 2. Initialize with some dummy state so the UI has something to show
+	log.Printf(" Step 2: Setting initial state...")
 	initialState := state.NetworkState{
 		CurrentCycle: 0,
 		Nodes: []state.NodeState{
@@ -33,8 +36,10 @@ func main() {
 		},
 	}
 	ctrl.SetState(initialState)
+	log.Printf(" Initial state set")
 
 	// 3. Create Server
+	log.Printf(" Step 3: Creating mockserver...")
 	absStatic, _ := filepath.Abs(*staticDir)
 	log.Printf("Serving static files from: %s", absStatic)
 
@@ -44,16 +49,18 @@ func main() {
 		DefaultTotalCycles: 1000,
 	})
 	if err != nil {
-		log.Fatalf("Failed to create server: %v", err)
+		log.Fatalf(" Failed to create server: %v", err)
 	}
 	defer srv.Close()
+	log.Printf(" Mockserver created")
 
 	// 4. Start HTTP Server
+	log.Printf(" Step 4: Starting HTTP server...")
 	addr := ":" + *port
 	log.Printf("Visualization Server listening on http://localhost%s", addr)
 
 	// Use the exposed Handler to serve on our custom port
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
-		log.Fatalf("Server failed: %v", err)
+		log.Fatalf(" Server failed: %v", err)
 	}
 }

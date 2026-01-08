@@ -29,6 +29,14 @@ jobs:
         go-version: '1.21'
         cache: true
 
+    - name: Run Unit Tests
+      run: |
+        go test -timeout=3s -v ./...
+
+    - name: Run FlowSimNetwork Integration Tests
+      run: |
+        go test -timeout=3s -v ./internal/core/visualization -run "TestFlowSim.*|TestStateToFlowSimNetwork"
+
     - name: Run Performance Benchmark
       run: |
         scripts/perf_recorder.sh | tee benchmark_output.txt

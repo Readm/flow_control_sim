@@ -110,6 +110,11 @@ func (iq *InputQueue) SetUpstreamPort(port ahead_port.OutPort) {
 	}
 }
 
+// GetUpstreamPort returns the upstream port (for connection validation).
+func (iq *InputQueue) GetUpstreamPort() ahead_port.OutPort {
+	return iq.fromUpstream
+}
+
 // Tick processes a cycle by receiving packets from upstream and storing them internally.
 // This is dramatically simpler than the old implementation because Port handles all synchronization.
 func (iq *InputQueue) Tick(cycle int) error {

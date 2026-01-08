@@ -37,7 +37,9 @@ type NodeState struct {
 // LinkState represents the state of a link.
 type LinkState struct {
 	SourceID     int
+	SourcePortID int // 源端口 ID
 	TargetID     int
+	TargetPortID int // 目标端口 ID
 	CurrentCycle int
 	Latency      int
 	Bandwidth    int

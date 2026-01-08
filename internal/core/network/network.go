@@ -336,12 +336,20 @@ func (n *Network) Connect(sourceID int, sourceOutputIdx int, targetID int, targe
 		return nil, fmt.Errorf("queues for connection %d->%d must not be nil", sourceID, targetID)
 	}
 
-	// Create Link
+	// 检查端口是否已被连接（鲁棒性检查）
+	if sourceOutput.GetDownstreamPort() != nil {
+		return nil, fmt.Errorf("source node %d output port %d is already connected", sourceID, sourceOutputIdx)
+	}
+	if targetInput.GetUpstreamPort() != nil {
+		return nil, fmt.Errorf("target node %d input port %d is already connected", targetID, targetInputIdx)
+	}
+
+	// Create Link with port IDs
 	var linkInstance *link.Link
 	if options.linkType != nil {
-		linkInstance = link.NewLinkWithType(sourceID, targetID, latency, bandwidth, options.linkType)
+		linkInstance = link.NewLinkWithPortIDs(sourceID, sourceOutputIdx, targetID, targetInputIdx, latency, bandwidth, options.linkType)
 	} else {
-		linkInstance = link.NewLink(sourceID, targetID, latency, bandwidth)
+		linkInstance = link.NewLinkWithPortIDs(sourceID, sourceOutputIdx, targetID, targetInputIdx, latency, bandwidth, link.NewBufferedLinkType(latency, bandwidth))
 	}
 
 	// Connect using ahead_port.ConnectWithIDs for profiling
