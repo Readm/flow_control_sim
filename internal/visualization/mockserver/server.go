@@ -10,11 +10,9 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/gorilla/websocket"
 
-	"github.com/Readm/flow_sim/internal/config"
 	"github.com/Readm/flow_sim/internal/core/visualization"
 	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 	"github.com/Readm/flow_sim/internal/testing/mocks"
@@ -24,7 +22,6 @@ import (
 type Options struct {
 	Controller         *mocks.Controller
 	StaticDir          string
-	DefaultConfig      config.EntityConfig
 	DefaultTotalCycles int
 }
 
@@ -33,7 +30,6 @@ type Server struct {
 	controller *mocks.Controller
 	staticDir  string
 
-	defaultConfig config.EntityConfig
 	defaultCycles int
 
 	mux        *http.ServeMux
@@ -58,15 +54,11 @@ func New(opts Options) (*Server, error) {
 	if opts.DefaultTotalCycles <= 0 {
 		opts.DefaultTotalCycles = 64
 	}
-	if len(opts.DefaultConfig.Nodes) == 0 {
-		opts.DefaultConfig = defaultEntityConfig()
-	}
 
 	log.Printf("  mockserver.New: Creating server struct...")
 	srv := &Server{
 		controller:    opts.Controller,
 		staticDir:     opts.StaticDir,
-		defaultConfig: opts.DefaultConfig,
 		defaultCycles: opts.DefaultTotalCycles,
 		clients:       make(map[*websocket.Conn]bool),
 		upgrader: websocket.Upgrader{
@@ -262,18 +254,9 @@ func (s *Server) handleAdvanceTo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 使用空配置，因为 Run 会优先使用已构建的 realNetwork
-	// defaultConfig 仅用于满足 Validate() 检查
-	emptyConfig := config.EntityConfig{
-		Nodes: []config.NodeConfig{{ID: 0}}, // 最小有效配置
-		Link: config.LinkConfig{
-			BaseDelay:  1,
-			Multiplier: 1,
-		},
-	}
-
+	// Run the simulation to the requested cycle
 	go func() {
-		if err := s.controller.Run(context.Background(), emptyConfig, uint64(req.Cycle)); err != nil {
+		if err := s.controller.RunCycles(context.Background(), uint64(req.Cycle)); err != nil {
 			log.Printf("Run error: %v", err)
 		}
 	}()
@@ -354,20 +337,6 @@ func (s *Server) handleLoadPreset(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Should not happen if LoadPreset succeeds
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	}
-}
-
-func defaultEntityConfig() config.EntityConfig {
-	return config.EntityConfig{
-		Nodes: []config.NodeConfig{
-			{ID: 0},
-			{ID: 1},
-			{ID: 2},
-		},
-		Link: config.LinkConfig{
-			BaseDelay:  time.Millisecond,
-			Multiplier: 1,
-		},
 	}
 }
 

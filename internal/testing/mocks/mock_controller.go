@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/Readm/flow_sim/internal/config"
-	"github.com/Readm/flow_sim/internal/core/builder"
 	"github.com/Readm/flow_sim/internal/core/loadbench"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/state"
@@ -94,38 +93,94 @@ func (m *Controller) LoadPreset(name string, params map[string]int) error {
 }
 
 // Rebuild resets the simulation state based on the provided configuration.
+// Deprecated: Use RebuildFromFlowSimNetwork instead. This method converts
+// EntityConfig to FlowSimNetwork internally.
 func (m *Controller) Rebuild(cfg config.EntityConfig) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
 
+	// Convert to FlowSimNetwork and use the new method
+	flowNet := cfg.ToFlowSimNetwork()
+	return m.RebuildFromFlowSimNetwork(flowNet)
+}
+
+// RebuildFromFlowSimNetwork rebuilds the network from a FlowSimNetwork definition.
+func (m *Controller) RebuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) error {
 	m.stateMu.Lock()
 
 	// Clear real network if we represent a static config build
 	m.realNetwork = nil
 
-	// Construct new state from config
+	// Construct new state from FlowSimNetwork
 	newState := state.NetworkState{
 		CurrentCycle: 0,
-		Nodes:        make([]state.NodeState, 0, len(cfg.Nodes)),
-		Links:        make([]state.LinkState, 0, len(cfg.Edges)),
+		Nodes:        make([]state.NodeState, 0, len(flowNet.Nodes)),
+		Links:        make([]state.LinkState, 0, len(flowNet.Edges)),
 	}
 
 	// Map Nodes
-	for _, n := range cfg.Nodes {
-		newState.Nodes = append(newState.Nodes, state.NodeState{
-			ID:   n.ID,
-			Type: n.Type,
-		})
+	for _, n := range flowNet.Nodes {
+		nodeState := state.NodeState{
+			ID:   n.NodeId,
+			Type: getNodeType(n),
+		}
+		// Add port information if available
+		if n.InPorts != nil {
+			nodeState.Inputs = make([]state.QueueState, len(*n.InPorts))
+			for i, p := range *n.InPorts {
+				capacity := 64
+				if p.BufferSize != nil {
+					capacity = *p.BufferSize
+				}
+				nodeState.Inputs[i] = state.QueueState{
+					Type:      "Input",
+					Capacity:  capacity,
+					Bandwidth: p.Bandwidth,
+				}
+			}
+		}
+		if n.OutPorts != nil {
+			nodeState.Outputs = make([]state.QueueState, len(*n.OutPorts))
+			for i, p := range *n.OutPorts {
+				nodeState.Outputs[i] = state.QueueState{
+					Type:      "Output",
+					Bandwidth: p.Bandwidth,
+				}
+			}
+		}
+		newState.Nodes = append(newState.Nodes, nodeState)
 	}
 
 	// Map Links
-	for _, e := range cfg.Edges {
-		newState.Links = append(newState.Links, state.LinkState{
-			SourceID:  e.Src,
-			TargetID:  e.Dst,
-			Occupancy: []int{0},
-		})
+	for _, e := range flowNet.Edges {
+		latency := 1
+		if e.Latency != nil {
+			latency = *e.Latency
+		}
+		bandwidth := 1
+		if e.Bandwidth != nil {
+			bandwidth = *e.Bandwidth
+		}
+		srcPortId := 0
+		if e.SrcPortId != nil {
+			srcPortId = *e.SrcPortId
+		}
+		dstPortId := 0
+		if e.DstPortId != nil {
+			dstPortId = *e.DstPortId
+		}
+
+		linkState := state.LinkState{
+			SourceID:     e.SrcNodeId,
+			SourcePortID: srcPortId,
+			TargetID:     e.DstNodeId,
+			TargetPortID: dstPortId,
+			Latency:      latency,
+			Bandwidth:    bandwidth,
+			Occupancy:    make([]int, latency),
+		}
+		newState.Links = append(newState.Links, linkState)
 	}
 
 	m.latest = &newState
@@ -146,50 +201,28 @@ func (m *Controller) Rebuild(cfg config.EntityConfig) error {
 	return nil
 }
 
-// RebuildFromFlowSimNetwork 从 FlowSimNetwork 重建仿真网络
-func (m *Controller) RebuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) error {
-	log.Printf(" RebuildFromFlowSimNetwork: Building network with %d nodes, %d edges", len(flowNet.Nodes), len(flowNet.Edges))
-	m.stateMu.Lock()
-	defer m.stateMu.Unlock()
-
-	// 使用 builder 构建真实的网络
-	net, err := builder.BuildFromFlowSimNetwork(flowNet)
-	if err != nil {
-		log.Printf(" RebuildFromFlowSimNetwork: Build failed: %v", err)
-		return fmt.Errorf("failed to build network from FlowSimNetwork: %w", err)
+// getNodeType extracts the node type from a FlowSimNetwork Node.
+func getNodeType(n protocol.Node) string {
+	if n.NodeFeatures != nil && len(*n.NodeFeatures) > 0 {
+		return (*n.NodeFeatures)[0]
 	}
-
-	m.realNetwork = net
-	log.Printf(" RebuildFromFlowSimNetwork: Successfully set realNetwork")
-
-	// 导出初始状态
-	initialState := net.ExportState(state.ExportConfig{DetailLevel: state.DetailLevelSummary})
-	m.latest = &initialState
-	log.Printf(" RebuildFromFlowSimNetwork: Exported initial state with %d nodes, %d links", len(initialState.Nodes), len(initialState.Links))
-
-	// 通知订阅者
-	go func() {
-		m.subsMu.Lock()
-		defer m.subsMu.Unlock()
-		for _, ch := range m.subs {
-			select {
-			case ch <- initialState:
-			default:
-			}
-		}
-	}()
-
-	return nil
+	if n.Data.Type != nil {
+		return *n.Data.Type
+	}
+	return "WorkerNode"
 }
 
 // Run satisfies the simulation controller contract.
+// Deprecated: The cfg parameter is ignored. Use RebuildFromFlowSimNetwork first, then call Run.
 func (m *Controller) Run(ctx context.Context, cfg config.EntityConfig, cycles uint64) error {
+	// Ignore cfg parameter - network should already be built via RebuildFromFlowSimNetwork
+	return m.RunCycles(ctx, cycles)
+}
+
+// RunCycles advances the simulation by the specified number of cycles.
+func (m *Controller) RunCycles(ctx context.Context, cycles uint64) error {
 	if ctx == nil {
 		return ErrNilContext
-	}
-	if err := cfg.Validate(); err != nil {
-		log.Printf("  Run: Config validation failed: %v", err)
-		return err
 	}
 	if cycles == 0 {
 		return ErrNoCycles

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Readm/flow_sim/internal/config"
 	"github.com/Readm/flow_sim/internal/core/builder"
 	"github.com/Readm/flow_sim/internal/core/network"
 	"github.com/Readm/flow_sim/internal/core/state"
@@ -23,14 +22,8 @@ func New() *SimulationController {
 	return &SimulationController{}
 }
 
-// Rebuild creates a new network from the provided configuration.
-// DEPRECATED: Use RebuildFromFlowSimNetwork instead
-func (c *SimulationController) Rebuild(cfg config.EntityConfig) error {
-	return fmt.Errorf("Rebuild() is deprecated, use RebuildFromFlowSimNetwork() instead")
-}
-
 // Run advances the simulation to the specified cycle.
-func (c *SimulationController) Run(ctx context.Context, _ config.EntityConfig, targetCycle uint64) error {
+func (c *SimulationController) Run(ctx context.Context, targetCycle uint64) error {
 	c.mu.Lock()
 	net := c.currentNetwork
 	c.mu.Unlock()
