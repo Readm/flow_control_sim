@@ -27,15 +27,7 @@ fi
 
 # Build
 echo "  Running build..."
-# We use vue-cli-service directly or via npm run build
-# Note: package.json script 'build' is: vue-cli-service build --target lib ...
-# BUT we want a full app build for examples/main.js as per original plan inspection
-# Original 'serve' script was: vue-cli-service serve examples/main.js
-# So we should build that entry point.
+# Use the new build:app script which is configured to output to ../web/static
+npm run build:app
 
-# Ensure output goes to correct place
-# vue-cli-service build [entry] --dest [destination]
-NODE_OPTIONS=--openssl-legacy-provider npx vue-cli-service build examples/main.js --dest "$STATIC_DIR" --name index
-
-# Post-processing: Vue CLI build might name it index.html
 echo "  Build complete. Assets in $STATIC_DIR"

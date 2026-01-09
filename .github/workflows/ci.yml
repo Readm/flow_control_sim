@@ -45,6 +45,37 @@ jobs:
       run: |
         go test -timeout=20s -v ./...
 
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+
+    - name: Install Frontend Test Dependencies
+      run: |
+        cd web_dev
+        npm install
+        # Note: We rely on pre-built web/static artifacts, so no 'npm build' needed
+
+    - name: Build and Start Backend Server
+      run: |
+        go build -o flow_sim cmd/server/main.go
+        ./flow_sim &
+        echo "Server started in background. Waiting for port 8080..."
+        # Wait for port 8080 to be ready (loop with nc or curl)
+        for i in {1..30}; do
+          if curl -s http://localhost:8080 > /dev/null; then
+            echo "Server is up!"
+            break
+          fi
+          echo "Waiting..."
+          sleep 1
+        done
+
+    - name: Run Frontend E2E Tests
+      run: |
+        cd web_dev
+        npm run test:e2e
+
     - name: Run Performance Benchmark
       run: |
         scripts/perf_recorder.sh | tee benchmark_output.txt
