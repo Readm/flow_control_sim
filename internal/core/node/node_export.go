@@ -118,5 +118,154 @@ func (n *BaseNode) ExportState(cfg state.ExportConfig) state.NodeState {
 		ns.Stats["directory"] = directoryStats
 	}
 
+	// Export Handler-specific Stats (Phase 4: Unified Interface)
+	// If handler implements StatsExporter, merge its stats into NodeState.Stats
+	if statsExporter, ok := n.handler.(StatsExporter); ok {
+		handlerStats := statsExporter.ExportStats()
+		for k, v := range handlerStats {
+			ns.Stats[k] = v
+		}
+	}
+
+	// Phase 5: Export NodeType and specialized configs
+	// Infer node type from handler type name
+	handlerType := fmt.Sprintf("%T", n.handler)
+	switch {
+	case contains(handlerType, "CPUNodeHandler"):
+		nodeType := "cpu"
+		ns.NodeType = &nodeType
+		// Collect CPU-specific stats into CPUConfig
+		ns.CPUConfig = extractCPUConfig(ns.Stats)
+	case contains(handlerType, "DRAMNodeHandler"), contains(handlerType, "MemoryControllerHandler"):
+		nodeType := "memory_controller"
+		ns.NodeType = &nodeType
+		// Collect memory-specific stats into MemoryConfig
+		ns.MemoryConfig = extractMemoryConfig(ns.Stats)
+	case contains(handlerType, "L2CacheNodeHandler"):
+		// L2 Cache is a generic node with cache capability
+		nodeType := "generic"
+		ns.NodeType = &nodeType
+	default:
+		// Generic node
+		nodeType := "generic"
+		ns.NodeType = &nodeType
+	}
+
+	// Phase 5: Also read from configRef if available (configuration, not just stats)
+	if n.configRef != nil {
+		if n.configRef.NodeType != nil {
+			nodeTypeStr := string(*n.configRef.NodeType)
+			ns.NodeType = &nodeTypeStr
+		}
+		// TODO: Extract CPUConfig/MemoryConfig from configRef when Builder is implemented
+	}
+
 	return ns
+}
+
+// contains checks if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) &&
+		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
+		findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// extractCPUConfig extracts CPU-related fields from Stats into a CPUConfig map
+func extractCPUConfig(stats map[string]interface{}) map[string]interface{} {
+	config := make(map[string]interface{})
+
+	// CPU核心统计
+	if v, ok := stats["ipc"]; ok {
+		config["ipc"] = v
+	}
+	if v, ok := stats["total_instructions"]; ok {
+		config["total_instructions"] = v
+	}
+	if v, ok := stats["total_cycles"]; ok {
+		config["total_cycles"] = v
+	}
+	if v, ok := stats["branch_mispredictions"]; ok {
+		config["branch_mispredictions"] = v
+	}
+	if v, ok := stats["total_branches"]; ok {
+		config["total_branches"] = v
+	}
+
+	// 流水线停顿
+	if v, ok := stats["fetch_stalls"]; ok {
+		config["fetch_stalls"] = v
+	}
+	if v, ok := stats["decode_stalls"]; ok {
+		config["decode_stalls"] = v
+	}
+	if v, ok := stats["dispatch_stalls"]; ok {
+		config["dispatch_stalls"] = v
+	}
+	if v, ok := stats["execute_stalls"]; ok {
+		config["execute_stalls"] = v
+	}
+
+	// L1D Cache统计
+	if v, ok := stats["l1d_cache_stats"]; ok {
+		config["l1d_cache_stats"] = v
+	}
+
+	return config
+}
+
+// extractMemoryConfig extracts memory-related fields from Stats into a MemoryConfig map
+func extractMemoryConfig(stats map[string]interface{}) map[string]interface{} {
+	config := make(map[string]interface{})
+
+	// 请求统计
+	if v, ok := stats["read_requests"]; ok {
+		config["read_requests"] = v
+	}
+	if v, ok := stats["write_requests"]; ok {
+		config["write_requests"] = v
+	}
+
+	// Row Buffer统计
+	if v, ok := stats["row_buffer_hits"]; ok {
+		config["row_buffer_hits"] = v
+	}
+	if v, ok := stats["row_buffer_misses"]; ok {
+		config["row_buffer_misses"] = v
+	}
+
+	// 详细统计
+	if v, ok := stats["rq_row_buffer_hits"]; ok {
+		config["rq_row_buffer_hits"] = v
+	}
+	if v, ok := stats["rq_row_buffer_misses"]; ok {
+		config["rq_row_buffer_misses"] = v
+	}
+	if v, ok := stats["wq_row_buffer_hits"]; ok {
+		config["wq_row_buffer_hits"] = v
+	}
+	if v, ok := stats["wq_row_buffer_misses"]; ok {
+		config["wq_row_buffer_misses"] = v
+	}
+
+	// Memory Controller 统计
+	if v, ok := stats["total_requests"]; ok {
+		config["total_requests"] = v
+	}
+	if v, ok := stats["responses"]; ok {
+		config["responses"] = v
+	}
+	if v, ok := stats["requests_per_channel"]; ok {
+		config["requests_per_channel"] = v
+	}
+
+	return config
 }

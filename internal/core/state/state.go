@@ -35,11 +35,17 @@ type NodeState struct {
 	// Stats["cache"] = []CacheState
 	// Stats["directory"] = []DirectoryState
 	// Stats["custom_metric"] = ... (未来扩展)
+	// Phase 4: Handler stats (ipc, total_instructions, etc.) auto-filled by StatsExporter
 	Stats map[string]interface{}
 
 	// 配置信息（静态）
 	Features          map[string]map[string]interface{} // feature配置
 	CoherenceDomainID *int                              // 一致性域ID
+
+	// Phase 5: 节点类型配置（对应 OpenAPI Schema）
+	NodeType     *string                // "generic", "cpu", "memory_controller", "router"
+	CPUConfig    map[string]interface{} // CPU 配置和统计（仅 node_type=cpu 时有效）
+	MemoryConfig map[string]interface{} // 内存控制器配置和统计（仅 node_type=memory_controller 时有效）
 
 	// 可视化信息
 	DisplayData map[string]interface{} // position, data, style

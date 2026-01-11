@@ -8,6 +8,13 @@ import (
 	"fmt"
 )
 
+// Defines values for CPUConfigType.
+const (
+	CPUConfigTypeChampsimO3 CPUConfigType = "champsim_o3"
+	CPUConfigTypeCustom     CPUConfigType = "custom"
+	CPUConfigTypeSimple     CPUConfigType = "simple"
+)
+
 // Defines values for CacheConfigReplacementPolicy.
 const (
 	FIFO   CacheConfigReplacementPolicy = "FIFO"
@@ -22,6 +29,73 @@ const (
 	Solid  EdgeDataLineType = "solid"
 	Taxi   EdgeDataLineType = "taxi"
 )
+
+// Defines values for MemoryConfigType.
+const (
+	MemoryConfigTypeCustom MemoryConfigType = "custom"
+	MemoryConfigTypeDdr4   MemoryConfigType = "ddr4"
+	MemoryConfigTypeDdr5   MemoryConfigType = "ddr5"
+	MemoryConfigTypeHbm    MemoryConfigType = "hbm"
+)
+
+// Defines values for NodeNodeType.
+const (
+	Cpu              NodeNodeType = "cpu"
+	Generic          NodeNodeType = "generic"
+	MemoryController NodeNodeType = "memory_controller"
+	Router           NodeNodeType = "router"
+)
+
+// CPUConfig CPU 配置和统计
+type CPUConfig struct {
+	// BranchMispredictions 分支预测错误次数
+	BranchMispredictions *int `json:"branch_mispredictions,omitempty"`
+
+	// DecodeWidth Decode 宽度
+	DecodeWidth *int `json:"decode_width,omitempty"`
+
+	// DispatchWidth Dispatch 宽度
+	DispatchWidth *int `json:"dispatch_width,omitempty"`
+
+	// ExecuteWidth Execute 宽度
+	ExecuteWidth *int `json:"execute_width,omitempty"`
+
+	// FetchWidth Fetch 宽度
+	FetchWidth *int `json:"fetch_width,omitempty"`
+
+	// Ipc Instructions Per Cycle
+	Ipc *float32 `json:"ipc,omitempty"`
+
+	// L1dCache 缓存配置和统计
+	L1dCache *CacheConfig `json:"l1d_cache,omitempty"`
+
+	// LqSize Load Queue 大小
+	LqSize *int `json:"lq_size,omitempty"`
+
+	// RetireWidth Retire 宽度
+	RetireWidth *int `json:"retire_width,omitempty"`
+
+	// RobSize ROB 大小
+	RobSize *int `json:"rob_size,omitempty"`
+
+	// SqSize Store Queue 大小
+	SqSize *int `json:"sq_size,omitempty"`
+
+	// TotalCycles 总周期数
+	TotalCycles *int `json:"total_cycles,omitempty"`
+
+	// TotalInstructions 总指令数
+	TotalInstructions *int `json:"total_instructions,omitempty"`
+
+	// TraceFile Trace 文件路径
+	TraceFile *string `json:"trace_file,omitempty"`
+
+	// Type CPU 类型
+	Type *CPUConfigType `json:"type,omitempty"`
+}
+
+// CPUConfigType CPU 类型
+type CPUConfigType string
 
 // CacheConfig 缓存配置和统计
 type CacheConfig struct {
@@ -140,6 +214,54 @@ type FlowSimNetwork struct {
 	Zoom *float32 `json:"zoom,omitempty"`
 }
 
+// MemoryConfig DRAM 控制器配置
+type MemoryConfig struct {
+	// Banks Bank 数
+	Banks *int `json:"banks,omitempty"`
+
+	// Channels 通道数
+	Channels *int `json:"channels,omitempty"`
+
+	// Columns 列数
+	Columns *int `json:"columns,omitempty"`
+
+	// Ranks Rank 数
+	Ranks *int `json:"ranks,omitempty"`
+
+	// ReadRequests 读请求数
+	ReadRequests *int `json:"read_requests,omitempty"`
+
+	// RowBufferHits Row Buffer 命中数
+	RowBufferHits *int `json:"row_buffer_hits,omitempty"`
+
+	// RowBufferMisses Row Buffer 未命中数
+	RowBufferMisses *int `json:"row_buffer_misses,omitempty"`
+
+	// Rows 行数
+	Rows *int `json:"rows,omitempty"`
+
+	// TCAS CAS Latency
+	TCAS *int `json:"tCAS,omitempty"`
+
+	// TRAS Row Active Time
+	TRAS *int `json:"tRAS,omitempty"`
+
+	// TRCD RAS to CAS Delay
+	TRCD *int `json:"tRCD,omitempty"`
+
+	// TRP Row Precharge Time
+	TRP *int `json:"tRP,omitempty"`
+
+	// Type 内存类型
+	Type *MemoryConfigType `json:"type,omitempty"`
+
+	// WriteRequests 写请求数
+	WriteRequests *int `json:"write_requests,omitempty"`
+}
+
+// MemoryConfigType 内存类型
+type MemoryConfigType string
+
 // Node 网络节点，兼容 CyEditor 格式
 type Node struct {
 	// Cache 缓存配置和统计
@@ -147,6 +269,9 @@ type Node struct {
 
 	// CoherenceDomainId 一致性域 ID
 	CoherenceDomainId *int `json:"coherence_domain_id,omitempty"`
+
+	// CpuConfig CPU 配置和统计
+	CpuConfig *CPUConfig `json:"cpu_config,omitempty"`
 
 	// Data CyEditor data 字段，存储节点元数据
 	Data Node_Data `json:"data"`
@@ -157,6 +282,9 @@ type Node struct {
 	// InPorts 输入端口列表
 	InPorts *[]Port `json:"in_ports,omitempty"`
 
+	// MemoryConfig DRAM 控制器配置
+	MemoryConfig *MemoryConfig `json:"memory_config,omitempty"`
+
 	// NodeFeatures 节点特性列表，如 ['cpu', 'cache']
 	NodeFeatures *[]string `json:"node_features,omitempty"`
 
@@ -165,6 +293,9 @@ type Node struct {
 
 	// NodeName 节点名称
 	NodeName string `json:"node_name"`
+
+	// NodeType 节点类型
+	NodeType *NodeNodeType `json:"node_type,omitempty"`
 
 	// OutPorts 输出端口列表
 	OutPorts *[]Port `json:"out_ports,omitempty"`
@@ -191,6 +322,9 @@ type Node_Data struct {
 	Type                 *string                `json:"type,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
+
+// NodeNodeType 节点类型
+type NodeNodeType string
 
 // Port 端口定义，包含配置和运行时状态
 type Port struct {

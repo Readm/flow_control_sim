@@ -152,6 +152,24 @@ func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
 			node.CoherenceDomainId = nodeState.CoherenceDomainID
 		}
 
+		// Phase 5: 恢复节点类型配置
+		if nodeState.NodeType != nil {
+			nodeType := protocol.NodeNodeType(*nodeState.NodeType)
+			node.NodeType = &nodeType
+		}
+
+		// Phase 5: 恢复 CPUConfig
+		if len(nodeState.CPUConfig) > 0 {
+			cpuConfig := mapToCPUConfig(nodeState.CPUConfig)
+			node.CpuConfig = &cpuConfig
+		}
+
+		// Phase 5: 恢复 MemoryConfig
+		if len(nodeState.MemoryConfig) > 0 {
+			memoryConfig := mapToMemoryConfig(nodeState.MemoryConfig)
+			node.MemoryConfig = &memoryConfig
+		}
+
 		// 从 DisplayData 恢复显示信息
 		if nodeState.DisplayData != nil {
 			// 恢复 position
@@ -365,4 +383,59 @@ func getNodeColor(nodeType string) string {
 	default:
 		return "#999999" // Grey
 	}
+}
+
+// mapToCPUConfig converts map[string]interface{} to protocol.CPUConfig
+func mapToCPUConfig(data map[string]interface{}) protocol.CPUConfig {
+	config := protocol.CPUConfig{}
+
+	// 统计字段（根据 OpenAPI Schema 定义）
+	if v, ok := data["ipc"].(float64); ok {
+		float32Val := float32(v)
+		config.Ipc = &float32Val
+	}
+	if v, ok := data["total_instructions"].(uint64); ok {
+		intVal := int(v)
+		config.TotalInstructions = &intVal
+	}
+	if v, ok := data["total_cycles"].(uint64); ok {
+		intVal := int(v)
+		config.TotalCycles = &intVal
+	}
+	if v, ok := data["branch_mispredictions"].(uint64); ok {
+		intVal := int(v)
+		config.BranchMispredictions = &intVal
+	}
+
+	// 注: total_branches, fetch_stalls 等字段不在 OpenAPI Schema 中
+	// 这些扩展统计保留在 NodeState.Stats 中
+
+	return config
+}
+
+// mapToMemoryConfig converts map[string]interface{} to protocol.MemoryConfig
+func mapToMemoryConfig(data map[string]interface{}) protocol.MemoryConfig {
+	config := protocol.MemoryConfig{}
+
+	// 请求统计
+	if v, ok := data["read_requests"].(uint64); ok {
+		intVal := int(v)
+		config.ReadRequests = &intVal
+	}
+	if v, ok := data["write_requests"].(uint64); ok {
+		intVal := int(v)
+		config.WriteRequests = &intVal
+	}
+
+	// Row Buffer 统计
+	if v, ok := data["row_buffer_hits"].(uint64); ok {
+		intVal := int(v)
+		config.RowBufferHits = &intVal
+	}
+	if v, ok := data["row_buffer_misses"].(uint64); ok {
+		intVal := int(v)
+		config.RowBufferMisses = &intVal
+	}
+
+	return config
 }

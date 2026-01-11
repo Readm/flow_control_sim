@@ -111,6 +111,17 @@ type NodeHandler interface {
 	Process(cycle uint64, inputs [][]queue.PacketRef) error
 }
 
+// StatsExporter is an optional interface that NodeHandlers can implement
+// to export runtime statistics and configuration to the visualization layer.
+// This enables automatic integration with OpenAPI Schema (CPUConfig, MemoryConfig, etc).
+type StatsExporter interface {
+	// ExportStats returns runtime statistics that should be included in NodeState.Stats.
+	// For CPU nodes, this includes IPC, instruction count, ROB occupancy, etc.
+	// For DRAM nodes, this includes request counts, latency, row buffer hits, etc.
+	// Keys should match the field names in OpenAPI Schema (snake_case).
+	ExportStats() map[string]interface{}
+}
+
 // BaseNode implements the common logic for all nodes.
 // Specific node types should embed BaseNode and implement NodeHandler.
 type BaseNode struct {
@@ -669,6 +680,12 @@ func (n *BaseNode) GetTraceEvents() []trace.TraceEvent {
 // SetConfigRef 设置 Protocol 配置引用 (只读)
 func (n *BaseNode) SetConfigRef(config *protocol.Node) {
 	n.configRef = config
+}
+
+// SetHandler 设置节点 Handler (用于多态行为和统计导出)
+// Phase 6: Builder 需要设置 handler 引用，以便 ExportState 可以调用 ExportStats
+func (n *BaseNode) SetHandler(handler NodeHandler) {
+	n.handler = handler
 }
 
 // GetConfigRef 获取 Protocol 配置引用 (只读)

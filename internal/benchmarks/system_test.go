@@ -6,8 +6,8 @@ import (
 	"runtime/debug"
 	"testing"
 
-	"github.com/Readm/flow_sim/internal/champsim/flowsim"
-	"github.com/Readm/flow_sim/internal/champsim/trace"
+	"github.com/Readm/flow_sim/internal/nodes/cpu/champsim/flowsim"
+	"github.com/Readm/flow_sim/internal/nodes/cpu/champsim/trace"
 	"github.com/Readm/flow_sim/internal/core/network"
 )
 

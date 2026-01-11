@@ -247,6 +247,19 @@ components:
           type: integer
           description: "一致性域 ID"
 
+        # === 节点类型配置 ===
+        node_type:
+          type: string
+          description: "节点类型"
+          enum: ["generic", "cpu", "memory_controller", "router"]
+          default: "generic"
+        cpu_config:
+          $ref: '#/components/schemas/CPUConfig'
+          description: "CPU 专用配置（仅 node_type=cpu 时有效）"
+        memory_config:
+          $ref: '#/components/schemas/MemoryConfig'
+          description: "内存控制器专用配置（仅 node_type=memory_controller 时有效）"
+
         # === CyEditor 可视化字段 ===
         data:
           type: object
@@ -382,6 +395,134 @@ components:
         - num_sets
         - replacement_policy
         - states
+      additionalProperties: false
+
+    CPUConfig:
+      type: object
+      description: "CPU 配置和统计"
+      properties:
+        # === 配置字段 ===
+        type:
+          type: string
+          enum: ["champsim_o3", "simple", "custom"]
+          description: "CPU 类型"
+        trace_file:
+          type: string
+          description: "Trace 文件路径"
+        rob_size:
+          type: integer
+          description: "ROB 大小"
+          minimum: 0
+        lq_size:
+          type: integer
+          description: "Load Queue 大小"
+          minimum: 0
+        sq_size:
+          type: integer
+          description: "Store Queue 大小"
+          minimum: 0
+        fetch_width:
+          type: integer
+          description: "Fetch 宽度"
+          minimum: 0
+        decode_width:
+          type: integer
+          description: "Decode 宽度"
+          minimum: 0
+        dispatch_width:
+          type: integer
+          description: "Dispatch 宽度"
+          minimum: 0
+        execute_width:
+          type: integer
+          description: "Execute 宽度"
+          minimum: 0
+        retire_width:
+          type: integer
+          description: "Retire 宽度"
+          minimum: 0
+
+        # === L1D Cache 配置 ===
+        l1d_cache:
+          $ref: '#/components/schemas/CacheConfig'
+          description: "L1D Cache 配置"
+
+        # === 运行时统计 ===
+        ipc:
+          type: number
+          description: "Instructions Per Cycle"
+        total_instructions:
+          type: integer
+          description: "总指令数"
+        total_cycles:
+          type: integer
+          description: "总周期数"
+        branch_mispredictions:
+          type: integer
+          description: "分支预测错误次数"
+      additionalProperties: false
+
+    MemoryConfig:
+      type: object
+      description: "DRAM 控制器配置"
+      properties:
+        # === 配置字段 ===
+        type:
+          type: string
+          enum: ["ddr4", "ddr5", "hbm", "custom"]
+          description: "内存类型"
+        channels:
+          type: integer
+          description: "通道数"
+          minimum: 0
+        ranks:
+          type: integer
+          description: "Rank 数"
+          minimum: 0
+        banks:
+          type: integer
+          description: "Bank 数"
+          minimum: 0
+        rows:
+          type: integer
+          description: "行数"
+          minimum: 0
+        columns:
+          type: integer
+          description: "列数"
+          minimum: 0
+
+        # === 时序参数 ===
+        tRCD:
+          type: integer
+          description: "RAS to CAS Delay"
+          minimum: 0
+        tRP:
+          type: integer
+          description: "Row Precharge Time"
+          minimum: 0
+        tCAS:
+          type: integer
+          description: "CAS Latency"
+          minimum: 0
+        tRAS:
+          type: integer
+          description: "Row Active Time"
+          minimum: 0
+
+        # === 运行时统计 ===
+        read_requests:
+          type: integer
+          description: "读请求数"
+        write_requests:
+          type: integer
+          description: "写请求数"
+        row_buffer_hits:
+          type: integer
+          description: "Row Buffer 命中数"
+        row_buffer_misses:
+          type: integer
+          description: "Row Buffer 未命中数"
       additionalProperties: false
 
     Edge:

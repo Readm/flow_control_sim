@@ -1,0 +1,54 @@
+=== System Info ===
+Date: Sun Jan 11 23:24:26 CST 2026
+Go Version: go version go1.25.5 linux/amd64
+OS: Linux
+Arch: x86_64
+CPU: model name	: AMD Ryzen 7 8745HS w/ Radeon 780M Graphics
+
+=== Git Info ===
+Commit: 91067cb
+Branch: main
+Dirty: Yes
+
+=== Benchmark Results ===
+
+Running Scaling Benchmark 'RingCoreScaling' with core counts: [1 2 4 8 16]
+goos: linux
+goarch: amd64
+pkg: github.com/Readm/flow_sim/internal/benchmarks
+cpu: AMD Ryzen 7 8745HS w/ Radeon 780M Graphics     
+BenchmarkRingCoreScaling/Cores_1-16         	       4	 797212445 ns/op	        89.29 reception_rate_pct	      1254 sim_Hz	 9746290 B/op	  129995 allocs/op
+CPU Stats: Idle=1.1% User=98.0% Sys=0.9% | Wait: P50=131.1us P99=8388.6us STW=0.00ms
+BenchmarkRingCoreScaling/Cores_2-16         	       8	 386236434 ns/op	        94.31 reception_rate_pct	      2589 sim_Hz	 9750660 B/op	  130022 allocs/op
+CPU Stats: Idle=5.0% User=93.7% Sys=1.3% | Wait: P50=131.1us P99=5242.9us STW=0.00ms
+BenchmarkRingCoreScaling/Cores_4-16         	      18	 191566757 ns/op	        97.37 reception_rate_pct	      5220 sim_Hz	 9751918 B/op	  130014 allocs/op
+CPU Stats: Idle=6.4% User=92.6% Sys=1.0% | Wait: P50=131.1us P99=2621.4us STW=0.00ms
+BenchmarkRingCoreScaling/Cores_8-16         	      34	  95582578 ns/op	        98.58 reception_rate_pct	     10462 sim_Hz	 9749015 B/op	  130011 allocs/op
+CPU Stats: Idle=6.6% User=92.6% Sys=0.8% | Wait: P50=131.1us P99=1048.6us STW=0.00ms
+BenchmarkRingCoreScaling/Cores_16-16        	      61	  60667573 ns/op	        99.20 reception_rate_pct	     16483 sim_Hz	 9748642 B/op	  130009 allocs/op
+CPU Stats: Idle=10.4% User=88.9% Sys=0.7% | Wait: P50=81.9us P99=655.4us STW=0.00ms
+Running Scaling Benchmark 'BidirectionalRingCoreScaling' with core counts: [1 2 4 8 16]
+BenchmarkBidirectionalRingCoreScaling/Cores_1-16         	       2	1556184658 ns/op	       100.0 reception_rate_pct	      1285 sim_Hz	10018792 B/op	  130610 allocs/op
+CPU Stats: Idle=12.2% User=82.9% Sys=4.9% | Wait: P50=114.7us P99=7340.0us STW=0.00ms
+BenchmarkBidirectionalRingCoreScaling/Cores_2-16         	       5	 740812468 ns/op	       100.0 reception_rate_pct	      2700 sim_Hz	 3913504 B/op	   51048 allocs/op
+CPU Stats: Idle=5.6% User=91.5% Sys=2.9% | Wait: P50=131.1us P99=5242.9us STW=0.00ms
+BenchmarkBidirectionalRingCoreScaling/Cores_4-16         	       9	 359633173 ns/op	       100.0 reception_rate_pct	      5561 sim_Hz	 2231089 B/op	   29048 allocs/op
+CPU Stats: Idle=5.7% User=91.3% Sys=3.0% | Wait: P50=163.8us P99=3670.0us STW=0.00ms
+BenchmarkBidirectionalRingCoreScaling/Cores_8-16         	      18	 179390541 ns/op	       100.0 reception_rate_pct	     11149 sim_Hz	 1116997 B/op	   14552 allocs/op
+CPU Stats: Idle=29.1% User=61.1% Sys=9.8% | Wait: P50=114.7us P99=1572.9us STW=0.00ms
+BenchmarkBidirectionalRingCoreScaling/Cores_16-16        	      28	 110951887 ns/op	       100.0 reception_rate_pct	     18026 sim_Hz	  717169 B/op	    9336 allocs/op
+CPU Stats: Idle=41.8% User=50.4% Sys=7.8% | Wait: P50=24.6us P99=524.3us STW=0.00ms
+Running Scaling Benchmark 'ChampSim_64CPU' with core counts: [1 2 4 8 16]
+Benchmark_ChampSim_64CPU/Cores_1-16                      	       5	 882377976 ns/op	      1189 sim_Hz	42479592 B/op	  678926 allocs/op
+CPU Stats: Idle=4.9% User=78.8% Sys=16.3% | Wait: P50=0.5us P99=4194.3us STW=0.00ms
+Benchmark_ChampSim_64CPU/Cores_2-16                      	      14	 357092591 ns/op	      2800 sim_Hz	42529487 B/op	  678956 allocs/op
+CPU Stats: Idle=18.4% User=61.1% Sys=20.4% | Wait: P50=0.5us P99=2097.2us STW=0.00ms
+Benchmark_ChampSim_64CPU/Cores_4-16                      	      27	 163455334 ns/op	      6118 sim_Hz	42551922 B/op	  678963 allocs/op
+CPU Stats: Idle=33.1% User=49.9% Sys=17.0% | Wait: P50=0.4us P99=1048.6us STW=0.00ms
+Benchmark_ChampSim_64CPU/Cores_8-16                      	      36	 103332849 ns/op	     10043 sim_Hz	42549070 B/op	  678981 allocs/op
+CPU Stats: Idle=48.8% User=38.4% Sys=12.8% | Wait: P50=0.1us P99=786.4us STW=0.00ms
+Benchmark_ChampSim_64CPU/Cores_16-16                     	      50	 100640978 ns/op	      9936 sim_Hz	42579508 B/op	  678999 allocs/op
+CPU Stats: Idle=48.5% User=9.4% Sys=42.1% | Wait: P50=0.1us P99=458.8us STW=0.00ms
+Benchmark_ChampSim_Baseline_1CPU/SingleCore_Baseline-16  	signal: killed
+FAIL	github.com/Readm/flow_sim/internal/benchmarks	234.296s
+FAIL
