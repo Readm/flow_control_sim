@@ -3,8 +3,8 @@ package node
 import (
 	"fmt"
 
+	"github.com/Readm/flow_sim/internal/configconv"
 	"github.com/Readm/flow_sim/internal/core/state"
-	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 )
 
 // ExportState exports the state of the Node.
@@ -162,16 +162,24 @@ func (n *BaseNode) ExportState(cfg state.ExportConfig) state.NodeState {
 		// Merge configuration from configRef with stats
 		// 配置参数（如 rob_size, TCAS）从 configRef 读取
 		// 统计数据（如 total_instructions, read_requests）从 stats 读取
-		if n.configRef.CpuConfig != nil && ns.CPUConfig != nil {
-			ns.CPUConfig = mergeCPUConfig(n.configRef.CpuConfig, ns.CPUConfig)
+		if n.configRef.CpuConfig != nil && len(ns.CPUConfig) > 0 {
+			// Merge config with stats using generic converter
+			ns.CPUConfig = configconv.MergeMaps(
+				configconv.StructToMap(n.configRef.CpuConfig),
+				ns.CPUConfig,
+			)
 		} else if n.configRef.CpuConfig != nil {
-			ns.CPUConfig = protocolCPUConfigToMap(n.configRef.CpuConfig)
+			ns.CPUConfig = configconv.StructToMap(n.configRef.CpuConfig)
 		}
 
-		if n.configRef.MemoryConfig != nil && ns.MemoryConfig != nil {
-			ns.MemoryConfig = mergeMemoryConfig(n.configRef.MemoryConfig, ns.MemoryConfig)
+		if n.configRef.MemoryConfig != nil && len(ns.MemoryConfig) > 0 {
+			// Merge config with stats using generic converter
+			ns.MemoryConfig = configconv.MergeMaps(
+				configconv.StructToMap(n.configRef.MemoryConfig),
+				ns.MemoryConfig,
+			)
 		} else if n.configRef.MemoryConfig != nil {
-			ns.MemoryConfig = protocolMemoryConfigToMap(n.configRef.MemoryConfig)
+			ns.MemoryConfig = configconv.StructToMap(n.configRef.MemoryConfig)
 		}
 	}
 
@@ -285,145 +293,3 @@ func extractMemoryConfig(stats map[string]interface{}) map[string]interface{} {
 	return config
 }
 
-// protocolCPUConfigToMap 将 Protocol.CPUConfig 转换为 map
-func protocolCPUConfigToMap(cpuConfig *protocol.CPUConfig) map[string]interface{} {
-	config := make(map[string]interface{})
-
-	// 配置参数
-	if cpuConfig.TraceFile != nil {
-		config["trace_file"] = *cpuConfig.TraceFile
-	}
-	if cpuConfig.RobSize != nil {
-		config["rob_size"] = *cpuConfig.RobSize
-	}
-	if cpuConfig.LqSize != nil {
-		config["lq_size"] = *cpuConfig.LqSize
-	}
-	if cpuConfig.SqSize != nil {
-		config["sq_size"] = *cpuConfig.SqSize
-	}
-	if cpuConfig.FetchWidth != nil {
-		config["fetch_width"] = *cpuConfig.FetchWidth
-	}
-	if cpuConfig.DecodeWidth != nil {
-		config["decode_width"] = *cpuConfig.DecodeWidth
-	}
-	if cpuConfig.DispatchWidth != nil {
-		config["dispatch_width"] = *cpuConfig.DispatchWidth
-	}
-	if cpuConfig.ExecuteWidth != nil {
-		config["execute_width"] = *cpuConfig.ExecuteWidth
-	}
-	if cpuConfig.RetireWidth != nil {
-		config["retire_width"] = *cpuConfig.RetireWidth
-	}
-
-	// L1D Cache 配置
-	if cpuConfig.L1dCache != nil {
-		l1d := make(map[string]interface{})
-		if cpuConfig.L1dCache.NumSets > 0 {
-			l1d["num_sets"] = cpuConfig.L1dCache.NumSets
-		}
-		if cpuConfig.L1dCache.Capacity > 0 {
-			l1d["capacity"] = cpuConfig.L1dCache.Capacity
-		}
-		l1d["replacement_policy"] = cpuConfig.L1dCache.ReplacementPolicy
-		l1d["states"] = cpuConfig.L1dCache.States
-		if len(l1d) > 0 {
-			config["l1d_cache"] = l1d
-		}
-	}
-
-	// 统计数据（如果 Protocol 中包含）
-	if cpuConfig.Ipc != nil {
-		config["ipc"] = *cpuConfig.Ipc
-	}
-	if cpuConfig.TotalInstructions != nil {
-		config["total_instructions"] = *cpuConfig.TotalInstructions
-	}
-	if cpuConfig.TotalCycles != nil {
-		config["total_cycles"] = *cpuConfig.TotalCycles
-	}
-
-	return config
-}
-
-// protocolMemoryConfigToMap 将 Protocol.MemoryConfig 转换为 map
-func protocolMemoryConfigToMap(memConfig *protocol.MemoryConfig) map[string]interface{} {
-	config := make(map[string]interface{})
-
-	// DRAM 时序参数（使用蛇形命名，与其他 stats 一致）
-	if memConfig.TCAS != nil {
-		config["tcas"] = *memConfig.TCAS
-	}
-	if memConfig.TRCD != nil {
-		config["trcd"] = *memConfig.TRCD
-	}
-	if memConfig.TRP != nil {
-		config["trp"] = *memConfig.TRP
-	}
-	if memConfig.TRAS != nil {
-		config["tras"] = *memConfig.TRAS
-	}
-
-	// 拓扑参数
-	if memConfig.Channels != nil {
-		config["channels"] = *memConfig.Channels
-	}
-	if memConfig.Ranks != nil {
-		config["ranks"] = *memConfig.Ranks
-	}
-	if memConfig.Banks != nil {
-		config["banks"] = *memConfig.Banks
-	}
-	if memConfig.Rows != nil {
-		config["rows"] = *memConfig.Rows
-	}
-	if memConfig.Columns != nil {
-		config["columns"] = *memConfig.Columns
-	}
-
-	// 统计数据（如果 Protocol 中包含）
-	if memConfig.ReadRequests != nil {
-		config["read_requests"] = *memConfig.ReadRequests
-	}
-	if memConfig.WriteRequests != nil {
-		config["write_requests"] = *memConfig.WriteRequests
-	}
-	if memConfig.RowBufferHits != nil {
-		config["row_buffer_hits"] = *memConfig.RowBufferHits
-	}
-	if memConfig.RowBufferMisses != nil {
-		config["row_buffer_misses"] = *memConfig.RowBufferMisses
-	}
-
-	return config
-}
-
-// mergeCPUConfig 合并配置参数（从 configRef）和统计数据（从 stats）
-// 统计数据优先级更高（因为是运行时生成的）
-func mergeCPUConfig(configRef *protocol.CPUConfig, statsConfig map[string]interface{}) map[string]interface{} {
-	// 先从 configRef 读取配置参数
-	merged := protocolCPUConfigToMap(configRef)
-
-	// 然后用统计数据覆盖（统计数据是运行时的，优先级更高）
-	for k, v := range statsConfig {
-		merged[k] = v
-	}
-
-	return merged
-}
-
-// mergeMemoryConfig 合并配置参数（从 configRef）和统计数据（从 stats）
-// 统计数据优先级更高（因为是运行时生成的）
-func mergeMemoryConfig(configRef *protocol.MemoryConfig, statsConfig map[string]interface{}) map[string]interface{} {
-	// 先从 configRef 读取配置参数
-	merged := protocolMemoryConfigToMap(configRef)
-
-	// 然后用统计数据覆盖（统计数据是运行时的，优先级更高）
-	for k, v := range statsConfig {
-		merged[k] = v
-	}
-
-	return merged
-}
