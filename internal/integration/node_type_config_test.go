@@ -131,6 +131,11 @@ func TestCPUMemoryNodeTypeConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构建网络失败: %v", err)
 	}
+	defer func() {
+		if err := net.Close(); err != nil {
+			t.Errorf("清理网络资源失败: %v", err)
+		}
+	}()
 
 	// Step 3: 运行仿真
 	targetCycle := 100
@@ -230,12 +235,22 @@ func TestCPUMemoryNodeTypeConfig(t *testing.T) {
 		t.Fatal("Memory memory_config 为 nil")
 	}
 
-	// 验证 Memory 配置参数（注：当前实现中配置参数未从 Builder 传递回 Protocol）
-	// TODO: Phase 7 - Builder 应该保存配置参数到 configRef
-	if memNode.MemoryConfig.TCAS != nil {
-		t.Logf("  ✓ Memory TCAS: %d", *memNode.MemoryConfig.TCAS)
+	// 验证 Memory 配置参数（应该从 configRef 恢复）
+	if memNode.MemoryConfig.TCAS == nil {
+		t.Error("Memory TCAS 为 nil，配置参数未正确导出")
+	} else if *memNode.MemoryConfig.TCAS != tcas {
+		t.Errorf("Memory TCAS 错误: 期望=%d, 实际=%d", tcas, *memNode.MemoryConfig.TCAS)
 	} else {
-		t.Logf("  ⚠ Memory TCAS 未导出（配置参数未保存到 configRef）")
+		t.Logf("  ✓ Memory TCAS: %d", *memNode.MemoryConfig.TCAS)
+	}
+
+	// 验证 CPU 配置参数
+	if cpuNode.CpuConfig.RobSize == nil {
+		t.Error("CPU rob_size 为 nil，配置参数未正确导出")
+	} else if *cpuNode.CpuConfig.RobSize != robSize {
+		t.Errorf("CPU rob_size 错误: 期望=%d, 实际=%d", robSize, *cpuNode.CpuConfig.RobSize)
+	} else {
+		t.Logf("  ✓ CPU rob_size: %d", *cpuNode.CpuConfig.RobSize)
 	}
 
 	// 验证统计数据（如果 CPU 发送了请求，Memory 应该有统计）
@@ -297,6 +312,11 @@ func TestNodeTypeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构建网络失败: %v", err)
 	}
+	defer func() {
+		if err := net.Close(); err != nil {
+			t.Errorf("清理网络资源失败: %v", err)
+		}
+	}()
 
 	// Step 3: 运行仿真
 	t.Log("Step 3: 运行仿真")

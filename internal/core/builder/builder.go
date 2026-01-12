@@ -16,6 +16,18 @@ import (
 	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 )
 
+// 默认配置常量
+const (
+	// 默认端口数量（当配置未指定时）
+	defaultPortCount = 8
+	// 默认缓冲区大小（字节）
+	defaultBufferSize = 128
+	// 默认带宽（每周期可传输的数据包数）
+	defaultBandwidth = 1
+	// 默认 trace 文件路径
+	defaultTraceFile = "../../testdata/traces/small.champsimtrace"
+)
+
 // BuildFromFlowSimNetwork 直接从 FlowSimNetwork 构建仿真网络
 func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network, error) {
 	net := network.New()
@@ -23,15 +35,13 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 	// 保存原始配置引用 (用于 Display 数据和 Config 访问)
 	net.SetSourceConfig(&flowNet)
 
-	// Phase 6: 保存需要 cleanup 的资源（如 TraceReader）
-	// TODO: 返回这些资源给调用方进行 cleanup
-	// var traceReaders []trace.TraceReader
+	// 从拓扑推断节点连接关系
+	connections := inferConnectionsFromTopology(flowNet)
 
 	// 1. 创建节点
 	for i, nodeProto := range flowNet.Nodes {
 		var newNode node.Node
 		var handler node.NodeHandler
-		// var traceReader trace.TraceReader // 暂不处理 cleanup
 
 		// Phase 6: 先创建输入/输出队列（Handler 需要 outputQueue 参数）
 
@@ -39,7 +49,7 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 		var inputs []*queue.InputQueue
 		if nodeProto.InPorts != nil && len(*nodeProto.InPorts) > 0 {
 			for _, port := range *nodeProto.InPorts {
-				bufferSize := 128 // 默认
+				bufferSize := defaultBufferSize // 默认
 				if port.BufferSize != nil {
 					bufferSize = *port.BufferSize
 				}
@@ -48,8 +58,8 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 			}
 		} else {
 			// 默认：8个输入端口
-			for j := 0; j < 8; j++ {
-				q := queue.NewInputQueue(128, 1)
+			for j := 0; j < defaultPortCount; j++ {
+				q := queue.NewInputQueue(defaultBufferSize, defaultBandwidth)
 				inputs = append(inputs, q)
 			}
 		}
@@ -58,7 +68,7 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 		var outputs []*queue.OutputQueue
 		if nodeProto.OutPorts != nil && len(*nodeProto.OutPorts) > 0 {
 			for _, port := range *nodeProto.OutPorts {
-				bufferSize := 128 // 默认
+				bufferSize := defaultBufferSize // 默认
 				if port.BufferSize != nil {
 					bufferSize = *port.BufferSize
 				}
@@ -67,8 +77,8 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 			}
 		} else {
 			// 默认：8个输出端口
-			for j := 0; j < 8; j++ {
-				q := queue.NewOutputQueue(128, 1)
+			for j := 0; j < defaultPortCount; j++ {
+				q := queue.NewOutputQueue(defaultBufferSize, defaultBandwidth)
 				outputs = append(outputs, q)
 			}
 		}
@@ -85,19 +95,29 @@ func BuildFromFlowSimNetwork(flowNet protocol.FlowSimNetwork) (*network.Network,
 				if len(outputs) == 0 {
 					return nil, fmt.Errorf("node %d (cpu) requires at least one output queue", nodeProto.NodeId)
 				}
-				cpuHandler, _, err := createCPUHandler(nodeProto.NodeId, nodeProto.CpuConfig, outputs[0])
+				// 从拓扑推断下游 Memory 节点 ID
+				downstreamIDs := connections[nodeProto.NodeId]
+				cpuHandler, traceReader, err := createCPUHandler(nodeProto.NodeId, nodeProto.CpuConfig, outputs[0], downstreamIDs)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create CPU handler for node %d: %w", nodeProto.NodeId, err)
 				}
 				handler = cpuHandler
-				// traceReader = tr // TODO: 保存供 cleanup
+
+				// 注册 TraceReader cleanup
+				if traceReader != nil {
+					net.AddCleanup(func() error {
+						return traceReader.Close()
+					})
+				}
 
 			case protocol.MemoryController:
 				// 创建 Memory Controller Handler
 				if nodeProto.MemoryConfig == nil {
 					return nil, fmt.Errorf("node %d has type 'memory_controller' but missing memory_config", nodeProto.NodeId)
 				}
-				memHandler, err := createMemoryHandler(nodeProto.NodeId, nodeProto.MemoryConfig, outputs)
+				// 从拓扑推断上游 CPU 节点 ID（反向连接）
+				upstreamIDs := findUpstreamNodes(connections, nodeProto.NodeId)
+				memHandler, err := createMemoryHandler(nodeProto.NodeId, nodeProto.MemoryConfig, outputs, upstreamIDs)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create memory handler for node %d: %w", nodeProto.NodeId, err)
 				}
@@ -259,14 +279,15 @@ func edgeDataToMap(data protocol.Edge_Data) map[string]interface{} {
 //   - nodeID: CPU 节点 ID
 //   - cpuConfig: CPU 配置（包含 trace_file, rob_size 等）
 //   - outputQueue: 输出队列（发送到下游 Cache/Memory）
+//   - downstreamIDs: 下游节点 ID 列表（从拓扑推断）
 //
 // 返回:
 //   - CPUNodeHandler 实例
 //   - Trace Reader（需要调用方负责 cleanup）
 //   - error
-func createCPUHandler(nodeID int, cpuConfig *protocol.CPUConfig, outputQueue *queue.OutputQueue) (node.NodeHandler, trace.TraceReader, error) {
+func createCPUHandler(nodeID int, cpuConfig *protocol.CPUConfig, outputQueue *queue.OutputQueue, downstreamIDs []int) (node.NodeHandler, trace.TraceReader, error) {
 	// 1. 读取 trace 文件路径
-	traceFile := "../../testdata/traces/small.champsimtrace" // 默认值
+	traceFile := defaultTraceFile // 默认值
 	if cpuConfig.TraceFile != nil {
 		traceFile = *cpuConfig.TraceFile
 	}
@@ -325,8 +346,14 @@ func createCPUHandler(nodeID int, cpuConfig *protocol.CPUConfig, outputQueue *qu
 	l1dCache.SetLowerLevel(memoryAdapter)
 	o3cpu.SetL1DCache(l1dCache)
 
-	// 7. 创建 CPU Handler（下游节点 ID 暂时设为 nodeID+1，后续可以通过配置指定）
-	dramID := nodeID + 1
+	// 7. 创建 CPU Handler（使用从拓扑推断的下游节点 ID）
+	var dramID int
+	if len(downstreamIDs) > 0 {
+		dramID = downstreamIDs[0] // 使用第一个下游节点作为 DRAM
+	} else {
+		// 如果没有推断到下游节点，使用默认值（向后兼容）
+		dramID = nodeID + 1
+	}
 	cpuHandler := flowsim.NewCPUNodeHandler(
 		nodeID, dramID,
 		o3cpu, l1dCache, memoryAdapter,
@@ -344,11 +371,12 @@ func createCPUHandler(nodeID int, cpuConfig *protocol.CPUConfig, outputQueue *qu
 //   - nodeID: Memory 节点 ID
 //   - memConfig: 内存配置（包含 channels, ranks 等）
 //   - outputQueues: 输出队列数组（发送到多个 CPU）
+//   - upstreamIDs: 上游节点 ID 列表（从拓扑推断）
 //
 // 返回:
 //   - DRAMNodeHandler 实例
 //   - error
-func createMemoryHandler(nodeID int, memConfig *protocol.MemoryConfig, outputQueues []*queue.OutputQueue) (node.NodeHandler, error) {
+func createMemoryHandler(nodeID int, memConfig *protocol.MemoryConfig, outputQueues []*queue.OutputQueue, upstreamIDs []int) (node.NodeHandler, error) {
 	// 1. 使用默认 DRAM Config
 	dramConfig := dram.DefaultDRAMConfig()
 
@@ -387,9 +415,14 @@ func createMemoryHandler(nodeID int, memConfig *protocol.MemoryConfig, outputQue
 		return nil, fmt.Errorf("failed to create DRAM channel: %w", err)
 	}
 
-	// 3. 创建 DRAM Handler（假设只有一个 CPU 连接，CPU ID 为 nodeID-1）
-	// TODO: 从配置或拓扑推断 CPU ID
-	cpuID := nodeID - 1
+	// 3. 创建 DRAM Handler（使用从拓扑推断的上游 CPU 节点 ID）
+	var cpuID int
+	if len(upstreamIDs) > 0 {
+		cpuID = upstreamIDs[0] // 使用第一个上游节点作为 CPU
+	} else {
+		// 如果没有推断到上游节点，使用默认值（向后兼容）
+		cpuID = nodeID - 1
+	}
 
 	// DRAMNodeHandler 只支持单个 CPU 和单个输出队列
 	if len(outputQueues) == 0 {
@@ -418,4 +451,33 @@ func createGenericHandler(nodeID int) node.NodeHandler {
 	// 返回 nil 表示使用 BaseNode 的默认 Process 行为
 	// WorkerNode 已经在 BuildFromFlowSimNetwork 中创建
 	return nil
+}
+
+// inferConnectionsFromTopology 从 Edges 推断节点之间的连接关系
+// 返回 map[nodeID][]connectedNodeID，表示每个节点的下游连接
+func inferConnectionsFromTopology(flowNet protocol.FlowSimNetwork) map[int][]int {
+	connections := make(map[int][]int)
+	
+	// 遍历所有边，构建连接关系
+	for _, edge := range flowNet.Edges {
+		srcID := edge.SrcNodeId
+		dstID := edge.DstNodeId
+		connections[srcID] = append(connections[srcID], dstID)
+	}
+	
+	return connections
+}
+
+// findUpstreamNodes 查找指向指定节点的上游节点
+func findUpstreamNodes(connections map[int][]int, targetNodeID int) []int {
+	var upstreamIDs []int
+	for srcID, dstIDs := range connections {
+		for _, dstID := range dstIDs {
+			if dstID == targetNodeID {
+				upstreamIDs = append(upstreamIDs, srcID)
+				break
+			}
+		}
+	}
+	return upstreamIDs
 }

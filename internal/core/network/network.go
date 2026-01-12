@@ -51,6 +51,10 @@ type Network struct {
 
 	// Trace recorder（可选，用于生成 Chrome trace）
 	tracer *trace.TraceRecorder
+
+	// Cleanup functions (用于释放资源，如 TraceReader)
+	cleanupFuncs []func() error
+	cleanupMutex sync.Mutex
 }
 
 // New creates an empty network.
@@ -110,6 +114,30 @@ func (n *Network) SetTracer(tracer *trace.TraceRecorder) {
 // GetTracer 获取 trace recorder
 func (n *Network) GetTracer() *trace.TraceRecorder {
 	return n.tracer
+}
+
+// AddCleanup 添加 cleanup 函数（用于释放资源）
+// Builder 使用此方法注册需要清理的资源（如 TraceReader）
+func (n *Network) AddCleanup(cleanup func() error) {
+	n.cleanupMutex.Lock()
+	defer n.cleanupMutex.Unlock()
+	n.cleanupFuncs = append(n.cleanupFuncs, cleanup)
+}
+
+// Close 释放网络持有的所有资源
+// 应该在网络使用完毕后调用（如服务器关闭时）
+func (n *Network) Close() error {
+	n.cleanupMutex.Lock()
+	defer n.cleanupMutex.Unlock()
+
+	var firstErr error
+	for i, cleanup := range n.cleanupFuncs {
+		if err := cleanup(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("cleanup function %d failed: %w", i, err)
+		}
+	}
+	n.cleanupFuncs = nil
+	return firstErr
 }
 
 // AddNode registers a node handle in the network.

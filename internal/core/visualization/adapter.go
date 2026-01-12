@@ -389,22 +389,59 @@ func getNodeColor(nodeType string) string {
 func mapToCPUConfig(data map[string]interface{}) protocol.CPUConfig {
 	config := protocol.CPUConfig{}
 
+	// 配置参数
+	if v, ok := data["trace_file"].(string); ok {
+		config.TraceFile = &v
+	}
+	if v, ok := data["rob_size"].(int); ok {
+		config.RobSize = &v
+	}
+	if v, ok := data["lq_size"].(int); ok {
+		config.LqSize = &v
+	}
+	if v, ok := data["sq_size"].(int); ok {
+		config.SqSize = &v
+	}
+	if v, ok := data["fetch_width"].(int); ok {
+		config.FetchWidth = &v
+	}
+	if v, ok := data["decode_width"].(int); ok {
+		config.DecodeWidth = &v
+	}
+	if v, ok := data["dispatch_width"].(int); ok {
+		config.DispatchWidth = &v
+	}
+	if v, ok := data["execute_width"].(int); ok {
+		config.ExecuteWidth = &v
+	}
+	if v, ok := data["retire_width"].(int); ok {
+		config.RetireWidth = &v
+	}
+
 	// 统计字段（根据 OpenAPI Schema 定义）
 	if v, ok := data["ipc"].(float64); ok {
 		float32Val := float32(v)
 		config.Ipc = &float32Val
+	} else if v, ok := data["ipc"].(float32); ok {
+		config.Ipc = &v
 	}
 	if v, ok := data["total_instructions"].(uint64); ok {
 		intVal := int(v)
 		config.TotalInstructions = &intVal
+	} else if v, ok := data["total_instructions"].(int); ok {
+		config.TotalInstructions = &v
 	}
 	if v, ok := data["total_cycles"].(uint64); ok {
 		intVal := int(v)
 		config.TotalCycles = &intVal
+	} else if v, ok := data["total_cycles"].(int); ok {
+		config.TotalCycles = &v
 	}
 	if v, ok := data["branch_mispredictions"].(uint64); ok {
 		intVal := int(v)
 		config.BranchMispredictions = &intVal
+	} else if v, ok := data["branch_mispredictions"].(int); ok {
+		config.BranchMispredictions = &v
 	}
 
 	// 注: total_branches, fetch_stalls 等字段不在 OpenAPI Schema 中
@@ -417,24 +454,63 @@ func mapToCPUConfig(data map[string]interface{}) protocol.CPUConfig {
 func mapToMemoryConfig(data map[string]interface{}) protocol.MemoryConfig {
 	config := protocol.MemoryConfig{}
 
-	// 请求统计
+	// DRAM 时序参数（配置参数）
+	if v, ok := data["tcas"].(int); ok {
+		config.TCAS = &v
+	}
+	if v, ok := data["trcd"].(int); ok {
+		config.TRCD = &v
+	}
+	if v, ok := data["trp"].(int); ok {
+		config.TRP = &v
+	}
+	if v, ok := data["tras"].(int); ok {
+		config.TRAS = &v
+	}
+
+	// 拓扑参数
+	if v, ok := data["channels"].(int); ok {
+		config.Channels = &v
+	}
+	if v, ok := data["ranks"].(int); ok {
+		config.Ranks = &v
+	}
+	if v, ok := data["banks"].(int); ok {
+		config.Banks = &v
+	}
+	if v, ok := data["rows"].(int); ok {
+		config.Rows = &v
+	}
+	if v, ok := data["columns"].(int); ok {
+		config.Columns = &v
+	}
+
+	// 请求统计（运行时统计）
 	if v, ok := data["read_requests"].(uint64); ok {
 		intVal := int(v)
 		config.ReadRequests = &intVal
+	} else if v, ok := data["read_requests"].(int); ok {
+		config.ReadRequests = &v
 	}
 	if v, ok := data["write_requests"].(uint64); ok {
 		intVal := int(v)
 		config.WriteRequests = &intVal
+	} else if v, ok := data["write_requests"].(int); ok {
+		config.WriteRequests = &v
 	}
 
 	// Row Buffer 统计
 	if v, ok := data["row_buffer_hits"].(uint64); ok {
 		intVal := int(v)
 		config.RowBufferHits = &intVal
+	} else if v, ok := data["row_buffer_hits"].(int); ok {
+		config.RowBufferHits = &v
 	}
 	if v, ok := data["row_buffer_misses"].(uint64); ok {
 		intVal := int(v)
 		config.RowBufferMisses = &intVal
+	} else if v, ok := data["row_buffer_misses"].(int); ok {
+		config.RowBufferMisses = &v
 	}
 
 	return config
