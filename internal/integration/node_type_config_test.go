@@ -281,6 +281,13 @@ func TestNodeTypeRoundTrip(t *testing.T) {
 	traceFile := "../../testdata/traces/small.champsimtrace"
 	robSize := 128
 	cpuNodeType := protocol.Cpu
+	memNodeType := protocol.MemoryController
+
+	// Memory 配置
+	tcas := 16
+	trcd := 16
+	trp := 16
+	tras := 38
 
 	initialNet := protocol.FlowSimNetwork{
 		Version: &version,
@@ -295,15 +302,58 @@ func TestNodeTypeRoundTrip(t *testing.T) {
 					RobSize:   &robSize,
 				},
 				InPorts:  &[]protocol.Port{{PortId: 0, Bandwidth: bandwidth, BufferSize: &bufferSize}},
-				OutPorts: &[]protocol.Port{{PortId: 0, Bandwidth: bandwidth}},
+				OutPorts: &[]protocol.Port{{PortId: 0, Bandwidth: bandwidth, BufferSize: &bufferSize}},
 				Data:     protocol.Node_Data{Id: "node-0"},
 				Position: struct {
 					X float32 `json:"x"`
 					Y float32 `json:"y"`
 				}{X: 100.0, Y: 100.0},
 			},
+			{
+				NodeId:   1,
+				NodeName: "Memory_0",
+				NodeType: &memNodeType,
+				MemoryConfig: &protocol.MemoryConfig{
+					TCAS: &tcas,
+					TRCD: &trcd,
+					TRP:  &trp,
+					TRAS: &tras,
+				},
+				InPorts:  &[]protocol.Port{{PortId: 0, Bandwidth: bandwidth, BufferSize: &bufferSize}},
+				OutPorts: &[]protocol.Port{{PortId: 0, Bandwidth: bandwidth, BufferSize: &bufferSize}},
+				Data:     protocol.Node_Data{Id: "node-1"},
+				Position: struct {
+					X float32 `json:"x"`
+					Y float32 `json:"y"`
+				}{X: 300.0, Y: 100.0},
+			},
 		},
-		Edges: []protocol.Edge{},
+		Edges: []protocol.Edge{
+			{
+				EdgeId:    1,
+				SrcNodeId: 0,
+				SrcPortId: ptrInt(0),
+				DstNodeId: 1,
+				DstPortId: ptrInt(0),
+				Data: protocol.Edge_Data{
+					Id:     "edge-0-1",
+					Source: "node-0",
+					Target: "node-1",
+				},
+			},
+			{
+				EdgeId:    2,
+				SrcNodeId: 1,
+				SrcPortId: ptrInt(0),
+				DstNodeId: 0,
+				DstPortId: ptrInt(0),
+				Data: protocol.Edge_Data{
+					Id:     "edge-1-0",
+					Source: "node-1",
+					Target: "node-0",
+				},
+			},
+		},
 	}
 
 	// Step 2: 构建网络
@@ -332,39 +382,89 @@ func TestNodeTypeRoundTrip(t *testing.T) {
 	// Step 5: 验证配置保持不变
 	t.Log("Step 5: 验证配置保持不变")
 
-	if len(exportedNet.Nodes) != 1 {
-		t.Fatalf("节点数量错误: 期望=1, 实际=%d", len(exportedNet.Nodes))
+	if len(exportedNet.Nodes) != 2 {
+		t.Fatalf("节点数量错误: 期望=2, 实际=%d", len(exportedNet.Nodes))
 	}
 
-	exportedNode := exportedNet.Nodes[0]
+	// 验证 CPU 节点
+	var cpuNode *protocol.Node
+	for i := range exportedNet.Nodes {
+		if exportedNet.Nodes[i].NodeId == 0 {
+			cpuNode = &exportedNet.Nodes[i]
+			break
+		}
+	}
+	if cpuNode == nil {
+		t.Fatal("未找到 CPU 节点")
+	}
 
 	// 验证 node_type
-	if exportedNode.NodeType == nil || *exportedNode.NodeType != protocol.Cpu {
-		t.Errorf("node_type 改变了: 期望=cpu, 实际=%v", exportedNode.NodeType)
+	if cpuNode.NodeType == nil || *cpuNode.NodeType != protocol.Cpu {
+		t.Errorf("CPU node_type 改变了: 期望=cpu, 实际=%v", cpuNode.NodeType)
 	} else {
-		t.Log("  ✓ node_type 保持不变: cpu")
+		t.Log("  ✓ CPU node_type 保持不变: cpu")
 	}
 
 	// 验证 cpu_config 存在（配置应该保留，统计应该添加）
-	if exportedNode.CpuConfig == nil {
+	if cpuNode.CpuConfig == nil {
 		t.Fatal("cpu_config 丢失")
 	}
 
-	// 验证 ROB size 配置保留（从 configRef 读取）
-	// 注意：当前实现中，ROB size 不在 OpenAPI Schema 的 CPUConfig 中，
-	// 所以可能不会导出。我们主要验证统计数据被正确添加。
-	if exportedNode.CpuConfig.TotalInstructions == nil {
+	// 验证 ROB size 配置保留（Phase 2 实现：从 configRef 读取）
+	if cpuNode.CpuConfig.RobSize == nil {
+		t.Error("CPU rob_size 为 nil，配置参数未正确导出")
+	} else if *cpuNode.CpuConfig.RobSize != robSize {
+		t.Errorf("CPU rob_size 改变了: 期望=%d, 实际=%d", robSize, *cpuNode.CpuConfig.RobSize)
+	} else {
+		t.Logf("  ✓ CPU rob_size 保持不变: %d", *cpuNode.CpuConfig.RobSize)
+	}
+
+	// 验证统计数据被正确添加
+	if cpuNode.CpuConfig.TotalInstructions == nil {
 		t.Error("统计数据未添加: total_instructions 为 nil")
 	} else {
-		t.Logf("  ✓ 统计数据已添加: total_instructions=%d", *exportedNode.CpuConfig.TotalInstructions)
+		t.Logf("  ✓ 统计数据已添加: total_instructions=%d", *cpuNode.CpuConfig.TotalInstructions)
 	}
 
 	// 验证 Position 保持不变
-	if exportedNode.Position.X != 100.0 || exportedNode.Position.Y != 100.0 {
-		t.Errorf("Position 改变了: 期望=(100.0, 100.0), 实际=(%.1f, %.1f)",
-			exportedNode.Position.X, exportedNode.Position.Y)
+	if cpuNode.Position.X != 100.0 || cpuNode.Position.Y != 100.0 {
+		t.Errorf("CPU Position 改变了: 期望=(100.0, 100.0), 实际=(%.1f, %.1f)",
+			cpuNode.Position.X, cpuNode.Position.Y)
 	} else {
-		t.Log("  ✓ Position 保持不变: (100.0, 100.0)")
+		t.Log("  ✓ CPU Position 保持不变: (100.0, 100.0)")
+	}
+
+	// 验证 Memory 节点
+	var memNode *protocol.Node
+	for i := range exportedNet.Nodes {
+		if exportedNet.Nodes[i].NodeId == 1 {
+			memNode = &exportedNet.Nodes[i]
+			break
+		}
+	}
+	if memNode == nil {
+		t.Fatal("未找到 Memory 节点")
+	}
+
+	// 验证 Memory 配置参数保持不变
+	if memNode.MemoryConfig == nil {
+		t.Fatal("Memory memory_config 丢失")
+	}
+
+	if memNode.MemoryConfig.TCAS == nil {
+		t.Error("Memory TCAS 为 nil，配置参数未正确导出")
+	} else if *memNode.MemoryConfig.TCAS != tcas {
+		t.Errorf("Memory TCAS 改变了: 期望=%d, 实际=%d", tcas, *memNode.MemoryConfig.TCAS)
+	} else {
+		t.Logf("  ✓ Memory TCAS 保持不变: %d", *memNode.MemoryConfig.TCAS)
+	}
+
+	// 验证 Memory Position 保持不变
+	if memNode.Position.X != 300.0 || memNode.Position.Y != 100.0 {
+		t.Errorf("Memory Position 改变了: 期望=(300.0, 100.0), 实际=(%.1f, %.1f)",
+			memNode.Position.X, memNode.Position.Y)
+	} else {
+		t.Log("  ✓ Memory Position 保持不变: (300.0, 100.0)")
 	}
 
 	t.Log("\n========== 往返一致性测试通过 ==========")

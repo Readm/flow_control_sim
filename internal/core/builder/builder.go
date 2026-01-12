@@ -347,13 +347,12 @@ func createCPUHandler(nodeID int, cpuConfig *protocol.CPUConfig, outputQueue *qu
 	o3cpu.SetL1DCache(l1dCache)
 
 	// 7. 创建 CPU Handler（使用从拓扑推断的下游节点 ID）
-	var dramID int
-	if len(downstreamIDs) > 0 {
-		dramID = downstreamIDs[0] // 使用第一个下游节点作为 DRAM
-	} else {
-		// 如果没有推断到下游节点，使用默认值（向后兼容）
-		dramID = nodeID + 1
+	if len(downstreamIDs) == 0 {
+		traceReader.Close()
+		return nil, nil, fmt.Errorf("CPU node %d has no downstream connections in topology (no edges from this node)", nodeID)
 	}
+	dramID := downstreamIDs[0] // 使用第一个下游节点作为 DRAM
+
 	cpuHandler := flowsim.NewCPUNodeHandler(
 		nodeID, dramID,
 		o3cpu, l1dCache, memoryAdapter,
@@ -416,13 +415,10 @@ func createMemoryHandler(nodeID int, memConfig *protocol.MemoryConfig, outputQue
 	}
 
 	// 3. 创建 DRAM Handler（使用从拓扑推断的上游 CPU 节点 ID）
-	var cpuID int
-	if len(upstreamIDs) > 0 {
-		cpuID = upstreamIDs[0] // 使用第一个上游节点作为 CPU
-	} else {
-		// 如果没有推断到上游节点，使用默认值（向后兼容）
-		cpuID = nodeID - 1
+	if len(upstreamIDs) == 0 {
+		return nil, fmt.Errorf("Memory node %d has no upstream connections in topology (no edges to this node)", nodeID)
 	}
+	cpuID := upstreamIDs[0] // 使用第一个上游节点作为 CPU
 
 	// DRAMNodeHandler 只支持单个 CPU 和单个输出队列
 	if len(outputQueues) == 0 {
