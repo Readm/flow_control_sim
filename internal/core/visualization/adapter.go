@@ -2,6 +2,7 @@ package visualization
 
 import (
 	"fmt"
+	"log"
 	"math"
 
 	"github.com/Readm/flow_sim/internal/configconv"
@@ -112,24 +113,24 @@ func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
 				replacementPolicy, _ := cacheConfig["replacement_policy"].(string)
 				states, _ := cacheConfig["states"].(string)
 
-			cacheConfigProto := &protocol.CacheConfig{
-				Capacity:          capacity,
-				NumSets:           numSets,
-				ReplacementPolicy: protocol.CacheConfigReplacementPolicy(replacementPolicy),
-				States:            states,
-			}
+				cacheConfigProto := &protocol.CacheConfig{
+					Capacity:          capacity,
+					NumSets:           numSets,
+					ReplacementPolicy: protocol.CacheConfigReplacementPolicy(replacementPolicy),
+					States:            states,
+				}
 
-			// 从 Stats 恢复统计数据
-			if cacheStats, ok := nodeState.Stats["cache"].([]state.CacheState); ok && len(cacheStats) > 0 {
-				c := cacheStats[0]
-				hits := int(c.Hits)
-				misses := int(c.Misses)
-				accesses := int(c.Accesses)
-				cacheConfigProto.Hits = &hits
-				cacheConfigProto.Misses = &misses
-				cacheConfigProto.Accesses = &accesses
-			}
-			node.Cache = cacheConfigProto
+				// 从 Stats 恢复统计数据
+				if cacheStats, ok := nodeState.Stats["cache"].([]state.CacheState); ok && len(cacheStats) > 0 {
+					c := cacheStats[0]
+					hits := int(c.Hits)
+					misses := int(c.Misses)
+					accesses := int(c.Accesses)
+					cacheConfigProto.Hits = &hits
+					cacheConfigProto.Misses = &misses
+					cacheConfigProto.Accesses = &accesses
+				}
+				node.Cache = cacheConfigProto
 			}
 
 			// Directory 配置
@@ -162,15 +163,21 @@ func StateToFlowSimNetwork(ns state.NetworkState) protocol.FlowSimNetwork {
 		// Phase 5: 恢复 CPUConfig（使用通用转换器）
 		if len(nodeState.CPUConfig) > 0 {
 			cpuConfig := protocol.CPUConfig{}
-			configconv.MapToStruct(nodeState.CPUConfig, &cpuConfig)
-			node.CpuConfig = &cpuConfig
+			if err := configconv.MapToStruct(nodeState.CPUConfig, &cpuConfig); err != nil {
+				log.Printf("Error recovering CPUConfig for node %d: %v", nodeState.ID, err)
+			} else {
+				node.CpuConfig = &cpuConfig
+			}
 		}
 
 		// Phase 5: 恢复 MemoryConfig（使用通用转换器）
 		if len(nodeState.MemoryConfig) > 0 {
 			memoryConfig := protocol.MemoryConfig{}
-			configconv.MapToStruct(nodeState.MemoryConfig, &memoryConfig)
-			node.MemoryConfig = &memoryConfig
+			if err := configconv.MapToStruct(nodeState.MemoryConfig, &memoryConfig); err != nil {
+				log.Printf("Error recovering MemoryConfig for node %d: %v", nodeState.ID, err)
+			} else {
+				node.MemoryConfig = &memoryConfig
+			}
 		}
 
 		// 从 DisplayData 恢复显示信息
@@ -387,4 +394,3 @@ func getNodeColor(nodeType string) string {
 		return "#999999" // Grey
 	}
 }
-
