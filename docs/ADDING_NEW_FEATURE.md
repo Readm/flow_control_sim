@@ -23,19 +23,33 @@
 项目采用 **Schema-First** 设计：
 
 ```
-OpenAPI Schema (web/openapi.yaml)
-    ↓ 代码生成
-Protocol Types (internal/core/visualization/protocol/types.gen.go)
-    ↓ Builder 读取
-Handler 配置 (internal/nodes/cpu/champsim/...)
-    ↓ 通用转换器
-往返保留 (configconv 包自动处理)
+                    OpenAPI Schema (web/openapi.yaml)
+                                |
+                    ┌───────────┴───────────┐
+                    |                       |
+            【后端代码生成】           【前端代码生成】
+                    ↓                       ↓
+        Go Protocol Types           TypeScript Types
+    (types.gen.go)                  (web_dev/src/types/api.ts)
+                    ↓                       ↓
+        ┌───────────┴──────┐               |
+        |                  |               |
+    Builder 读取      HTTP API         前端使用
+    (类型安全)        (JSON验证)      (类型检查)
+        ↓
+    Handler 配置
+    (champsim/...)
+        ↓
+    通用转换器 (configconv 包)
+        ↓
+    往返一致性保留 ✅
 ```
 
 **关键特性：**
-- ✅ **零假设原则**：框架代码不知道具体字段
+- ✅ **零假设原则**：框架代码不知道具体字段（反射自动处理）
 - ✅ **自动往返保留**：新字段无需修改转换代码
-- ✅ **类型安全**：通过 OpenAPI Schema 保证
+- ✅ **类型安全**：后端 Go + 前端 TypeScript 都有编译期检查
+- ✅ **单一数据源**：OpenAPI Schema 同时驱动后端和前端
 
 ---
 
@@ -81,18 +95,37 @@ CPUConfig:
 - `enum`：枚举（限定可选值）
 - `$ref`：引用其他 Schema（嵌套对象）
 
-### 步骤 2：重新生成 Protocol 类型
+### 步骤 2：重新生成类型定义
 
-运行代码生成脚本：
+> **💡 为什么需要生成代码？**
+>
+> 项目采用 **Schema-First** 设计，`openapi.yaml` 是类型的唯一数据源。
+> 修改 Schema 后，需要生成两种类型定义：
+>
+> 1. **Go 类型**：给后端 Builder/HTTP API 使用（类型安全）
+> 2. **TypeScript 类型**：给前端 React/Vue 使用（类型安全）
+>
+> **注意：** 这里生成的是**类型定义本身**（`protocol.CPUConfig` 结构体），
+> 不是生成转换器函数。项目使用反射方案，转换器由 `configconv` 包自动处理。
+
+#### 方式 1：手动运行生成脚本
 
 ```bash
+# 生成 Go 类型（必需）
 ./scripts/generate_go_types.sh
+
+# 生成 TypeScript 类型（如果有前端开发环境）
+./scripts/generate_ts_types.sh
 ```
 
-这会更新：
-- `internal/core/visualization/protocol/types.gen.go`
+**生成内容：**
 
-生成的代码示例：
+| 脚本 | 输出文件 | 用途 |
+|------|---------|------|
+| `generate_go_types.sh` | `internal/core/visualization/protocol/types.gen.go` | 后端 Builder 读取配置 |
+| `generate_ts_types.sh` | `web_dev/src/types/api.ts` | 前端 TypeScript 类型检查 |
+
+**生成的 Go 代码示例：**
 
 ```go
 type CPUConfig struct {
@@ -102,7 +135,51 @@ type CPUConfig struct {
 }
 ```
 
-**注意：** 所有字段都是指针类型（`*string`, `*int`），表示可选。
+**生成的 TypeScript 代码示例：**
+
+```typescript
+export interface CPUConfig {
+  branch_predictor_type?: "perceptron" | "gshare" | "bimodal" | "tage";
+  branch_predictor_size?: number;
+  // ...
+}
+```
+
+#### 方式 2：通过 Git Hooks 自动生成（推荐）
+
+配置 Git hooks（只需一次）：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+配置后，**每次提交 `openapi.yaml` 时会自动生成**：
+
+```bash
+vim web/openapi.yaml   # 修改 Schema
+git add web/openapi.yaml
+git commit             # 自动触发生成 ✅
+```
+
+**Hook 执行流程：**
+
+```
+git commit
+    ↓
+检测到 openapi.yaml 变化
+    ↓
+自动运行 ./scripts/generate_go_types.sh
+    ↓
+自动运行 ./scripts/generate_ts_types.sh（如果 web_dev 存在）
+    ↓
+自动 git add types.gen.go
+    ↓
+提交完成 ✅
+```
+
+**注意：**
+- 所有字段都是指针类型（`*string`, `*int`），表示可选
+- 如果字段未在 JSON 中提供，指针为 `nil`
 
 ### 步骤 3：在 Builder 中读取配置
 
@@ -504,7 +581,37 @@ go test -v ./internal/integration -run TestCPUMemoryNodeTypeConfig
 
 ---
 
-### Q2: 如何验证新字段正确工作？
+### Q2: 为什么需要两个代码生成步骤？Go 和 TypeScript 都要生成吗？
+
+**A:** 是的，项目采用 **Schema-First** 架构，`openapi.yaml` 是类型的唯一数据源：
+
+**两个生成步骤：**
+1. **Go 类型生成**（必需）：
+   - 输出：`internal/core/visualization/protocol/types.gen.go`
+   - 用途：后端 Builder 读取配置、HTTP API 验证 JSON
+   - 工具：`oapi-codegen`
+
+2. **TypeScript 类型生成**（如果有前端）：
+   - 输出：`web_dev/src/types/api.ts`
+   - 用途：前端 TypeScript 类型检查、IDE 自动补全
+   - 工具：`openapi-typescript`
+
+**为什么不能省略？**
+
+| 省略步骤 | 后果 |
+|---------|------|
+| 不生成 Go 类型 | Builder 无法读取配置，HTTP API 无法验证 JSON |
+| 不生成 TS 类型 | 前端失去类型检查，容易出现字段名拼写错误 |
+
+**好消息：** 配置 Git hooks 后（`git config core.hooksPath .githooks`），
+提交 `openapi.yaml` 时会**自动生成两者**，开发者无需手动执行。
+
+**注意：** 这里生成的是**类型定义**（结构体/接口），不是转换器函数。
+项目使用反射方案，`configconv` 包自动处理所有类型的转换。
+
+---
+
+### Q3: 如何验证新字段正确工作？
 
 **A:** 运行往返一致性测试：
 
@@ -520,7 +627,7 @@ go test -v ./internal/integration -run TestNodeTypeRoundTrip
 
 ---
 
-### Q3: 如果忘记在 Builder 中读取新字段会怎样？
+### Q4: 如果忘记在 Builder 中读取新字段会怎样？
 
 **A:**
 - ✅ 配置仍能往返保留（导出的 JSON 会包含原始值）
@@ -530,7 +637,7 @@ go test -v ./internal/integration -run TestNodeTypeRoundTrip
 
 ---
 
-### Q4: 如何处理嵌套配置对象？
+### Q5: 如何处理嵌套配置对象？
 
 **A:** 在 Schema 中使用 `$ref` 引用：
 
@@ -556,7 +663,7 @@ CacheConfig:
 
 ---
 
-### Q5: 如何处理数组字段？
+### Q6: 如何处理数组字段？
 
 **A:** 使用 `array` 类型：
 
@@ -588,7 +695,7 @@ type CPUConfig struct {
 
 ---
 
-### Q6: 如何添加仅统计字段（不是配置）？
+### Q7: 如何添加仅统计字段（不是配置）？
 
 **A:** 只在 Schema 中定义，不在 Builder 中读取：
 
@@ -613,7 +720,7 @@ func (h *CPUNodeHandler) ExportStats() map[string]interface{} {
 
 ---
 
-### Q7: 如何强制用户提供某个字段？
+### Q8: 如何强制用户提供某个字段？
 
 **A:** 方法 1（推荐）：在 Builder 中手动检查
 
