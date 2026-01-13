@@ -61,7 +61,7 @@ func Test_Simple_FlowSim_Ping(t *testing.T) {
 	receiverNode.SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 		if len(inputs) > 0 {
 			for _, ref := range inputs[0] {
-				t.Logf("Cycle %d: Receiver got packet: %s", cycle, ref.Packet.Payload)
+				t.Logf("Cycle %d: Receiver got packet: %s", cycle, ref.Packet.Metadata["payload"])
 				receivedCount++
 				ref.Queue.Free(ref.Slot)
 			}
@@ -145,7 +145,7 @@ func Test_PortNaming_Example(t *testing.T) {
 	receiverA.SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 		for _, q := range inputs {
 			for _, ref := range q {
-				t.Logf("Receiver A got: %v", ref.Packet.Payload)
+				t.Logf("Receiver A got: %v", ref.Packet.Metadata["payload"])
 				receivedA++
 				ref.Queue.Free(ref.Slot)
 			}
@@ -157,7 +157,7 @@ func Test_PortNaming_Example(t *testing.T) {
 	receiverB.SetProcessHook(func(cycle uint64, inputs [][]queue.PacketRef) error {
 		for _, q := range inputs {
 			for _, ref := range q {
-				t.Logf("Receiver B got: %v", ref.Packet.Payload)
+				t.Logf("Receiver B got: %v", ref.Packet.Metadata["payload"])
 				receivedB++
 				ref.Queue.Free(ref.Slot)
 			}
