@@ -157,7 +157,7 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	if len(received) != 1 {
 		t.Fatalf("expected 1 packet, got %d", len(received))
 	}
-	if received[0].Payload != "early" {
-		t.Fatalf("expected payload 'early', got %q", received[0].Payload)
+	if received[0].Metadata["payload"] != "early" {
+		t.Fatalf("expected payload 'early', got %q", received[0].Metadata["payload"])
 	}
 }

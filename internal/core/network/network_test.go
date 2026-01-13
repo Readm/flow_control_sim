@@ -54,8 +54,8 @@ func TestNetworkAdvanceMesh(t *testing.T) {
 		t.Fatalf("connect 1->2: %v", err)
 	}
 
-	mustInject(t, outputs0[0], 0, packet.Packet{Payload: "A->B"})
-	mustInject(t, outputs0[1], 0, packet.Packet{Payload: "A->C"})
+	mustInject(t, outputs0[0], 0, packet.Packet{Metadata: map[string]interface{}{"payload": "A->B"}})
+	mustInject(t, outputs0[1], 0, packet.Packet{Metadata: map[string]interface{}{"payload": "A->C"}})
 
 	if err := net.AdvanceTo(net.CurrentCycle() + 6 - 1); err != nil {
 		t.Fatalf("Advance mesh: %v", err)
@@ -108,7 +108,7 @@ func TestNetworkAdvanceRing(t *testing.T) {
 		t.Fatalf("connect 2->0: %v", err)
 	}
 
-	mustInject(t, outputs0[0], 0, packet.Packet{Payload: "ring"})
+	mustInject(t, outputs0[0], 0, packet.Packet{Metadata: map[string]interface{}{"payload": "ring"}})
 
 	if err := net.AdvanceTo(net.CurrentCycle() + 9 - 1); err != nil {
 		t.Fatalf("Advance ring: %v", err)
@@ -235,7 +235,7 @@ func TestNetworkAdvanceInterleavesComponentCycles(t *testing.T) {
 
 	recNode0 := newPacketRecorder()
 	fnInputs0[0].SetPacketReceivedHook(recNode0.Record)
-	mustInject(t, fnOutputs0[0], 0, packet.Packet{Payload: "ping"})
+	mustInject(t, fnOutputs0[0], 0, packet.Packet{Metadata: map[string]interface{}{"payload": "ping"}})
 	if err := fnNet.AdvanceTo(fnNet.CurrentCycle() + payloadAdvanceCycles - 1); err != nil {
 		t.Fatalf("functional Advance for payload delivery: %v", err)
 	}
@@ -319,7 +319,7 @@ func (r *packetRecorder) Payloads() []string {
 	defer r.mu.Unlock()
 	result := make([]string, len(r.packets))
 	for i, pkt := range r.packets {
-		result[i] = string(pkt.Payload)
+		result[i] = pkt.Metadata["payload"].(string)
 	}
 	return result
 }

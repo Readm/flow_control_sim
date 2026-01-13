@@ -60,9 +60,9 @@ func TestInjectPackets(t *testing.T) {
 	oq := NewOutputQueue(10, 2)
 
 	packets := []packet.Packet{
-		{SourceID: 1, TargetID: 2, Payload: "packet1"},
-		{SourceID: 1, TargetID: 3, Payload: "packet2"},
-		{SourceID: 1, TargetID: 4, Payload: "packet3"},
+		{SourceID: 1, TargetID: 2, Metadata: map[string]interface{}{"payload": "packet1"}},
+		{SourceID: 1, TargetID: 3, Metadata: map[string]interface{}{"payload": "packet2"}},
+		{SourceID: 1, TargetID: 4, Metadata: map[string]interface{}{"payload": "packet3"}},
 	}
 
 	err := oq.InjectPackets(0, packets)
@@ -83,7 +83,7 @@ func TestInjectPacketsOverflow(t *testing.T) {
 
 	packets := make([]packet.Packet, 5)
 	for i := range packets {
-		packets[i] = packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"}
+		packets[i] = packet.Packet{SourceID: 1, TargetID: 2, Metadata: map[string]interface{}{"payload": "test"}}
 	}
 
 	err := oq.InjectPackets(0, packets)
@@ -104,7 +104,7 @@ func TestTickWithoutOutPort(t *testing.T) {
 
 	oq := NewOutputQueue(10, 1)
 
-	packets := []packet.Packet{{SourceID: 1, TargetID: 2, Payload: "test"}}
+	packets := []packet.Packet{{SourceID: 1, TargetID: 2, Metadata: map[string]interface{}{"payload": "test"}}}
 	oq.InjectPackets(0, packets)
 
 	// Should not panic when port is nil
@@ -134,8 +134,8 @@ func TestTickSendPackets(t *testing.T) {
 
 	// Inject packets
 	packets := []packet.Packet{
-		{SourceID: 1, TargetID: 2, Payload: "packet1"},
-		{SourceID: 1, TargetID: 3, Payload: "packet2"},
+		{SourceID: 1, TargetID: 2, Metadata: map[string]interface{}{"payload": "packet1"}},
+		{SourceID: 1, TargetID: 3, Metadata: map[string]interface{}{"payload": "packet2"}},
 	}
 	oq.InjectPackets(0, packets)
 
@@ -181,7 +181,7 @@ func TestTickRespectsBandwidth(t *testing.T) {
 	// Inject 4 packets
 	packets := make([]packet.Packet, 4)
 	for i := range packets {
-		packets[i] = packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"}
+		packets[i] = packet.Packet{SourceID: 1, TargetID: 2, Metadata: map[string]interface{}{"payload": "test"}}
 	}
 	oq.InjectPackets(0, packets)
 
@@ -247,8 +247,8 @@ func TestPacketSentHook(t *testing.T) {
 
 	// Inject and send packets
 	packets := []packet.Packet{
-		{SourceID: 1, TargetID: 2, Payload: "packet1"},
-		{SourceID: 1, TargetID: 3, Payload: "packet2"},
+		{SourceID: 1, TargetID: 2, Metadata: map[string]interface{}{"payload": "packet1"}},
+		{SourceID: 1, TargetID: 3, Metadata: map[string]interface{}{"payload": "packet2"}},
 	}
 	oq.InjectPackets(0, packets)
 
@@ -283,7 +283,7 @@ func TestOutputQueueIsFullCapacity(t *testing.T) {
 	// Fill the queue
 	packets := make([]packet.Packet, 3)
 	for i := range packets {
-		packets[i] = packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"}
+		packets[i] = packet.Packet{SourceID: 1, TargetID: 2, Metadata: map[string]interface{}{"payload": "test"}}
 	}
 	oq.InjectPackets(0, packets)
 

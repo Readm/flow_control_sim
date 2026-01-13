@@ -101,7 +101,7 @@ func TestDeadlockDiagnosis(t *testing.T) {
 			pkt := packet.Packet{
 				SourceID: 0,
 				TargetID: 1,
-				Payload:  "test",
+				Metadata: map[string]interface{}{"payload": "test"},
 			}
 			fmt.Printf("[Node0 Hook] Attempting to inject packet at cycle=%d\n", cycle)
 			if err := output0.InjectPackets(int(cycle), []packet.Packet{pkt}); err != nil {

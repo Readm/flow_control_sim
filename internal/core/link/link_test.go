@@ -53,8 +53,8 @@ func TestLinkBasicFunctionality(t *testing.T) {
 	if len(received) != 1 {
 		t.Fatalf("expected 1 packet, got %d", len(received))
 	}
-	if received[0].Payload != "test" {
-		t.Fatalf("unexpected payload %q", received[0].Payload)
+	if received[0].Metadata["payload"] != "test" {
+		t.Fatalf("unexpected payload %q", received[0].Metadata["payload"])
 	}
 }
 
@@ -102,8 +102,8 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	if len(received) != 2 {
 		t.Fatalf("expected 2 packets, got %d", len(received))
 	}
-	if received[0].Payload != "test1" || received[1].Payload != "test2" {
-		t.Fatalf("unexpected payload order: %q, %q", received[0].Payload, received[1].Payload)
+	if received[0].Metadata["payload"] != "test1" || received[1].Metadata["payload"] != "test2" {
+		t.Fatalf("unexpected payload order: %q, %q", received[0].Metadata["payload"], received[1].Metadata["payload"])
 	}
 }
 
@@ -137,7 +137,7 @@ func TestLinkBandwidthLimit(t *testing.T) {
 
 	for _, pkt := range packets {
 		if !upstream.SendPacket(0, pkt) {
-			t.Fatalf("Failed to send packet %s", pkt.Payload)
+			t.Fatalf("Failed to send packet %v", pkt.Metadata["payload"])
 		}
 	}
 	upstream.MarkDone(0)

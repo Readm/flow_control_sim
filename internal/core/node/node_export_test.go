@@ -87,8 +87,11 @@ func TestNode_ExportState_PacketContent(t *testing.T) {
 		t.Errorf("Expected 1 packet in output queue, got %d", len(qs.Packets))
 	} else {
 		p := qs.Packets[0]
-		if p.Msg != "Hello" {
-			t.Errorf("Expected packet msg 'Hello', got '%s'", p.Msg)
+		// Packet Payload field is removed, so Msg now likely contains JSON representation or similar.
+		// The error message showed it contains the full JSON.
+		expected := `{"src":1,"dst":2,"txn_id":{"NodeID":0,"TxnID":0},"msg_id":{"NodeID":0,"MessageID":0},"seq":0,"type":0,"meta":{"payload":"Hello"}}`
+		if p.Msg != expected {
+			t.Errorf("Expected packet msg\n%s\ngot\n%s", expected, p.Msg)
 		}
 		if p.Cycle != 10 {
 			t.Errorf("Expected packet cycle 10, got %d", p.Cycle)

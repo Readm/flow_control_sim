@@ -44,7 +44,7 @@ func TestInputQueueReceive(t *testing.T) {
 	iq.fromUpstream.UpdateReady(1, true)
 
 	// Send packet from upstream for cycle 1
-	pkt := packet.Packet{SourceID: 1, TargetID: 2, Payload: "test"}
+	pkt := packet.Packet{SourceID: 1, TargetID: 2, Metadata: map[string]interface{}{"payload": "test"}}
 
 	// Run upstream operations in goroutine
 	go func() {

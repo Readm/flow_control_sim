@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/components/cache"
 	"github.com/Readm/flow_sim/internal/components/directory"
+	"github.com/Readm/flow_sim/internal/core/ahead_port"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
@@ -65,12 +65,12 @@ func TestNodeCollectsPacketsAndUpdatesBuffer(t *testing.T) {
 
 	iq1 := &mockInputQueue{
 		picks: [][]packet.Packet{
-			{{Payload: "a"}, {Payload: "b"}},
+			{{Metadata: map[string]interface{}{"payload": "a"}}, {Metadata: map[string]interface{}{"payload": "b"}}},
 		},
 	}
 	iq2 := &mockInputQueue{
 		picks: [][]packet.Packet{
-			{{Payload: "c"}},
+			{{Metadata: map[string]interface{}{"payload": "c"}}},
 		},
 	}
 	oq := &mockOutputQueue{}
@@ -98,8 +98,8 @@ func TestNodeCollectsPacketsAndUpdatesBuffer(t *testing.T) {
 	// iq1 then iq2
 	want := []string{"a", "b", "c"}
 	for i, pkt := range buf {
-		if string(pkt.Payload) != want[i] {
-			t.Fatalf("buffer[%d] = %s, want %s", i, pkt.Payload, want[i])
+		if pkt.Metadata["payload"].(string) != want[i] {
+			t.Fatalf("buffer[%d] = %s, want %s", i, pkt.Metadata["payload"], want[i])
 		}
 	}
 

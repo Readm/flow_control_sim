@@ -157,11 +157,11 @@ func TestBufferedLinkHandler_AddToSlot(t *testing.T) {
 		t.Fatalf("Expected 2 packets in slot, got %d", len(slot))
 	}
 
-	if slot[0].Packet.Payload != "pkt1" {
-		t.Errorf("Expected pkt1, got %v", slot[0].Packet.Payload)
+	if slot[0].Packet.Metadata["payload"].(string) != "pkt1" {
+		t.Errorf("Expected pkt1, got %v", slot[0].Packet.Metadata["payload"])
 	}
-	if slot[1].Packet.Payload != "pkt2" {
-		t.Errorf("Expected pkt2, got %v", slot[1].Packet.Payload)
+	if slot[1].Packet.Metadata["payload"].(string) != "pkt2" {
+		t.Errorf("Expected pkt2, got %v", slot[1].Packet.Metadata["payload"])
 	}
 }
 
@@ -271,8 +271,8 @@ func TestBufferedLinkHandler_BackpressureAffectsSlotIndex(t *testing.T) {
 	if len(slot1) != 1 {
 		t.Fatalf("Expected 1 packet in slot for cycle 1, got %d", len(slot1))
 	}
-	if slot1[0].Packet.Payload != "test2" {
-		t.Errorf("Expected test2, got %v", slot1[0].Packet.Payload)
+	if slot1[0].Packet.Metadata["payload"].(string) != "test2" {
+		t.Errorf("Expected test2, got %v", slot1[0].Packet.Metadata["payload"])
 	}
 }
 

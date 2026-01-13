@@ -104,7 +104,7 @@ func TestBufferlessRing_SinglePacket_v2(t *testing.T) {
 	testPacket := packet.Packet{
 		SourceID: 0,
 		TargetID: 1,
-		Payload:  "Test packet from Worker0 to Worker1",
+		Metadata: map[string]interface{}{"payload": "Test packet from Worker0 to Worker1"},
 	}
 
 	if err := workerOutputs[0].InjectPackets(0, []packet.Packet{testPacket}); err != nil {
@@ -150,8 +150,8 @@ func TestBufferlessRing_SinglePacket_v2(t *testing.T) {
 	if receivedPackets[0].TargetID != 1 {
 		t.Errorf("Expected TargetID=1, got %d", receivedPackets[0].TargetID)
 	}
-	if receivedPackets[0].Payload != testPacket.Payload {
-		t.Errorf("Payload mismatch: expected %q, got %q", testPacket.Payload, receivedPackets[0].Payload)
+	if receivedPackets[0].Metadata["payload"] != testPacket.Metadata["payload"] {
+		t.Errorf("Payload mismatch: expected %q, got %q", testPacket.Metadata["payload"], receivedPackets[0].Metadata["payload"])
 	}
 
 	t.Log(" Test passed: 2-hop packet delivered successfully")
@@ -371,7 +371,7 @@ func TestBufferlessRing_TwoHops_v2(t *testing.T) {
 	pkt := packet.Packet{
 		SourceID: 0,
 		TargetID: 2,
-		Payload:  "Test packet from Worker0 to Worker2",
+		Metadata: map[string]interface{}{"payload": "Test packet from Worker0 to Worker2"},
 	}
 
 	if err := workerOutputs[0].InjectPackets(0, []packet.Packet{pkt}); err != nil {

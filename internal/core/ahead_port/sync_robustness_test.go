@@ -44,7 +44,7 @@ func TestAsynchronousDrift(t *testing.T) {
 		if len(pkts) != 1 {
 			t.Fatalf("Downstream: cycle %d expected 1 packet, got %d", cycle, len(pkts))
 		}
-		if pkts[0].Payload != fmt.Sprintf("p%d", cycle) {
+		if pkts[0].Metadata["payload"].(string) != fmt.Sprintf("p%d", cycle) {
 			t.Errorf("Downstream: cycle %d payload mismatch", cycle)
 		}
 		atomic.AddInt64(&receivedCount, 1)
@@ -78,7 +78,7 @@ func TestProtocolViolation_LateReceive(t *testing.T) {
 	// Downstream calls Receive(0) WITHOUT calling WaitDone(0)
 	// It should still block and eventually return the packet.
 	pkts := out.Receive(0)
-	if len(pkts) != 1 || pkts[0].Payload != "late" {
+	if len(pkts) != 1 || pkts[0].Metadata["payload"].(string) != "late" {
 		t.Fatalf("Expected 1 'late' packet, got %v", pkts)
 	}
 }
