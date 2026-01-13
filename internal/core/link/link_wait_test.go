@@ -32,7 +32,7 @@ func TestLinkWaitLogic(t *testing.T) {
 	downstream.UpdateReady(5, true)
 
 	// Send packet at cycle 0
-	if !upstream.SendPacket(0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}) {
+	if !upstream.SendPacket(0, packet.Packet{SourceID: 0, TargetID: 1, Metadata: map[string]interface{}{"payload": "test"}}) {
 		t.Fatal("Failed to send packet")
 	}
 	upstream.MarkDone(0)
@@ -48,7 +48,7 @@ func TestLinkWaitLogic(t *testing.T) {
 
 	// Send packet at cycle 1 but don't mark done yet
 	downstream.UpdateReady(5, true)
-	if !upstream.SendPacket(1, packet.Packet{SourceID: 0, TargetID: 1, Payload: "wait"}) {
+	if !upstream.SendPacket(1, packet.Packet{SourceID: 0, TargetID: 1, Metadata: map[string]interface{}{"payload": "wait"}}) {
 		t.Fatal("Failed to send packet")
 	}
 
@@ -140,7 +140,7 @@ func TestLinkWaitLogicEarlyProcessing(t *testing.T) {
 	downstream.UpdateReady(4, true)
 
 	// Send packet at cycle 0
-	if !upstream.SendPacket(0, packet.Packet{SourceID: 0, TargetID: 1, Payload: "early"}) {
+	if !upstream.SendPacket(0, packet.Packet{SourceID: 0, TargetID: 1, Metadata: map[string]interface{}{"payload": "early"}}) {
 		t.Fatal("Failed to send packet")
 	}
 	upstream.MarkDone(0)

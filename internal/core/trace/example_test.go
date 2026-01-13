@@ -65,7 +65,7 @@ func TestTraceBasic(t *testing.T) {
 	node1.InjectPacket(packet.Packet{
 		SourceID: 1,
 		TargetID: 2,
-		Payload:  "test",
+		Metadata: map[string]interface{}{"payload": "test"},
 	})
 
 	// 5. 运行几个 cycles

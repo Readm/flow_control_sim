@@ -37,8 +37,10 @@ func RunScalingBenchmark(b *testing.B, name string, testFunc func(b *testing.B, 
 		iterationStartStats := network.CollectGlobalRuntimeStats()
 
 		// Check and start profiling if requested
-		if profiler, err := StartProfiling(fmt.Sprintf("%s_Cores_%d", name, coreCount)); err == nil && profiler != nil {
-			defer profiler.StopAndAnalyze()
+		// Check and start profiling if requested
+		var profiler *Profiler
+		if p, err := StartProfiling(fmt.Sprintf("%s_Cores_%d", name, coreCount)); err == nil && p != nil {
+			profiler = p
 		} else if err != nil {
 			b.Logf("Failed to start profiling: %v", err)
 		}
@@ -54,6 +56,10 @@ func RunScalingBenchmark(b *testing.B, name string, testFunc func(b *testing.B, 
 			// Capture the network from the latest iteration
 			lastNet = net
 		})
+
+		if profiler != nil {
+			profiler.StopAndAnalyze()
+		}
 
 		// Print global stats after the sub-benchmark finishes (only once per core count)
 		if lastNet != nil {

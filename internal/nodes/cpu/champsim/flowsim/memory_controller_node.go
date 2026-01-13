@@ -4,6 +4,8 @@ package flowsim
 // 负责将内存请求路由到多个 DRAM 通道
 
 import (
+	"fmt"
+
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
@@ -101,27 +103,31 @@ func (h *MemoryControllerHandler) Process(cycle uint64, inputs [][]queue.PacketR
 
 // handleUpstreamRequest 处理来自上游Cache节点的请求
 func (h *MemoryControllerHandler) handleUpstreamRequest(cycle uint64, pkt packet.Packet) error {
-	payload, err := ParseMemoryRequestPayload(pkt)
-	if err != nil {
-		return err
+	// 1. Check type
+	if pkt.Type != PacketTypeMemoryRequest {
+		return fmt.Errorf("invalid packet type for MemoryController: %d", pkt.Type)
 	}
 
 	h.stats.TotalRequests++
 
 	// 根据地址选择 DRAM Channel
-	channelIndex := h.selectChannel(payload.Address)
+	channelIndex := h.selectChannel(pkt.Addr)
 	h.stats.RequestsPerChannel[channelIndex]++
 
 	// 转发请求到选定的 DRAM Channel
 	dramNodeID := h.dramChannelIDs[channelIndex]
+
+	// Create new packet or copy and modify
+	// Since we are routing, efficient copy is better, but using factory ensures correctness of Type
+	// Using factory (fields are native, so cheap)
 	requestPkt := NewMemoryRequestPacket(
 		h.nodeID,
 		dramNodeID,
-		payload.Address,
-		payload.VAddress,
-		payload.InstrID,
-		payload.IsWrite,
-		payload.Data,
+		pkt.Addr,
+		pkt.VAddr,
+		pkt.InstrID,
+		pkt.Op == OpWrite, // Convert Int Op back to bool for factory, or update factory? Factory takes bool.
+		pkt.Data,
 	)
 
 	// outputQueues[0..numUpstream-1] 是到上游Cache的
@@ -135,9 +141,9 @@ func (h *MemoryControllerHandler) handleUpstreamRequest(cycle uint64, pkt packet
 
 // handleDRAMResponse 处理来自 DRAM 的响应
 func (h *MemoryControllerHandler) handleDRAMResponse(cycle uint64, pkt packet.Packet) error {
-	payload, err := ParseMemoryResponsePayload(pkt)
-	if err != nil {
-		return err
+	// 1. Check type
+	if pkt.Type != PacketTypeMemoryResponse {
+		return fmt.Errorf("invalid response type for MemoryController: %d", pkt.Type)
 	}
 
 	h.stats.Responses++
@@ -164,9 +170,9 @@ func (h *MemoryControllerHandler) handleDRAMResponse(cycle uint64, pkt packet.Pa
 	responsePkt := NewMemoryResponsePacket(
 		h.nodeID,
 		h.upstreamNodeIDs[upstreamIndex],
-		payload.Address,
-		payload.Data,
-		payload.InstrID,
+		pkt.Addr,
+		pkt.Data,
+		pkt.InstrID,
 		cycle,
 	)
 
@@ -212,8 +218,8 @@ func (h *MemoryControllerHandler) GetStats() MemoryControllerStats {
 // Returns memory controller statistics.
 func (h *MemoryControllerHandler) ExportStats() map[string]interface{} {
 	stats := map[string]interface{}{
-		"total_requests":      h.stats.TotalRequests,
-		"responses":           h.stats.Responses,
+		"total_requests":       h.stats.TotalRequests,
+		"responses":            h.stats.Responses,
 		"requests_per_channel": h.stats.RequestsPerChannel,
 	}
 

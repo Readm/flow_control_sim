@@ -64,6 +64,13 @@ func (p *Profiler) StopAndAnalyze() {
 	}
 
 	// Parse and Analyze
+	fmt.Println("----- Top Functions -----")
+	lines := strings.Split(string(output), "\n")
+	for i := 0; i < 20 && i < len(lines); i++ {
+		fmt.Println(lines[i])
+	}
+	fmt.Println("-------------------------")
+
 	analyzeProfileOutput(string(output))
 }
 

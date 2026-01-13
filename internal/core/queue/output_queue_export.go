@@ -1,6 +1,8 @@
 package queue
 
 import (
+	"encoding/json"
+
 	"github.com/Readm/flow_sim/internal/core/state"
 )
 
@@ -26,11 +28,15 @@ func (oq *OutputQueue) ExportState(cfg state.ExportConfig) state.QueueState {
 		curr := oq.head
 		for i := 0; i < count; i++ {
 			pkt := oq.buffer[curr]
+
+			// Serialize for visualization
+			msgBytes, _ := json.Marshal(pkt.Packet)
+
 			qs.Packets = append(qs.Packets, state.PacketState{
 				Src:   pkt.Packet.SourceID,
 				Dst:   pkt.Packet.TargetID,
 				Cycle: pkt.Cycle,
-				Msg:   pkt.Packet.Payload,
+				Msg:   string(msgBytes),
 				Type:  "Packet",
 			})
 			curr = (curr + 1) % oq.capacity

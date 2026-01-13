@@ -3,7 +3,6 @@ package flowsim
 // packet.go 定义 ChampSim 内存系统在 flow_sim 框架中使用的 Packet 类型
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
@@ -15,26 +14,11 @@ const (
 	PacketTypeMemoryResponse = 2 // 内存响应（Fill）
 )
 
-// MemoryRequestPayload 内存请求的 Payload
-//
-// 对应 ChampSim 的 DRAM_PACKET 或 Cache 的 miss request
-type MemoryRequestPayload struct {
-	Address  uint64 `json:"address"`   // 物理地址
-	VAddress uint64 `json:"v_address"` // 虚拟地址
-	InstrID  uint64 `json:"instr_id"`  // 指令ID
-	IsWrite  bool   `json:"is_write"`  // 是否为写操作
-	Data     uint64 `json:"data"`      // 数据（仅Store时有效）
-}
-
-// MemoryResponsePayload 内存响应的 Payload
-//
-// 对应 ChampSim 的 fill response
-type MemoryResponsePayload struct {
-	Address uint64 `json:"address"` // 物理地址
-	Data    uint64 `json:"data"`    // 返回的数据
-	InstrID uint64 `json:"instr_id"` // 指令ID（用于通知CPU）
-	Cycle   uint64 `json:"cycle"`   // 完成周期
-}
+// Op constants for MemoryRequest
+const (
+	OpRead  = 0
+	OpWrite = 1
+)
 
 // NewMemoryRequestPacket 创建内存请求 Packet
 //
@@ -52,22 +36,22 @@ func NewMemoryRequestPacket(
 	isWrite bool,
 	data uint64,
 ) packet.Packet {
-	payload := MemoryRequestPayload{
-		Address:  addr,
-		VAddress: vaddr,
-		InstrID:  instrID,
-		IsWrite:  isWrite,
-		Data:     data,
+	op := OpRead
+	if isWrite {
+		op = OpWrite
 	}
-
-	// 序列化为JSON
-	payloadJSON, _ := json.Marshal(payload)
 
 	return packet.Packet{
 		SourceID: sourceID,
 		TargetID: targetID,
-		Payload:  string(payloadJSON),
 		Type:     PacketTypeMemoryRequest,
+
+		// Use native fields
+		Addr:    addr,
+		VAddr:   vaddr,
+		InstrID: instrID,
+		Op:      op,
+		Data:    data,
 	}
 }
 
@@ -84,48 +68,33 @@ func NewMemoryResponsePacket(
 	sourceID, targetID int,
 	addr, data, instrID, cycle uint64,
 ) packet.Packet {
-	payload := MemoryResponsePayload{
-		Address: addr,
+	return packet.Packet{
+		SourceID: sourceID,
+		TargetID: targetID,
+		Type:     PacketTypeMemoryResponse,
+
+		// Use native fields
+		Addr:    addr,
 		Data:    data,
 		InstrID: instrID,
 		Cycle:   cycle,
 	}
-
-	// 序列化为JSON
-	payloadJSON, _ := json.Marshal(payload)
-
-	return packet.Packet{
-		SourceID: sourceID,
-		TargetID: targetID,
-		Payload:  string(payloadJSON),
-		Type:     PacketTypeMemoryResponse,
-	}
 }
 
-// ParseMemoryRequestPayload 解析内存请求 Payload
-func ParseMemoryRequestPayload(pkt packet.Packet) (*MemoryRequestPayload, error) {
+// ParseMemoryRequestPayload is deprecated, fields are now accessed natively.
+// Kept temporarily if needed for refactoring but errors if called.
+func ParseMemoryRequestPayload(pkt packet.Packet) (packet.Packet, error) {
 	if pkt.Type != PacketTypeMemoryRequest {
-		return nil, fmt.Errorf("packet type is not MemoryRequest: %d", pkt.Type)
+		return pkt, fmt.Errorf("packet type is not MemoryRequest: %d", pkt.Type)
 	}
-
-	var payload MemoryRequestPayload
-	if err := json.Unmarshal([]byte(pkt.Payload), &payload); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal MemoryRequestPayload: %w", err)
-	}
-
-	return &payload, nil
+	return pkt, nil
 }
 
-// ParseMemoryResponsePayload 解析内存响应 Payload
-func ParseMemoryResponsePayload(pkt packet.Packet) (*MemoryResponsePayload, error) {
+// ParseMemoryResponsePayload is deprecated, fields are now accessed natively.
+// Kept temporarily if needed for refactoring but errors if called.
+func ParseMemoryResponsePayload(pkt packet.Packet) (packet.Packet, error) {
 	if pkt.Type != PacketTypeMemoryResponse {
-		return nil, fmt.Errorf("packet type is not MemoryResponse: %d", pkt.Type)
+		return pkt, fmt.Errorf("packet type is not MemoryResponse: %d", pkt.Type)
 	}
-
-	var payload MemoryResponsePayload
-	if err := json.Unmarshal([]byte(pkt.Payload), &payload); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal MemoryResponsePayload: %w", err)
-	}
-
-	return &payload, nil
+	return pkt, nil
 }

@@ -72,7 +72,7 @@ func TestNode_ExportState_PacketContent(t *testing.T) {
 	n.AddOutputQueue(oq)
 
 	// Inject packet
-	pkt := packet.Packet{SourceID: 1, TargetID: 2, Payload: "Hello"}
+	pkt := packet.Packet{SourceID: 1, TargetID: 2, Metadata: map[string]interface{}{"payload": "Hello"}}
 	oq.InjectPackets(10, []packet.Packet{pkt})
 
 	// Export

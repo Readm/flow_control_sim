@@ -141,7 +141,7 @@ func BenchmarkRingCoreScaling(b *testing.B) {
 				pkt := packet.Packet{
 					SourceID: 0,
 					TargetID: nodeCount - 1,
-					Payload:  "data",
+					Metadata: map[string]interface{}{"payload": "data"},
 				}
 				if err := allOutputs[0].InjectPackets(int(cycle), []packet.Packet{pkt}); err == nil {
 					atomic.AddInt64(&injectedCount, 1)
@@ -322,7 +322,7 @@ func BenchmarkBidirectionalRingCoreScaling(b *testing.B) {
 						pkt := packet.Packet{
 							SourceID: nodeIdx,
 							TargetID: target,
-							Payload:  "bi-data",
+							Metadata: map[string]interface{}{"payload": "bi-data"},
 						}
 						if err := outQ.InjectPackets(int(cycle), []packet.Packet{pkt}); err == nil {
 							atomic.AddInt64(&injectedCount, 1)

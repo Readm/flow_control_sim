@@ -31,7 +31,7 @@ func TestLinkBasicFunctionality(t *testing.T) {
 	pkt := packet.Packet{
 		SourceID: 0,
 		TargetID: 1,
-		Payload:  "test",
+		Metadata: map[string]interface{}{"payload": "test"},
 	}
 
 	// Send and mark done (latency=2, so packet arrives at cycle 2)
@@ -79,8 +79,8 @@ func TestLinkRingBufferMechanism(t *testing.T) {
 	downstream.UpdateReady(3, true)
 
 	// Send two packets at cycle 0
-	pkt1 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test1"}
-	pkt2 := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test2"}
+	pkt1 := packet.Packet{SourceID: 0, TargetID: 1, Metadata: map[string]interface{}{"payload": "test1"}}
+	pkt2 := packet.Packet{SourceID: 0, TargetID: 1, Metadata: map[string]interface{}{"payload": "test2"}}
 
 	if !upstream.SendPacket(0, pkt1) {
 		t.Fatal("Failed to send packet 1")
@@ -130,9 +130,9 @@ func TestLinkBandwidthLimit(t *testing.T) {
 
 	// Send 3 packets at cycle 0 (bandwidth=2, so should split across cycles)
 	packets := []packet.Packet{
-		{SourceID: 0, TargetID: 1, Payload: "pkt1"},
-		{SourceID: 0, TargetID: 1, Payload: "pkt2"},
-		{SourceID: 0, TargetID: 1, Payload: "pkt3"},
+		{SourceID: 0, TargetID: 1, Metadata: map[string]interface{}{"payload": "pkt1"}},
+		{SourceID: 0, TargetID: 1, Metadata: map[string]interface{}{"payload": "pkt2"}},
+		{SourceID: 0, TargetID: 1, Metadata: map[string]interface{}{"payload": "pkt3"}},
 	}
 
 	for _, pkt := range packets {

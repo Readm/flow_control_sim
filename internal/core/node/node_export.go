@@ -5,6 +5,7 @@ import (
 
 	"github.com/Readm/flow_sim/internal/configconv"
 	"github.com/Readm/flow_sim/internal/core/state"
+	"github.com/Readm/flow_sim/internal/core/visualization/protocol"
 )
 
 // ExportState exports the state of the Node.
@@ -190,7 +191,7 @@ func (n *BaseNode) ExportState(cfg state.ExportConfig) state.NodeState {
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) &&
 		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
-		findSubstring(s, substr)))
+			findSubstring(s, substr)))
 }
 
 func findSubstring(s, substr string) bool {
@@ -203,93 +204,31 @@ func findSubstring(s, substr string) bool {
 }
 
 // extractCPUConfig extracts CPU-related fields from Stats into a CPUConfig map
+// extractCPUConfig extracts CPU-related fields from Stats into a CPUConfig map
 func extractCPUConfig(stats map[string]interface{}) map[string]interface{} {
-	config := make(map[string]interface{})
+	// Use configconv to filter fields defined in protocol.CPUConfig
+	var config protocol.CPUConfig
 
-	// CPU核心统计
-	if v, ok := stats["ipc"]; ok {
-		config["ipc"] = v
-	}
-	if v, ok := stats["total_instructions"]; ok {
-		config["total_instructions"] = v
-	}
-	if v, ok := stats["total_cycles"]; ok {
-		config["total_cycles"] = v
-	}
-	if v, ok := stats["branch_mispredictions"]; ok {
-		config["branch_mispredictions"] = v
-	}
-	if v, ok := stats["total_branches"]; ok {
-		config["total_branches"] = v
+	// 1. Filter valid fields into struct (ignore unknown fields)
+	if err := configconv.MapToStruct(stats, &config); err != nil {
+		// Should not happen for loose map -> struct conversion
+		return make(map[string]interface{})
 	}
 
-	// 流水线停顿
-	if v, ok := stats["fetch_stalls"]; ok {
-		config["fetch_stalls"] = v
-	}
-	if v, ok := stats["decode_stalls"]; ok {
-		config["decode_stalls"] = v
-	}
-	if v, ok := stats["dispatch_stalls"]; ok {
-		config["dispatch_stalls"] = v
-	}
-	if v, ok := stats["execute_stalls"]; ok {
-		config["execute_stalls"] = v
-	}
-
-	// L1D Cache统计
-	if v, ok := stats["l1d_cache_stats"]; ok {
-		config["l1d_cache_stats"] = v
-	}
-
-	return config
+	// 2. Convert back to map (this ensures only defined fields are exported)
+	return configconv.StructToMap(&config)
 }
 
 // extractMemoryConfig extracts memory-related fields from Stats into a MemoryConfig map
 func extractMemoryConfig(stats map[string]interface{}) map[string]interface{} {
-	config := make(map[string]interface{})
+	// Use configconv to filter fields defined in protocol.MemoryConfig
+	var config protocol.MemoryConfig
 
-	// 请求统计
-	if v, ok := stats["read_requests"]; ok {
-		config["read_requests"] = v
-	}
-	if v, ok := stats["write_requests"]; ok {
-		config["write_requests"] = v
+	// 1. Filter valid fields into struct
+	if err := configconv.MapToStruct(stats, &config); err != nil {
+		return make(map[string]interface{})
 	}
 
-	// Row Buffer统计
-	if v, ok := stats["row_buffer_hits"]; ok {
-		config["row_buffer_hits"] = v
-	}
-	if v, ok := stats["row_buffer_misses"]; ok {
-		config["row_buffer_misses"] = v
-	}
-
-	// 详细统计
-	if v, ok := stats["rq_row_buffer_hits"]; ok {
-		config["rq_row_buffer_hits"] = v
-	}
-	if v, ok := stats["rq_row_buffer_misses"]; ok {
-		config["rq_row_buffer_misses"] = v
-	}
-	if v, ok := stats["wq_row_buffer_hits"]; ok {
-		config["wq_row_buffer_hits"] = v
-	}
-	if v, ok := stats["wq_row_buffer_misses"]; ok {
-		config["wq_row_buffer_misses"] = v
-	}
-
-	// Memory Controller 统计
-	if v, ok := stats["total_requests"]; ok {
-		config["total_requests"] = v
-	}
-	if v, ok := stats["responses"]; ok {
-		config["responses"] = v
-	}
-	if v, ok := stats["requests_per_channel"]; ok {
-		config["requests_per_channel"] = v
-	}
-
-	return config
+	// 2. Convert back to map
+	return configconv.StructToMap(&config)
 }
-

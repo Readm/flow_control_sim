@@ -29,7 +29,7 @@ func TestAsynchronousDrift(t *testing.T) {
 			}
 			in.TrySend(cycle, PacketWithCycle{
 				Cycle:  cycle,
-				Packet: packet.Packet{Payload: fmt.Sprintf("p%d", cycle)},
+				Packet: packet.Packet{Metadata: map[string]interface{}{"payload": fmt.Sprintf("p%d", cycle)}},
 			})
 			in.MarkDone(cycle)
 		}
@@ -71,7 +71,7 @@ func TestProtocolViolation_LateReceive(t *testing.T) {
 		// Mock downstream ready
 		out.UpdateReady(0, true)
 		time.Sleep(200 * time.Millisecond)
-		in.TrySend(0, PacketWithCycle{Cycle: 0, Packet: packet.Packet{Payload: "late"}})
+		in.TrySend(0, PacketWithCycle{Cycle: 0, Packet: packet.Packet{Metadata: map[string]interface{}{"payload": "late"}}})
 		in.MarkDone(0)
 	}()
 
@@ -106,7 +106,7 @@ func TestBackpressureDeadlockResilience(t *testing.T) {
 	go func() {
 		for i := 0; i < totalPackets; i++ {
 			// This will block when channel (cap 4) is full
-			in.TrySend(i, PacketWithCycle{Cycle: i, Packet: packet.Packet{Payload: "data"}})
+			in.TrySend(i, PacketWithCycle{Cycle: i, Packet: packet.Packet{Metadata: map[string]interface{}{"payload": "data"}}})
 			in.MarkDone(i)
 		}
 		senderDone <- true

@@ -32,7 +32,7 @@ type DRAMNodeHandler struct {
 
 	// 待发送的响应队列
 	// DRAM完成请求时，通过callback记录在这里
-	pendingResponses []MemoryResponsePayload
+	pendingResponses []packet.Packet
 }
 
 // NewDRAMNodeHandler 创建 DRAM Node Handler
@@ -52,7 +52,7 @@ func NewDRAMNodeHandler(
 		nodeID:           nodeID,
 		cpuID:            cpuID,
 		outputQueue:      outputQueue,
-		pendingResponses: make([]MemoryResponsePayload, 0),
+		pendingResponses: make([]packet.Packet, 0),
 	}
 
 	return handler
@@ -95,29 +95,30 @@ func (h *DRAMNodeHandler) Process(cycle uint64, inputs [][]queue.PacketRef) erro
 // 2. 创建DRAM Packet
 // 3. 发送到DRAM Channel
 func (h *DRAMNodeHandler) handleMemoryRequest(cycle uint64, pkt packet.Packet) error {
-	// 解析请求payload
-	payload, err := ParseMemoryRequestPayload(pkt)
-	if err != nil {
-		return err
+	// 1. Check type
+	if pkt.Type != PacketTypeMemoryRequest {
+		return fmt.Errorf("invalid packet type for DRAM: %d", pkt.Type)
 	}
 
-	// 创建DRAM Packet
-	// 设置callback：当DRAM完成时，将响应添加到pending列表
+	// 2. Map Op to bool
+	isWrite := (pkt.Op == OpWrite)
+
+	// 3. Create DRAM Packet using native fields
 	dramPkt := &dram.DRAMPacket{
-		Address:         payload.Address,
-		VAddress:        payload.VAddress,
-		InstrID:         payload.InstrID,
-		IsWrite:         payload.IsWrite,
-		Data:            payload.Data,
+		Address:         pkt.Addr,
+		VAddress:        pkt.VAddr,
+		InstrID:         pkt.InstrID,
+		IsWrite:         isWrite,
+		Data:            pkt.Data,
 		Scheduled:       false,
 		ReadyTime:       0,
 		InstrDependOnMe: nil,
-		Callback:        h.createCallback(payload.InstrID),
+		Callback:        h.createCallback(pkt.InstrID),
 	}
 
 	// 发送到DRAM
 	if !h.dramChannel.AddRequest(dramPkt) {
-		return fmt.Errorf("DRAM queue full for address 0x%x", payload.Address)
+		return fmt.Errorf("DRAM queue full for address 0x%x", pkt.Addr)
 	}
 
 	return nil
@@ -129,12 +130,13 @@ func (h *DRAMNodeHandler) handleMemoryRequest(cycle uint64, pkt packet.Packet) e
 // 我们将响应添加到pending列表，稍后发送到CPU
 func (h *DRAMNodeHandler) createCallback(instrID uint64) func(uint64, uint64, uint64) {
 	return func(addr uint64, data uint64, cycle uint64) {
-		// 添加到pending responses
-		h.pendingResponses = append(h.pendingResponses, MemoryResponsePayload{
-			Address: addr,
+		// 添加到pending responses (Use Packet directly)
+		h.pendingResponses = append(h.pendingResponses, packet.Packet{
+			Addr:    addr,
 			Data:    data,
 			InstrID: instrID,
 			Cycle:   cycle,
+			Type:    PacketTypeMemoryResponse,
 		})
 	}
 }
@@ -145,14 +147,11 @@ func (h *DRAMNodeHandler) sendPendingResponses(cycle uint64) error {
 	packets := make([]packet.Packet, 0, len(h.pendingResponses))
 
 	for _, resp := range h.pendingResponses {
-		pkt := NewMemoryResponsePacket(
-			h.nodeID,
-			h.cpuID,
-			resp.Address,
-			resp.Data,
-			resp.InstrID,
-			resp.Cycle,
-		)
+		pkt := resp // Copy fields
+		pkt.SourceID = h.nodeID
+		pkt.TargetID = h.cpuID
+		// Type is already set
+
 		packets = append(packets, pkt)
 	}
 

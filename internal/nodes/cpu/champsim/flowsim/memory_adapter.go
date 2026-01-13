@@ -6,6 +6,8 @@ package flowsim
 
 import (
 	"sync"
+
+	"github.com/Readm/flow_sim/internal/dataflow/packet"
 )
 
 // FlowSimMemoryAdapter 实现 MemoryInterface
@@ -14,7 +16,7 @@ import (
 // 不直接操作 DRAM，而是将请求加入队列
 type FlowSimMemoryAdapter struct {
 	// 请求队列
-	requestQueue []MemoryRequestPayload
+	requestQueue []packet.Packet
 	queueMu      sync.Mutex
 
 	// 周期同步
@@ -25,7 +27,7 @@ type FlowSimMemoryAdapter struct {
 // NewFlowSimMemoryAdapter 创建 FlowSim Memory Adapter
 func NewFlowSimMemoryAdapter() *FlowSimMemoryAdapter {
 	return &FlowSimMemoryAdapter{
-		requestQueue: make([]MemoryRequestPayload, 0),
+		requestQueue: make([]packet.Packet, 0),
 		currentCycle: 0,
 	}
 }
@@ -66,13 +68,19 @@ func (a *FlowSimMemoryAdapter) SendRequest(reqInterface interface{}) bool {
 		return false
 	}
 
-	// 创建请求payload
-	req := MemoryRequestPayload{
-		Address:  addr,
-		VAddress: vaddr,
-		InstrID:  instrID,
-		IsWrite:  isWrite,
-		Data:     data,
+	// 创建请求 (使用 Packet Native Fields)
+	op := OpRead
+	if isWrite {
+		op = OpWrite
+	}
+
+	req := packet.Packet{
+		Addr:    addr,
+		VAddr:   vaddr,
+		InstrID: instrID,
+		Op:      op,
+		Data:    data,
+		Type:    PacketTypeMemoryRequest, // 标记类型
 	}
 
 	// 添加到队列
@@ -102,12 +110,12 @@ func (a *FlowSimMemoryAdapter) SetCycle(cycle uint64) {
 //
 // CPU Node 调用此方法来获取需要发送的请求
 // 调用后会清空队列
-func (a *FlowSimMemoryAdapter) GetPendingRequests() []MemoryRequestPayload {
+func (a *FlowSimMemoryAdapter) GetPendingRequests() []packet.Packet {
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
 
 	// 复制队列
-	requests := make([]MemoryRequestPayload, len(a.requestQueue))
+	requests := make([]packet.Packet, len(a.requestQueue))
 	copy(requests, a.requestQueue)
 
 	// 清空队列

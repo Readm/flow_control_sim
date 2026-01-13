@@ -227,7 +227,7 @@ func TestBufferlessRing_Concurrent_v2(t *testing.T) {
 	}
 
 	for _, p := range pkts {
-		workerOutputs[p.src].InjectPackets(0, []packet.Packet{{SourceID: p.src, TargetID: p.dst, Payload: p.msg}})
+		workerOutputs[p.src].InjectPackets(0, []packet.Packet{{SourceID: p.src, TargetID: p.dst, Metadata: map[string]interface{}{"payload": p.msg}}})
 	}
 
 	if err := net.AdvanceTo(net.CurrentCycle() + 50 - 1); err != nil {

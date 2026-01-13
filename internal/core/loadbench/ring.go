@@ -150,7 +150,7 @@ func BuildBidirectionalRing(nodeCount int) (*network.Network, error) {
 					pkt := packet.Packet{
 						SourceID: nodeIdx,
 						TargetID: target,
-						Payload:  fmt.Sprintf("bi-data-%d-%d", nodeIdx, cycle),
+						Metadata: map[string]interface{}{"payload": fmt.Sprintf("bi-data-%d-%d", nodeIdx, cycle)},
 					}
 					if err := outQ.InjectPackets(int(cycle), []packet.Packet{pkt}); err == nil {
 						atomic.AddInt64(&injectedCount, 1)

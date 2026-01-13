@@ -140,11 +140,11 @@ func TestBufferedLinkHandler_AddToSlot(t *testing.T) {
 
 	pkt1 := ahead_port.PacketWithCycle{
 		Cycle:  0,
-		Packet: packet.Packet{Payload: "pkt1"},
+		Packet: packet.Packet{Metadata: map[string]interface{}{"payload": "pkt1"}},
 	}
 	pkt2 := ahead_port.PacketWithCycle{
 		Cycle:  0,
-		Packet: packet.Packet{Payload: "pkt2"},
+		Packet: packet.Packet{Metadata: map[string]interface{}{"payload": "pkt2"}},
 	}
 
 	// Add packets to slot for targetCycle=0
@@ -193,7 +193,7 @@ func TestBufferedLinkHandler_GetSlotAndClear(t *testing.T) {
 
 	pkt := ahead_port.PacketWithCycle{
 		Cycle:  0,
-		Packet: packet.Packet{Payload: "test"},
+		Packet: packet.Packet{Metadata: map[string]interface{}{"payload": "test"}},
 	}
 	fc.AddToSlot(pkt, 0)
 
@@ -241,7 +241,7 @@ func TestBufferedLinkHandler_BackpressureAffectsSlotIndex(t *testing.T) {
 
 	pkt := ahead_port.PacketWithCycle{
 		Cycle:  0,
-		Packet: packet.Packet{Payload: "test"},
+		Packet: packet.Packet{Metadata: map[string]interface{}{"payload": "test"}},
 	}
 
 	// Add packet to targetCycle=0 with no backpressure
@@ -261,7 +261,7 @@ func TestBufferedLinkHandler_BackpressureAffectsSlotIndex(t *testing.T) {
 	// slotIndex = (1 - 1) % 3 = 0 (same slot!)
 	pkt2 := ahead_port.PacketWithCycle{
 		Cycle:  1,
-		Packet: packet.Packet{Payload: "test2"},
+		Packet: packet.Packet{Metadata: map[string]interface{}{"payload": "test2"}},
 	}
 	fc.AddToSlot(pkt2, 1)
 
@@ -338,7 +338,7 @@ func TestBufferedLinkHandler_RingBufferWrapAround(t *testing.T) {
 
 	pkt := ahead_port.PacketWithCycle{
 		Cycle:  0,
-		Packet: packet.Packet{Payload: "test"},
+		Packet: packet.Packet{Metadata: map[string]interface{}{"payload": "test"}},
 	}
 
 	// Add packets to targetCycles 0, 1, 2

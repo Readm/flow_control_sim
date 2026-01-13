@@ -3,6 +3,8 @@ package flowsim
 // l2_cache_node.go 实现支持 MESI 协议的共享 L2 Cache 节点
 
 import (
+	"fmt"
+
 	"github.com/Readm/flow_sim/internal/capabilities/cache"
 	compcache "github.com/Readm/flow_sim/internal/components/cache"
 	"github.com/Readm/flow_sim/internal/core/queue"
@@ -98,24 +100,24 @@ func (h *L2CacheNodeHandler) Process(cycle uint64, inputs [][]queue.PacketRef) e
 
 // handleCPURequest 处理来自 CPU 的请求
 func (h *L2CacheNodeHandler) handleCPURequest(cycle uint64, cpuNodeID int, cpuIndex int, pkt packet.Packet) error {
-	payload, err := ParseMemoryRequestPayload(pkt)
-	if err != nil {
-		return err
+	// 1. Check type
+	if pkt.Type != PacketTypeMemoryRequest {
+		return fmt.Errorf("invalid packet type for L2: %d", pkt.Type)
 	}
 
 	h.stats.Accesses++
 
 	// 确定访问类型
 	accessType := compcache.AccessLoad // Read
-	if payload.IsWrite {
+	if pkt.Op == OpWrite {
 		accessType = compcache.AccessStore // Write
 	}
 
 	// 检查 L2 Cache 是否命中
-	hit, _, _ := h.l2Cache.Access(payload.Address, payload.VAddress, payload.InstrID, accessType, cycle)
+	hit, _, _ := h.l2Cache.Access(pkt.Addr, pkt.VAddr, pkt.InstrID, accessType, cycle)
 
 	// 简化：假设总是能读取到数据（实际应该从 cache 读取）
-	data := payload.Data
+	data := pkt.Data
 
 	if hit {
 		h.stats.Hits++
@@ -123,10 +125,10 @@ func (h *L2CacheNodeHandler) handleCPURequest(cycle uint64, cpuNodeID int, cpuIn
 		// L2 命中，但还需要检查 coherence
 		coherenceMsg := cache.CoherenceMessage{
 			Type:        cache.CoherenceRead,
-			Address:     payload.Address,
+			Address:     pkt.Addr,
 			RequestorID: cpuIndex,
 		}
-		if payload.IsWrite {
+		if pkt.Op == OpWrite {
 			coherenceMsg.Type = cache.CoherenceWrite
 		}
 
@@ -137,37 +139,38 @@ func (h *L2CacheNodeHandler) handleCPURequest(cycle uint64, cpuNodeID int, cpuIn
 		}
 
 		// 如果是写操作，可能需要 invalidate 其他核心
-		if payload.IsWrite {
+		if pkt.Op == OpWrite {
 			h.stats.InvalidatesSent += uint64(len(coherenceMsgs))
 		}
 
 		// 发送响应给请求的 CPU
-		return h.sendResponseToCPU(cycle, cpuIndex, payload.Address, data, payload.InstrID)
+		return h.sendResponseToCPU(cycle, cpuIndex, pkt.Addr, data, pkt.InstrID)
 	}
 
 	// L2 Miss - 需要从内存获取
 	h.stats.Misses++
 
 	// 发送请求到 Memory Controller
-	return h.sendRequestToMemory(cycle, payload)
+	// We pass the packet itself which contains all info
+	return h.sendRequestToMemory(cycle, pkt)
 }
 
 // handleMemoryResponse 处理来自 Memory 的响应
 func (h *L2CacheNodeHandler) handleMemoryResponse(cycle uint64, pkt packet.Packet) error {
-	payload, err := ParseMemoryResponsePayload(pkt)
-	if err != nil {
-		return err
+	// 1. Check type
+	if pkt.Type != PacketTypeMemoryResponse {
+		return fmt.Errorf("invalid response type for L2: %d", pkt.Type)
 	}
 
 	// 填充到 L2 Cache
-	h.l2Cache.HandleFill(payload.Address, payload.Data, cycle)
+	h.l2Cache.HandleFill(pkt.Addr, pkt.Data, cycle)
 
 	// 转发给请求的 CPU
 	// TODO: 需要追踪哪个 CPU 请求了这个地址
 	// 这里简化处理，假设 InstrID 编码了 CPU ID
 	cpuIndex := 0 // 简化：总是发送给 CPU0，实际应该追踪原始请求者
 
-	return h.sendResponseToCPU(cycle, cpuIndex, payload.Address, payload.Data, payload.InstrID)
+	return h.sendResponseToCPU(cycle, cpuIndex, pkt.Addr, pkt.Data, pkt.InstrID)
 }
 
 // sendResponseToCPU 发送响应给 CPU
@@ -186,15 +189,17 @@ func (h *L2CacheNodeHandler) sendResponseToCPU(cycle uint64, cpuIndex int, addre
 }
 
 // sendRequestToMemory 发送请求到 Memory Controller
-func (h *L2CacheNodeHandler) sendRequestToMemory(cycle uint64, payload *MemoryRequestPayload) error {
+func (h *L2CacheNodeHandler) sendRequestToMemory(cycle uint64, pkt packet.Packet) error {
+	isWrite := (pkt.Op == OpWrite)
+
 	requestPkt := NewMemoryRequestPacket(
 		h.nodeID,
 		h.memCtrlID,
-		payload.Address,
-		payload.VAddress,
-		payload.InstrID,
-		payload.IsWrite,
-		payload.Data,
+		pkt.Addr,
+		pkt.VAddr,
+		pkt.InstrID,
+		isWrite,
+		pkt.Data,
 	)
 
 	memCtrlQueueIndex := len(h.cpuNodeIDs)
@@ -231,13 +236,13 @@ func (h *L2CacheNodeHandler) ExportStats() map[string]interface{} {
 	cacheStats := h.l2Cache.GetStats()
 
 	stats := map[string]interface{}{
-		"accesses":          h.stats.Accesses,
-		"hits":              h.stats.Hits,
-		"misses":            h.stats.Misses,
-		"invalidates_sent":  h.stats.InvalidatesSent,
-		"writebacks":        h.stats.Writebacks,
-		"l2_cache_stats":    cacheStats,
-		"coherence_stats":   h.stats.CoherenceStats,
+		"accesses":         h.stats.Accesses,
+		"hits":             h.stats.Hits,
+		"misses":           h.stats.Misses,
+		"invalidates_sent": h.stats.InvalidatesSent,
+		"writebacks":       h.stats.Writebacks,
+		"l2_cache_stats":   cacheStats,
+		"coherence_stats":  h.stats.CoherenceStats,
 	}
 
 	return stats

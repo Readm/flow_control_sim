@@ -26,7 +26,7 @@ func TestLinkBasicDebug(t *testing.T) {
 	downstream.UpdateReady(2, true)
 
 	// Send packet
-	pkt := packet.Packet{SourceID: 0, TargetID: 1, Payload: "test"}
+	pkt := packet.Packet{SourceID: 0, TargetID: 1, Metadata: map[string]interface{}{"payload": "test"}}
 
 	fmt.Printf("Before Send: downstream=%+v\n", downstream)
 

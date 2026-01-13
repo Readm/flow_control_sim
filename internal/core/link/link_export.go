@@ -38,12 +38,8 @@ func (l *Link) ExportState(cfg state.ExportConfig) state.LinkState {
 		// Copy DisplayData from configRef
 		ls.DisplayData["data"] = l.configRef.Data
 	} else {
-		// Fallback: 如果没有 configRef,使用旧方式 (Phase 1 兼容)
-		ls.EdgeID = l.edgeID
-		ls.PacketTypes = l.packetTypes
-		for k, v := range l.displayData {
-			ls.DisplayData[k] = v
-		}
+		// Fallback: 如果没有 configRef, 使用计算 ID
+		ls.EdgeID = l.ID()
 	}
 
 	return ls

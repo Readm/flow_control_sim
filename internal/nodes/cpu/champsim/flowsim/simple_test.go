@@ -35,7 +35,7 @@ func Test_Simple_FlowSim_Ping(t *testing.T) {
 	pkt := packet.Packet{
 		SourceID: senderID,
 		TargetID: receiverID,
-		Payload:  "Hello",
+		Metadata: map[string]interface{}{"payload": "Hello"},
 	}
 
 	// 预注入包到cycle 0
@@ -197,8 +197,8 @@ func Test_PortNaming_Example(t *testing.T) {
 	}
 
 	// 预注入包到两个输出端口
-	pktA := packet.Packet{SourceID: 0, TargetID: 1, Payload: "Message to A"}
-	pktB := packet.Packet{SourceID: 0, TargetID: 2, Payload: "Message to B"}
+	pktA := packet.Packet{SourceID: 0, TargetID: 1, Metadata: map[string]interface{}{"payload": "Message to A"}}
+	pktB := packet.Packet{SourceID: 0, TargetID: 2, Metadata: map[string]interface{}{"payload": "Message to B"}}
 	outA.InjectPackets(0, []packet.Packet{pktA})
 	outB.InjectPackets(0, []packet.Packet{pktB})
 

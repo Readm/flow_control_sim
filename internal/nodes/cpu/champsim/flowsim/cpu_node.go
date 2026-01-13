@@ -8,9 +8,9 @@ import (
 	"fmt"
 
 	"github.com/Readm/flow_sim/internal/capabilities/cache"
-	"github.com/Readm/flow_sim/internal/nodes/cpu/champsim"
 	"github.com/Readm/flow_sim/internal/core/queue"
 	"github.com/Readm/flow_sim/internal/dataflow/packet"
+	cpu "github.com/Readm/flow_sim/internal/nodes/cpu/champsim"
 )
 
 // CPUNodeHandler 实现 NodeHandler 接口
@@ -98,19 +98,17 @@ func (h *CPUNodeHandler) Process(cycle uint64, inputs [][]queue.PacketRef) error
 // 2. 填充到Cache
 // 3. 通知CPU load/store完成
 func (h *CPUNodeHandler) handleMemoryResponse(cycle uint64, pkt packet.Packet) error {
-	// 解析响应payload
-	payload, err := ParseMemoryResponsePayload(pkt)
-	if err != nil {
-		return err
+	// 1. Check type
+	if pkt.Type != PacketTypeMemoryResponse {
+		return fmt.Errorf("invalid packet type for CPU: %d", pkt.Type)
 	}
 
-	// 填充到Cache
-	// 注意：HandleFill会从MSHR中移除对应条目
-	h.l1dCache.HandleFill(payload.Address, payload.Data, cycle)
+	// 2. Direct access to native fields (Zero-Copy)
+	// Fill to Cache directly (HandleFill removes from MSHR)
+	h.l1dCache.HandleFill(pkt.Addr, pkt.Data, cycle)
 
-	// 通知CPU操作完成
-	// 使用响应包中的InstrID
-	h.cpu.HandleLoadResponse(payload.InstrID, cycle)
+	// 3. Notify CPU completion
+	h.cpu.HandleLoadResponse(pkt.InstrID, cycle)
 
 	return nil
 }
@@ -130,15 +128,15 @@ func (h *CPUNodeHandler) sendPendingRequests(cycle uint64) error {
 	packets := make([]packet.Packet, 0, len(requests))
 
 	for _, req := range requests {
-		pkt := NewMemoryRequestPacket(
-			h.nodeID,
-			h.dramID,
-			req.Address,
-			req.VAddress,
-			req.InstrID,
-			req.IsWrite,
-			req.Data,
-		)
+		// Re-wrap to set Source/Target headers (memory adapter doesn't know them)
+		// Or just mutate the packet? Better to be safe and use factory.
+		// Actually, req IS a packet now, just lacks SourceID/TargetID.
+
+		pkt := req // Copy
+		pkt.SourceID = h.nodeID
+		pkt.TargetID = h.dramID
+		pkt.Type = PacketTypeMemoryRequest
+
 		packets = append(packets, pkt)
 	}
 
@@ -166,11 +164,11 @@ func (h *CPUNodeHandler) ExportStats() map[string]interface{} {
 
 	stats := map[string]interface{}{
 		// CPU 核心统计
-		"ipc":                  cpuStats.IPC,
-		"total_instructions":   cpuStats.TotalInstructions,
-		"total_cycles":         cpuStats.TotalCycles,
+		"ipc":                   cpuStats.IPC,
+		"total_instructions":    cpuStats.TotalInstructions,
+		"total_cycles":          cpuStats.TotalCycles,
 		"branch_mispredictions": cpuStats.BranchMispredictions,
-		"total_branches":       cpuStats.TotalBranches,
+		"total_branches":        cpuStats.TotalBranches,
 
 		// 流水线停顿统计
 		"fetch_stalls":    cpuStats.FetchStalls,

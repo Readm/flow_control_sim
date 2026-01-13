@@ -1,6 +1,8 @@
 package queue
 
 import (
+	"encoding/json"
+
 	"github.com/Readm/flow_sim/internal/core/state"
 )
 
@@ -40,11 +42,17 @@ func (iq *InputQueue) ExportState(cfg state.ExportConfig) state.QueueState {
 		for i := 0; i < iq.capacity; i++ {
 			if !iq.freeBitmap[i] {
 				p := iq.slots[i].Packet
+
+				// Serialize for visualization
+				// We can marshal the whole packet or specific fields.
+				// Since Packet tags are available, marshalling the whole packet is easy.
+				msgBytes, _ := json.Marshal(p)
+
 				qs.Packets = append(qs.Packets, state.PacketState{
 					Src:   p.SourceID,
 					Dst:   p.TargetID,
 					Cycle: iq.slots[i].Cycle,
-					Msg:   p.Payload,
+					Msg:   string(msgBytes),
 					Type:  "Packet",
 				})
 			}

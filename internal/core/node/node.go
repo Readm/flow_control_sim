@@ -50,18 +50,6 @@ type Node interface {
 	// Protocol 配置访问 (Phase 1)
 	SetConfigRef(config *protocol.Node)
 	GetConfigRef() *protocol.Node
-
-	// 配置信息访问
-	SetFeature(feature string, config map[string]interface{})
-	GetFeature(feature string) (map[string]interface{}, bool)
-	SetCoherenceDomainID(id int)
-	GetCoherenceDomainID() *int
-
-	// 显示信息访问
-	SetDisplayData(key string, value interface{})
-	GetDisplayData(key string) (interface{}, bool)
-	GetAllDisplayData() map[string]interface{}
-	SetAllDisplayData(data map[string]interface{})
 }
 
 // Tickable is an interface for components that can be ticked.
@@ -74,7 +62,9 @@ func CreatePacket(src, dst int, payload string) packet.Packet {
 	return packet.Packet{
 		SourceID: src,
 		TargetID: dst,
-		Payload:  payload,
+		Metadata: map[string]interface{}{
+			"payload": payload,
+		},
 	}
 }
 
@@ -691,99 +681,4 @@ func (n *BaseNode) SetHandler(handler NodeHandler) {
 // GetConfigRef 获取 Protocol 配置引用 (只读)
 func (n *BaseNode) GetConfigRef() *protocol.Node {
 	return n.configRef
-}
-
-// ========== Features 和 DisplayData 访问方法 ==========
-
-// SetFeature 设置节点feature配置 (Phase 2: 已废弃, 空实现)
-// Deprecated: Config 数据现在通过 configRef 管理, 此方法仅保持接口兼容
-func (n *BaseNode) SetFeature(feature string, config map[string]interface{}) {
-	// Phase 2: 空实现, 保持接口兼容
-}
-
-// GetFeature 获取节点feature配置 (Phase 2: 从 configRef 读取)
-func (n *BaseNode) GetFeature(feature string) (map[string]interface{}, bool) {
-	// Phase 2: 从 configRef 读取
-	if n.configRef != nil {
-		switch feature {
-		case "cache":
-			if n.configRef.Cache != nil {
-				return map[string]interface{}{
-					"capacity":           n.configRef.Cache.Capacity,
-					"num_sets":           n.configRef.Cache.NumSets,
-					"replacement_policy": string(n.configRef.Cache.ReplacementPolicy),
-					"states":             n.configRef.Cache.States,
-				}, true
-			}
-		case "directory":
-			if n.configRef.Directory != nil {
-				return map[string]interface{}{
-					"capacity":           n.configRef.Directory.Capacity,
-					"num_sets":           n.configRef.Directory.NumSets,
-					"replacement_policy": n.configRef.Directory.ReplacementPolicy,
-					"states":             n.configRef.Directory.States,
-				}, true
-			}
-		}
-	}
-	return nil, false
-}
-
-// SetCoherenceDomainID 设置一致性域ID (Phase 2: 已废弃, 空实现)
-// Deprecated: Config 数据现在通过 configRef 管理, 此方法仅保持接口兼容
-func (n *BaseNode) SetCoherenceDomainID(id int) {
-	// Phase 2: 空实现, 保持接口兼容
-}
-
-// GetCoherenceDomainID 获取一致性域ID (Phase 2: 从 configRef 读取)
-func (n *BaseNode) GetCoherenceDomainID() *int {
-	// Phase 2: 从 configRef 读取
-	if n.configRef != nil {
-		return n.configRef.CoherenceDomainId
-	}
-	return nil
-}
-
-// SetDisplayData 设置显示数据的某个键值 (Phase 2: 已废弃, 空实现)
-// Deprecated: Display 数据现在通过 configRef 管理, 此方法仅保持接口兼容
-func (n *BaseNode) SetDisplayData(key string, value interface{}) {
-	// Phase 2: 空实现, 保持接口兼容
-}
-
-// GetDisplayData 获取显示数据的某个键值 (Phase 2: 从 configRef 读取)
-func (n *BaseNode) GetDisplayData(key string) (interface{}, bool) {
-	// Phase 2: 从 configRef 读取
-	if n.configRef != nil {
-		switch key {
-		case "position":
-			return n.configRef.Position, true
-		case "data":
-			return n.configRef.Data, true
-		case "style":
-			if n.configRef.Style != nil {
-				return *n.configRef.Style, true
-			}
-		}
-	}
-	return nil, false
-}
-
-// GetAllDisplayData 获取所有显示数据 (Phase 2: 从 configRef 读取)
-func (n *BaseNode) GetAllDisplayData() map[string]interface{} {
-	// Phase 2: 从 configRef 读取
-	result := make(map[string]interface{})
-	if n.configRef != nil {
-		result["position"] = n.configRef.Position
-		result["data"] = n.configRef.Data
-		if n.configRef.Style != nil {
-			result["style"] = *n.configRef.Style
-		}
-	}
-	return result
-}
-
-// SetAllDisplayData 设置所有显示数据 (Phase 2: 已废弃, 空实现)
-// Deprecated: Display 数据现在通过 configRef 管理, 此方法仅保持接口兼容
-func (n *BaseNode) SetAllDisplayData(data map[string]interface{}) {
-	// Phase 2: 空实现, 保持接口兼容
 }
